@@ -1,0 +1,51 @@
+name: Deploy to Cloud Run
+
+# Triggers automatically whenever you push to the main branch.
+# Works for both you editing locally AND me (Devin) making changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"          # only redeploy when server code changes
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write        # required for Workload Identity auth
+
+    steps:
+      # 1. Check out the repo
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Authenticate to Google Cloud using the service account key
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 3. Set up gcloud CLI
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: fabled-mystery-474200-i1
+
+      # 4. Build & deploy to Cloud Run from source
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy steamguard \
+            --source ./server \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --set-secrets SECRET_KEY=sg-secret-key:latest,DISCORD_BOT_TOKEN=sg-discord-bot-token:latest,DISCORD_GUILD_ID=sg-discord-guild-id:latest,DISCORD_ROLE_ID=sg-discord-role-id:latest,ADMIN_KEY=sg-admin-key:latest \
+            --quiet
+
+      # 5. Print the live URL so it appears in the Actions log
+      - name: Print service URL
+        run: |
+          gcloud run services describe steamguard \
+            --region us-central1 \
+            --format="value(status.url)"

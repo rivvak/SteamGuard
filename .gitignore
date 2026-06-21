@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Build output
+dist/
+build/
+*.exe
+*.spec
+
+# Secrets — never commit these
+.env
+.env.*
+*.key
+*.pem
+*.p12
+
+# Local config with real values (cache, logs, saved session)
+auth/.session
+steamguard.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
