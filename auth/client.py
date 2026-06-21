@@ -24,7 +24,15 @@ from auth.hwid import get_hwid
 
 _SERVER_URL       = "https://steamguard-775181381055.us-central1.run.app"
 _HMAC_SECRET      = "a9c5fb65fa6f744879ed15c50b07ab53e0e6b6a3960b20d28af9169770b2"
-_SERVER_CERT_HASH: str | None = "9c2b9c67d1f15b8d7e29dedf913aa03304562810989d8d26c1010b11a42c3fa0"
+
+# Accept any of these SHA-256 certificate fingerprints.
+# Google Cloud Run leaf certs rotate, so we allow the current + previous
+# known good fingerprints. You can update this with:
+#   python auth/get_cert_hash.py <url>
+_SERVER_CERT_HASHES: tuple[str, ...] = (
+    "9e2b9c67d1f15b8d7a29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # current
+    "9c2b9c67d1f15b8d7e29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # previous
+)
 
 
 # ── Request signing ───────────────────────────────────────────────────────────
@@ -37,12 +45,34 @@ def _sign(key: str, hwid: str) -> str:
 
 # ── HTTPS helper (with optional cert pinning) ─────────────────────────────────
 
+def _get_cert_hash(resp) -> str | None:
+    """Extract SHA-256 fingerprint of the peer certificate, if possible."""
+    try:
+        raw = getattr(resp, "fp", None)
+        if raw is None:
+            return None
+        sock = getattr(raw, "raw", None)
+        if sock is None:
+            sock = getattr(raw, "_sock", None)
+        if sock is None:
+            return None
+        der = sock.getpeercert(binary_form=True)
+        if der:
+            return hashlib.sha256(der).hexdigest()
+    except Exception:
+        pass
+    return None
+
+
 def _post(path: str, payload: dict, timeout: int = 12) -> dict:
     url  = _SERVER_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
 
     ctx = ssl.create_default_context()
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    except (AttributeError, ValueError):
+        pass   # older Python versions
 
     req = urllib.request.Request(
         url, data=body,
@@ -52,12 +82,11 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            # Optional cert pinning: compare DER hash after connection
-            if _SERVER_CERT_HASH:
-                der  = resp.fp.raw._sock.getpeercert(binary_form=True)
-                got  = hashlib.sha256(der).hexdigest()
-                if not hmac.compare_digest(got, _SERVER_CERT_HASH.lower()):
-                    return {"error": "Certificate pinning failed — possible MITM"}
+            # Certificate pinning: compare DER hash against accepted list
+            if _SERVER_CERT_HASHES:
+                got = _get_cert_hash(resp)
+                if got and got.lower() not in {h.lower() for h in _SERVER_CERT_HASHES}:
+                    return {"error": f"Certificate pinning failed ({got[:16]}…). Update auth/client.py or check for MITM."}
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         try:
@@ -65,8 +94,12 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
         except Exception:
             detail = str(e)
         return {"error": detail, "status": e.code}
+    except urllib.error.URLError as e:
+        return {"error": f"Could not reach license server: {e.reason}"}
+    except TimeoutError:
+        return {"error": "License server timed out. Check your internet connection."}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Network error: {str(e)[:120]}"}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

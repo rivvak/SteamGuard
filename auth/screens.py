@@ -297,7 +297,7 @@ class LicenseWindow(tk.Toplevel):
     On failure (close button) sets self.session = None.
     """
 
-    def __init__(self, parent: tk.Tk, prefill_key: str = ""):
+    def __init__(self, parent: tk.Tk, prefill_key: str = "", error: str = ""):
         super().__init__(parent)
         self.title("SteamGuard — Activate License")
         self.configure(bg=BG_DARK)
@@ -305,6 +305,7 @@ class LicenseWindow(tk.Toplevel):
         self.grab_set()
         self.session = None
         self._busy   = False
+        self._prefill_error = error
 
         self._build(prefill_key)
         self.update_idletasks()
@@ -382,6 +383,9 @@ class LicenseWindow(tk.Toplevel):
             font=F_SMALL, wraplength=440)
         self._status_lbl.pack(pady=(4, 0))
 
+        if self._prefill_error:
+            self._set_status(f"✗ {self._prefill_error}", RED)
+
         # Activate button
         self._btn = tk.Button(
             self, text="Activate",
@@ -399,6 +403,7 @@ class LicenseWindow(tk.Toplevel):
                  bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL).pack(side="left")
 
         def _open_discord():
+            # Replace this with your actual Discord invite link before release.
             webbrowser.open("https://discord.gg/REPLACE_YOUR_INVITE")
         tk.Button(join_row, text="Join our Discord",
                   bg=BG_DARK, fg=ACCENT, font=F_SMALL,
@@ -526,8 +531,18 @@ def run_preflight() -> dict:
                 "key":             saved_key,
                 "discord_user_id": saved_discord_id,
             }
-        # Verification failed (left Discord, revoked, etc.)
-        # Fall through to show activation screen with error
+        # Verification failed (left Discord, revoked, paused, etc.)
+        # Show the activation screen with the error pre-filled so the user sees it
+        error_msg = result.error or "Verification failed"
+        lic = LicenseWindow(root, prefill_key=saved_key, error=error_msg)
+        root.wait_window(lic)
+
+        if lic.session is None:
+            root.destroy()
+            raise SystemExit(0)
+
+        root.destroy()
+        return lic.session
 
     # ── Step 5: Show activation screen ───────────────────────────────────────
     lic = LicenseWindow(root, prefill_key=saved_key)
