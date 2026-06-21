@@ -35,6 +35,7 @@ from google.cloud import firestore
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+# This service is deployed to Google Cloud Run via GitHub Actions.
 SECRET_KEY          = os.environ["SECRET_KEY"]           # HMAC signing key
 ADMIN_KEY           = os.environ["ADMIN_KEY"]            # admin endpoint auth
 DISCORD_BOT_TOKEN   = os.environ["DISCORD_BOT_TOKEN"]    # Bot token (server-side only)
