@@ -68,16 +68,13 @@ SteamGuard desktop app with license key system:
 
 ## Next Steps (in order)
 
-1. **Rotate the GitHub token** (security): the token in `.devin/config.json` was used to push; consider it exposed.
-   - Go to GitHub Settings → Developer settings → Personal access tokens → delete/regenerate the token.
-   - Update `.devin/config.json` with the new token.
-2. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands).
-3. Re-run the GitHub Action in `.github/workflows/deploy.yml` to deploy updated server.
-4. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
-5. Test that `dist\SteamGuard.exe` connects to the server.
-6. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
-7. Restart bot.
-8. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
+1. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands). [done]
+2. Re-run the GitHub Action in `.github/workflows/deploy.yml` to deploy updated server. [done]
+3. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
+4. Test that `dist\SteamGuard.exe` connects to the server.
+5. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
+6. Restart bot.
+7. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
 
 ## Important Files
 
