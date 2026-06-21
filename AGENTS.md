@@ -1,0 +1,88 @@
+# SteamGuard — Agent Notes / Resume State
+
+This file contains the current state of the project so any future session can pick up quickly.
+
+## Project Overview
+
+SteamGuard desktop app with license key system:
+- FastAPI backend running on Google Cloud Run (Firestore database)
+- Discord bot for key delivery + membership enforcement
+- Client-side auth module (HWID, session caching, cert pinning)
+- Tkinter preflight screens (TOS + license activation)
+
+## Current State (last updated by Devin session)
+
+- Local repo: `C:\Users\xiq\Downloads\steamapp`
+- Branch: `master`
+- Commits ready to push: 4 (server/bot feature commit, deploy workflow fix, client cert fix, build.bat update)
+- Remote: not configured yet (needs `git remote add origin https://github.com/rivvak/SteamGuard.git`)
+- GitHub repo: does not exist yet (must create at https://github.com/new)
+
+## Recent Fixes
+
+1. **UI stuck on "connecting to server"**
+   - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
+   - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
+   - Also made cert extraction more robust and improved error messages.
+
+2. **Bot + server feature additions**
+   - Bot restricted to `#get-key` channel; DMs redirected to server invite.
+   - New commands: `!mykey`, `!listkeys`, `!keyinfo`, `!pausekey`, `!revokekey`, `!sgstatus`.
+   - Server: `/pause`, `/unpause`, `/pause-by-discord`, `/admin/list-keys`, `/youtube/store-token`.
+   - Server `/verify` auto-pauses keys if Discord role lost or YouTube unsub found.
+
+## Live Deployment
+
+- Cloud Run URL: `https://steamguard-775181381055.us-central1.run.app`
+- Server status: running old code (verified `/health` returns 200, but `/admin/list-keys` returns 404)
+- Needs redeploy after GitHub repo is created and pushed, OR manual `gcloud run deploy`.
+
+## Required Environment Variables
+
+### Server / Cloud Run (set in GCP Secret Manager)
+- `SECRET_KEY` — HMAC signing key (must match `auth/client.py` `_HMAC_SECRET`)
+- `HMAC_SECRET_KEY` — duplicate, wired through for completeness
+- `ADMIN_KEY` — admin endpoint auth
+- `DISCORD_BOT_TOKEN` — Discord bot token
+- `DISCORD_GUILD_ID` — Discord server ID
+- `DISCORD_ROLE_ID` — "Member" role ID
+- `YOUTUBE_CHANNEL_ID` — (optional) channel ID to check subscriptions
+- `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET` — (optional) Google OAuth credentials
+
+### Bot (set where bot runs, e.g. Railway)
+- All server secrets above
+- `GETKEY_CHANNEL_ID` — Discord channel ID for `#get-key`
+- `DISCORD_INVITE` — server invite link
+- `ADMIN_USER_IDS` — comma-separated Discord user IDs with admin access
+- `LICENSE_SERVER_URL` — Cloud Run URL
+
+## Next Steps (in order)
+
+1. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
+2. Test that `dist\SteamGuard.exe` connects to the server.
+3. Create GitHub repo `https://github.com/rivvak/SteamGuard` (private, no README).
+4. Push local code:
+   ```
+   git remote add origin https://github.com/rivvak/SteamGuard.git
+   git branch -M main
+   git push -u origin main
+   ```
+5. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands).
+6. Re-run failed GitHub Action to deploy updated server.
+7. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
+8. Restart bot.
+9. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
+
+## Important Files
+
+- `auth/client.py` — server URL, HMAC secret, cert fingerprints
+- `auth/screens.py` — TOS and activation UI
+- `server/main.py` — FastAPI license backend
+- `server/bot.py` — Discord bot
+- `.github/workflows/deploy.yml` — Cloud Run auto-deploy
+- `build.bat` — Nuitka client build
+
+## Conversation History
+
+Full history of the previous and current Devin sessions is saved locally at:
+`C:\Users\xiq\AppData\Roaming\devin\cli\summaries\history_9fcdf7d540904170.md`
