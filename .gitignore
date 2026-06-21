@@ -23,6 +23,10 @@ build/
 auth/.session
 steamguard.log
 
+# Devin local config with secrets
+.devin/config.json
+.devin/config.local.json
+
 # IDE
 .vscode/
 .idea/
