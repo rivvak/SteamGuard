@@ -16,6 +16,7 @@ SteamGuard desktop app with license key system:
 - Branch: `main`
 - Remote: `origin https://github.com/rivvak/SteamGuard.git` (token removed from URL after push)
 - GitHub repo: exists, private; local code pushed
+- Cloud Run deploy: GitHub Actions workflow now succeeds and redeploys on `server/**` changes
 
 ## Recent Fixes
 
@@ -24,7 +25,12 @@ SteamGuard desktop app with license key system:
    - Local main branch merged with remote README and pushed.
    - `.devin/config.json` (contains live GitHub token) is now gitignored.
 
-2. **UI stuck on "connecting to server"**
+2. **Cloud Run auto-deploy fixed**
+   - Added `workflow_dispatch` to `.github/workflows/deploy.yml`.
+   - Granted `github-deployer` service account `roles/artifactregistry.writer`.
+   - Latest workflow run succeeded: `https://github.com/rivvak/SteamGuard/actions/runs/27917841278`.
+
+3. **UI stuck on "connecting to server"**
    - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
    - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
    - Also made cert extraction more robust and improved error messages.
