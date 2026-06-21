@@ -36,13 +36,15 @@ F_SMALL  = ("Segoe UI", 9)
 _APPDATA     = Path(os.environ.get("APPDATA", "")) / "SteamGuard"
 _CONFIG_FILE = _APPDATA / "config.json"
 
-TOS_VERSION  = "1.0"   # bump this to force re-acceptance
+TOS_VERSION  = "1.1"   # bump this to force re-acceptance
 
 TOS_TEXT = """STEAMGUARD — END USER LICENSE AGREEMENT & TERMS OF SERVICE
-Version 1.0 — Effective upon acceptance
+Version 1.1 — Effective upon acceptance
 
 PLEASE READ THESE TERMS CAREFULLY BEFORE USING STEAMGUARD.
 BY CLICKING "I ACCEPT", YOU AGREE TO BE BOUND BY THESE TERMS.
+
+THIS SOFTWARE IS PROVIDED FOR EDUCATIONAL AND RESEARCH PURPOSES ONLY.
 
 ────────────────────────────────────────────────────────────────
 
@@ -50,22 +52,34 @@ BY CLICKING "I ACCEPT", YOU AGREE TO BE BOUND BY THESE TERMS.
    Subject to your compliance with these Terms, you are granted a
    limited, personal, non-exclusive, non-transferable, revocable
    license to install and use SteamGuard ("Software") on one (1)
-   personal computer that you own or control.
+   personal computer that you own or control, strictly for
+   educational, research, and personal learning purposes.
 
-2. RESTRICTIONS
+2. EDUCATIONAL USE ONLY
+   SteamGuard is intended solely as an educational tool to demonstrate
+   and study two-factor authentication, software licensing, hardware
+   identification, and related concepts. You may not use the Software
+   to violate any third-party terms of service, circumvent security
+   measures, or engage in any activity that is unlawful or prohibited.
+   Any use of the Software for commercial, fraudulent, or malicious
+   purposes is strictly prohibited.
+
+3. RESTRICTIONS
    You may NOT:
-   a) Copy, distribute, sell, or sublicense the Software or your
-      license key to any third party.
+   a) Copy, distribute, sell, rent, lease, sublicense, or transfer
+      the Software or your license key to any third party.
    b) Reverse engineer, decompile, disassemble, or attempt to derive
       the source code of the Software.
    c) Modify, adapt, translate, or create derivative works based on
       the Software.
    d) Remove, alter, or obscure any copyright or proprietary notices.
-   e) Use the Software for any unlawful purpose or in violation of
-      any applicable law or regulation.
+   e) Use the Software for any unlawful purpose, fraud, or in violation
+      of any applicable law, regulation, or third-party agreement.
    f) Share, post, or publicly disclose your license key.
+   g) Use the Software to interfere with, disrupt, or gain unauthorized
+      access to any service, account, system, or network.
 
-3. DISCORD MEMBERSHIP REQUIREMENT
+4. DISCORD MEMBERSHIP REQUIREMENT
    Your license is contingent on maintaining active membership in
    the designated Discord server and holding the required role.
    Your access will be automatically suspended if you:
@@ -74,7 +88,7 @@ BY CLICKING "I ACCEPT", YOU AGREE TO BE BOUND BY THESE TERMS.
    c) Are removed or banned from the Discord server.
    No refunds are issued in such circumstances.
 
-4. HARDWARE BINDING
+5. HARDWARE BINDING
    Your license key will be bound to the hardware of the first
    machine on which you activate it. Using the Software on a
    different machine requires contacting support. The Software
@@ -82,55 +96,85 @@ BY CLICKING "I ACCEPT", YOU AGREE TO BE BOUND BY THESE TERMS.
    components) for this purpose. Raw hardware data is never
    transmitted or stored.
 
-5. DISCLAIMER OF WARRANTIES
+6. DISCLAIMER OF WARRANTIES
    THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
-   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
-   NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE SOFTWARE WILL
-   BE ERROR-FREE, UNINTERRUPTED, OR FREE OF SECURITY VULNERABILITIES.
+   OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+   NON-INFRINGEMENT, AND FITNESS FOR ANY SPECIFIC PURPOSE. WE DO
+   NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, UNINTERRUPTED,
+   SECURE, FREE OF VIRUSES, OR FREE OF SECURITY VULNERABILITIES.
+   YOU USE THE SOFTWARE ENTIRELY AT YOUR OWN RISK.
 
-6. LIMITATION OF LIABILITY
-   IN NO EVENT SHALL THE DEVELOPERS OR CONTRIBUTORS BE LIABLE FOR
-   ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR
-   PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF DATA,
-   LOSS OF PROFITS, LOSS OF GOODWILL, OR GAME ACCOUNT SUSPENSION,
-   ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE SOFTWARE,
-   EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. OUR TOTAL
-   LIABILITY SHALL NOT EXCEED THE AMOUNT YOU PAID FOR THE SOFTWARE
-   IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM.
+7. LIMITATION OF LIABILITY
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT
+   SHALL THE DEVELOPERS, OWNERS, OPERATORS, CONTRIBUTORS, OR
+   AFFILIATES OF STEAMGUARD BE LIABLE FOR ANY DIRECT, INDIRECT,
+   INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, PUNITIVE, OR
+   ANY OTHER DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF DATA,
+   LOSS OF PROFITS, LOSS OF GOODWILL, BUSINESS INTERRUPTION,
+   PERSONAL INJURY, PROPERTY DAMAGE, OR GAME ACCOUNT SUSPENSION,
+   ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF OR INABILITY TO
+   USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+   OUR TOTAL LIABILITY SHALL NOT EXCEED THE AMOUNT YOU PAID FOR THE
+   SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, IF ANY.
 
-7. STEAM & VALVE DISCLAIMER
+8. INDEMNIFICATION
+   You agree to defend, indemnify, and hold harmless the developers,
+   owners, operators, contributors, and affiliates of SteamGuard from
+   and against any and all claims, damages, obligations, losses,
+   liabilities, costs, debts, and expenses (including attorneys' fees)
+   arising out of or related to your use of the Software, your violation
+   of these Terms, or your violation of any third-party right, including
+   without limitation any copyright, property, or privacy right.
+
+9. STEAM & VALVE DISCLAIMER
    STEAMGUARD IS NOT AFFILIATED WITH, ENDORSED BY, OR SPONSORED BY
    VALVE CORPORATION OR STEAM. USE OF THIS SOFTWARE MAY VIOLATE
    VALVE'S STEAM SUBSCRIBER AGREEMENT AND/OR STEAM TERMS OF SERVICE.
    YOU ASSUME ALL RISK OF ACCOUNT SUSPENSION, BAN, OR OTHER
    CONSEQUENCES. WE ACCEPT NO LIABILITY FOR ANY SUCH OUTCOMES.
 
-8. NO REFUNDS
-   ALL PURCHASES ARE FINAL. WE DO NOT OFFER REFUNDS EXCEPT WHERE
-   REQUIRED BY APPLICABLE LAW.
+10. NO REFUNDS
+    ALL PURCHASES ARE FINAL. WE DO NOT OFFER REFUNDS EXCEPT WHERE
+    REQUIRED BY APPLICABLE LAW.
 
-9. TERMINATION
-   This license is effective until terminated. It terminates
-   automatically if you breach any of these Terms. Upon termination
-   you must cease all use of the Software and delete all copies.
-   We may also terminate or suspend your license at any time for
-   any reason without notice.
+11. TERMINATION
+    This license is effective until terminated. It terminates
+    automatically if you breach any of these Terms. Upon termination
+    you must cease all use of the Software and delete all copies.
+    We may also terminate or suspend your license at any time for
+    any reason without notice.
 
-10. GOVERNING LAW
+12. GOVERNING LAW & DISPUTE RESOLUTION
     These Terms shall be governed by and construed in accordance with
-    applicable law. Any disputes shall be resolved in the appropriate
-    courts of the applicable jurisdiction.
+    applicable law. Any dispute, controversy, or claim arising out of or
+    relating to these Terms or the Software shall be resolved through
+    binding arbitration on an individual basis, except that either party
+    may seek injunctive relief in a court of competent jurisdiction.
+    You waive any right to participate in class actions, class
+    arbitrations, or representative actions. Any arbitration shall be
+    conducted in the jurisdiction chosen by the Software provider.
 
-11. ENTIRE AGREEMENT
+13. LEGAL NOTICE
+    This Software and its licensing system are provided for educational
+    demonstration. Nothing in these Terms creates a partnership,
+    agency, joint venture, or employment relationship. We reserve the
+    right to modify these Terms at any time. Continued use of the
+    Software after changes constitutes acceptance of the revised Terms.
+
+14. ENTIRE AGREEMENT
     These Terms constitute the entire agreement between you and us
-    regarding the Software and supersede all prior agreements.
+    regarding the Software and supersede all prior agreements,
+    understandings, representations, and warranties.
 
 BY CLICKING "I ACCEPT" YOU CONFIRM:
-  • You have read and understood these Terms.
-  • You are at least 13 years of age.
+  • You have read, understood, and agree to all Terms above.
+  • You are at least 18 years of age or have parental consent.
+  • You will use the Software only for educational and lawful purposes.
   • You own or have the right to play any game you use with this Software.
-  • You accept all risks described herein.
+  • You accept all risks described herein and release us from liability.
+
+IF YOU DO NOT AGREE TO THESE TERMS, DO NOT USE THE SOFTWARE.
 """
 
 

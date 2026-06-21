@@ -34,12 +34,18 @@ SteamGuard desktop app with license key system:
    - Cause: Nuitka build was missing `--enable-plugin=tk-inter`.
    - Fix: added the flag to `build.bat`; UI now opens the activation window.
 
-4. **UI stuck on "connecting to server"**
+4. **TOS updated for liability protection**
+   - Added: educational-use-only language, broad liability disclaimer,
+     indemnification clause, arbitration/class-action waiver, and
+     explicit release of liability.
+   - Bumped `TOS_VERSION` to `1.1` to force existing users to re-accept.
+
+5. **UI stuck on "connecting to server"**
    - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
    - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
    - Also made cert extraction more robust and improved error messages.
 
-5. **Bot + server feature additions**
+6. **Bot + server feature additions**
    - Bot restricted to `#get-key` channel; DMs redirected to server invite.
    - New commands: `!mykey`, `!listkeys`, `!keyinfo`, `!pausekey`, `!revokekey`, `!sgstatus`.
    - Server: `/pause`, `/unpause`, `/pause-by-discord`, `/admin/list-keys`, `/youtube/store-token`.
@@ -74,8 +80,8 @@ SteamGuard desktop app with license key system:
 
 1. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands). [done]
 2. Re-run the GitHub Action in `.github/workflows/deploy.yml` to deploy updated server. [done]
-3. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
-4. Test that `dist\SteamGuard.exe` connects to the server.
+3. Rebuild client after TOS update: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
+4. Test that `dist\SteamGuard.exe` shows the updated TOS and connects to the server.
 5. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
 6. Restart bot.
 7. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
