@@ -20,6 +20,7 @@ if not exist %DIST% mkdir %DIST%
 python -m nuitka ^
     --onefile ^
     --windows-console-mode=disable ^
+    --enable-plugin=tk-inter ^
     --output-filename=SteamGuard.exe ^
     --output-dir=%DIST% ^
     --include-package=auth ^

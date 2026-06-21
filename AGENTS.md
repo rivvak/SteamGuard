@@ -30,12 +30,16 @@ SteamGuard desktop app with license key system:
    - Granted `github-deployer` service account `roles/artifactregistry.writer`.
    - Latest workflow run succeeded: `https://github.com/rivvak/SteamGuard/actions/runs/27917841278`.
 
-3. **UI stuck on "connecting to server"**
+3. **EXE did nothing when launched**
+   - Cause: Nuitka build was missing `--enable-plugin=tk-inter`.
+   - Fix: added the flag to `build.bat`; UI now opens the activation window.
+
+4. **UI stuck on "connecting to server"**
    - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
    - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
    - Also made cert extraction more robust and improved error messages.
 
-2. **Bot + server feature additions**
+5. **Bot + server feature additions**
    - Bot restricted to `#get-key` channel; DMs redirected to server invite.
    - New commands: `!mykey`, `!listkeys`, `!keyinfo`, `!pausekey`, `!revokekey`, `!sgstatus`.
    - Server: `/pause`, `/unpause`, `/pause-by-discord`, `/admin/list-keys`, `/youtube/store-token`.
@@ -44,8 +48,8 @@ SteamGuard desktop app with license key system:
 ## Live Deployment
 
 - Cloud Run URL: `https://steamguard-775181381055.us-central1.run.app`
-- Server status: running old code (verified `/health` returns 200, but `/admin/list-keys` returns 404)
-- Needs redeploy after GitHub repo is created and pushed, OR manual `gcloud run deploy`.
+- Server status: updated code deployed (verified `/admin/list-keys` returns 401, meaning the endpoint exists)
+- Auto-deploy: GitHub Actions workflow succeeds on push to `server/**`.
 
 ## Required Environment Variables
 
