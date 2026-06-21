@@ -8,6 +8,8 @@ Endpoints:
   POST /revoke        — admin: instantly revoke a key
   POST /generate      — admin: create a new license key
   GET  /health        — uptime probe
+   POST /revoke-by-discord    — admin: revoke all keys for a Discord user
+ GET /admin/active-discord-ids — admin: list active Discord user IDs
 """
 
 import os
