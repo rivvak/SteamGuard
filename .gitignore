@@ -22,6 +22,7 @@ build/
 # Local config with real values (cache, logs, saved session)
 auth/.session
 steamguard.log
+run_output.log
 
 # Devin local config with secrets
 .devin/config.json
