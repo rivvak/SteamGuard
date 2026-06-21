@@ -10,9 +10,29 @@ import json
 import ssl
 import urllib.request
 import urllib.error
+import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from auth.hwid import get_hwid
+
+# ── Debug logging ─────────────────────────────────────────────────────────────
+# Logs every request/response so we can diagnose "stuck on connecting" issues.
+_LOG_DIR = Path(os.environ.get("APPDATA", "")) / "SteamGuard"
+try:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+_LOG_FILE = _LOG_DIR / "client.log"
+
+logging.basicConfig(
+    filename=_LOG_FILE,
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(message)s",
+    force=False)
+
+LOG = logging.getLogger("sg-client")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FILL THESE IN after you deploy your Cloud Run service.
@@ -67,6 +87,7 @@ def _get_cert_hash(resp) -> str | None:
 def _post(path: str, payload: dict, timeout: int = 12) -> dict:
     url  = _SERVER_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
+    LOG.info(f"POST {url} (timeout={timeout}s)")
 
     ctx = ssl.create_default_context()
     try:
@@ -85,20 +106,29 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
             # Certificate pinning: compare DER hash against accepted list
             if _SERVER_CERT_HASHES:
                 got = _get_cert_hash(resp)
+                LOG.info(f"Server cert fingerprint: {got or 'unknown'}")
                 if got and got.lower() not in {h.lower() for h in _SERVER_CERT_HASHES}:
-                    return {"error": f"Certificate pinning failed ({got[:16]}…). Update auth/client.py or check for MITM."}
-            return json.loads(resp.read())
+                    err = f"Certificate pinning failed ({got[:16]}…). Update auth/client.py or check for MITM."
+                    LOG.error(err)
+                    return {"error": err}
+            data = json.loads(resp.read())
+            LOG.info(f"Response: {data}")
+            return data
     except urllib.error.HTTPError as e:
         try:
             detail = json.loads(e.read()).get("detail", str(e))
         except Exception:
             detail = str(e)
+        LOG.warning(f"HTTP {e.code}: {detail}")
         return {"error": detail, "status": e.code}
     except urllib.error.URLError as e:
+        LOG.error(f"URLError: {e.reason}")
         return {"error": f"Could not reach license server: {e.reason}"}
     except TimeoutError:
+        LOG.error("Timeout")
         return {"error": "License server timed out. Check your internet connection."}
     except Exception as e:
+        LOG.exception("Network error")
         return {"error": f"Network error: {str(e)[:120]}"}
 
 
@@ -117,7 +147,13 @@ def activate(key: str, discord_user_id: str) -> AuthResult:
     First-time activation. Binds HWID to key.
     Call once; use verify() for daily re-checks.
     """
-    hwid = get_hwid()
+    LOG.info(f"activate called for discord_user_id={discord_user_id}")
+    try:
+        hwid = get_hwid()
+    except Exception as e:
+        LOG.exception("HWID generation failed")
+        return AuthResult(ok=False, error=f"Could not read hardware ID: {e}")
+
     data = _post("/activate", {
         "key":             key,
         "hwid":            hwid,
@@ -125,11 +161,14 @@ def activate(key: str, discord_user_id: str) -> AuthResult:
         "sig":             _sign(key, hwid),
     })
     if data.get("valid"):
+        LOG.info("activate succeeded")
         return AuthResult(
             ok=True,
             session_token=data["session_token"],
             token_expires=data["token_expires"])
-    return AuthResult(ok=False, error=data.get("error", "Unknown error"))
+    err = data.get("error", "Unknown error")
+    LOG.warning(f"activate failed: {err}")
+    return AuthResult(ok=False, error=err)
 
 
 def verify(key: str, discord_user_id: str) -> AuthResult:
@@ -137,7 +176,13 @@ def verify(key: str, discord_user_id: str) -> AuthResult:
     Daily verification. Refreshes session token.
     If offline, caller should fall back to cache.load_session().
     """
-    hwid = get_hwid()
+    LOG.info(f"verify called for discord_user_id={discord_user_id}")
+    try:
+        hwid = get_hwid()
+    except Exception as e:
+        LOG.exception("HWID generation failed")
+        return AuthResult(ok=False, error=f"Could not read hardware ID: {e}")
+
     data = _post("/verify", {
         "key":             key,
         "hwid":            hwid,
@@ -145,8 +190,11 @@ def verify(key: str, discord_user_id: str) -> AuthResult:
         "sig":             _sign(key, hwid),
     })
     if data.get("valid"):
+        LOG.info("verify succeeded")
         return AuthResult(
             ok=True,
             session_token=data["session_token"],
             token_expires=data["token_expires"])
-    return AuthResult(ok=False, error=data.get("error", "Unknown error"))
+    err = data.get("error", "Unknown error")
+    LOG.warning(f"verify failed: {err}")
+    return AuthResult(ok=False, error=err)

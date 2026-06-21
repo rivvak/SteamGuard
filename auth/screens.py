@@ -306,6 +306,7 @@ class LicenseWindow(tk.Toplevel):
         self.session = None
         self._busy   = False
         self._prefill_error = error
+        self._timeout_id = None
 
         self._build(prefill_key)
         self.update_idletasks()
@@ -440,17 +441,34 @@ class LicenseWindow(tk.Toplevel):
         self._btn.config(state="disabled", text="Activating…", bg=TEXT_DIM)
         self._set_status("Contacting license server…", TEXT_DIM)
 
+        # Safety timeout: if the worker thread never returns, force-reset the UI
+        self._timeout_id = self.after(20000, self._reset_on_timeout)
+
         def worker():
             from auth.client import activate
             from auth.cache  import save_session
-            result = activate(key, discord_id)
+            try:
+                result = activate(key, discord_id)
+            except Exception as e:
+                # Should never happen because activate catches everything, but just in case
+                from auth.client import AuthResult
+                result = AuthResult(ok=False, error=f"Client crash: {e}")
             self.after(0, lambda: self._on_result(result, key, discord_id))
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _reset_on_timeout(self):
+        if self._busy:
+            self._busy = False
+            self._btn.config(state="normal", text="Activate", bg=ACCENT)
+            self._set_status("Server did not respond in 20 seconds. Check your internet or try again.", RED)
+
     def _on_result(self, result, key: str, discord_id: str):
         from auth.client import AuthResult
         self._busy = False
+        if self._timeout_id is not None:
+            self.after_cancel(self._timeout_id)
+            self._timeout_id = None
         self._btn.config(state="normal", text="Activate", bg=ACCENT)
 
         if result.ok:
