@@ -43,7 +43,7 @@ LOG = logging.getLogger("sg-client")
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SERVER_URL       = "https://steamguard-775181381055.us-central1.run.app"
-_HMAC_SECRET      = "a9c5fb65fa6f744879ed15c50b07ab53e0e6b6a3960b20d28af9169770b2"
+_HMAC_SECRET      = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
 
 # Accept any of these SHA-256 certificate fingerprints.
 # Google Cloud Run leaf certs rotate, so we allow the current + previous

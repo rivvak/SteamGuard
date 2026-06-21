@@ -40,7 +40,15 @@ SteamGuard desktop app with license key system:
      explicit release of liability.
    - Bumped `TOS_VERSION` to `1.1` to force existing users to re-accept.
 
-5. **UI stuck on "connecting to server"**
+5. **HMAC secret mismatch fixed**
+   - Cause: `auth/client.py` `_HMAC_SECRET` did not match the server's
+     `SECRET_KEY` in GCP Secret Manager, causing "Invalid signature".
+   - Fix: generated a new shared secret, updated `_HMAC_SECRET` in
+     `auth/client.py`, and removed the unused `HMAC_SECRET_KEY` from
+     the deploy workflow. The user must update `SECRET_KEY` in GCP
+     to match the new value, then redeploy.
+
+6. **UI stuck on "connecting to server"**
    - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
    - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
    - Also made cert extraction more robust and improved error messages.
@@ -61,7 +69,6 @@ SteamGuard desktop app with license key system:
 
 ### Server / Cloud Run (set in GCP Secret Manager)
 - `SECRET_KEY` — HMAC signing key (must match `auth/client.py` `_HMAC_SECRET`)
-- `HMAC_SECRET_KEY` — duplicate, wired through for completeness
 - `ADMIN_KEY` — admin endpoint auth
 - `DISCORD_BOT_TOKEN` — Discord bot token
 - `DISCORD_GUILD_ID` — Discord server ID
@@ -80,11 +87,12 @@ SteamGuard desktop app with license key system:
 
 1. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands). [done]
 2. Re-run the GitHub Action in `.github/workflows/deploy.yml` to deploy updated server. [done]
-3. Rebuild client after TOS update: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
-4. Test that `dist\SteamGuard.exe` shows the updated TOS and connects to the server.
-5. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
-6. Restart bot.
-7. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
+3. Update `SECRET_KEY` in GCP Secret Manager to match the new `_HMAC_SECRET` in `auth/client.py`.
+4. Rebuild client after TOS/HMAC update: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
+5. Test that `dist\SteamGuard.exe` shows the updated TOS and activates successfully.
+6. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
+7. Restart bot.
+8. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
 
 ## Important Files
 

@@ -41,7 +41,7 @@ jobs:
             --source ./server \
             --region us-central1 \
             --allow-unauthenticated \
-            --set-secrets SECRET_KEY=SECRET_KEY:latest,HMAC_SECRET_KEY=HMAC_SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
+            --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
             --quiet
 
       # 5. Print the live URL so it appears in the Actions log
