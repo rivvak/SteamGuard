@@ -1,13 +1,15 @@
 @echo off
 :: SteamGuard — Nuitka build script
 :: Compiles Python → native x86-64 exe (no .pyc files)
-:: Run from the steamapp\ directory with your venv active.
 ::
 :: Prerequisites:
 ::   pip install nuitka ordered-set zstandard
-::   (Nuitka requires a C compiler — install Visual Studio Build Tools or MinGW)
+::   (Nuitka requires a C compiler — auto-downloaded if missing)
 ::
 :: Output: steamapp\dist\SteamGuard.exe
+
+:: Change to the directory where this script lives
+cd /d "%~dp0"
 
 echo [SteamGuard Build] Starting Nuitka compilation...
 echo.
@@ -22,11 +24,12 @@ python -m nuitka ^
     --output-dir=%DIST% ^
     --include-package=auth ^
     --include-data-dir=auth=auth ^
-    --windows-icon-from-ico=icon.ico ^
     --company-name="SteamGuard" ^
     --product-name="SteamGuard" ^
-    --file-description="SteamGuard - Family Sharing Bypass" ^
+    --file-description="SteamGuard" ^
     --copyright="SteamGuard" ^
+    --file-version=1.0.0.0 ^
+    --product-version=1.0.0.0 ^
     --assume-yes-for-downloads ^
     --remove-output ^
     steamguard.py
