@@ -35,9 +35,9 @@ if %ERRORLEVEL% EQU 0 (
     echo.
     echo [SteamGuard Build] SUCCESS: dist\SteamGuard.exe
     echo.
-    echo Next steps:
+    echo If Cloud Run rotated the certificate:
     echo   1. Run: python auth\get_cert_hash.py https://YOUR-CLOUD-RUN-URL
-    echo   2. Paste the hash into auth\client.py as _SERVER_CERT_HASH
+    echo   2. Add the new hash to _SERVER_CERT_HASHES in auth\client.py
     echo   3. Rebuild
 ) else (
     echo.
