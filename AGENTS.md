@@ -13,14 +13,18 @@ SteamGuard desktop app with license key system:
 ## Current State (last updated by Devin session)
 
 - Local repo: `C:\Users\xiq\Downloads\steamapp`
-- Branch: `master`
-- Commits ready to push: 4 (server/bot feature commit, deploy workflow fix, client cert fix, build.bat update)
-- Remote: not configured yet (needs `git remote add origin https://github.com/rivvak/SteamGuard.git`)
-- GitHub repo: does not exist yet (must create at https://github.com/new)
+- Branch: `main`
+- Remote: `origin https://github.com/rivvak/SteamGuard.git` (token removed from URL after push)
+- GitHub repo: exists, private; local code pushed
 
 ## Recent Fixes
 
-1. **UI stuck on "connecting to server"**
+1. **GitHub repo created & code pushed**
+   - Repo `rivvak/SteamGuard` exists (private).
+   - Local main branch merged with remote README and pushed.
+   - `.devin/config.json` (contains live GitHub token) is now gitignored.
+
+2. **UI stuck on "connecting to server"**
    - Cause: Cloud Run TLS certificate rotated; `auth/client.py` had old fingerprint.
    - Fix: updated `_SERVER_CERT_HASHES` to include current + previous fingerprints.
    - Also made cert extraction more robust and improved error messages.
@@ -58,20 +62,16 @@ SteamGuard desktop app with license key system:
 
 ## Next Steps (in order)
 
-1. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
-2. Test that `dist\SteamGuard.exe` connects to the server.
-3. Create GitHub repo `https://github.com/rivvak/SteamGuard` (private, no README).
-4. Push local code:
-   ```
-   git remote add origin https://github.com/rivvak/SteamGuard.git
-   git branch -M main
-   git push -u origin main
-   ```
-5. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands).
-6. Re-run failed GitHub Action to deploy updated server.
-7. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
-8. Restart bot.
-9. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
+1. **Rotate the GitHub token** (security): the token in `.devin/config.json` was used to push; consider it exposed.
+   - Go to GitHub Settings → Developer settings → Personal access tokens → delete/regenerate the token.
+   - Update `.devin/config.json` with the new token.
+2. Add `GCP_SA_KEY` GitHub Actions secret (see earlier Devin notes for gcloud commands).
+3. Re-run the GitHub Action in `.github/workflows/deploy.yml` to deploy updated server.
+4. Rebuild client: `cd C:\Users\xiq\Downloads\steamapp && build.bat`
+5. Test that `dist\SteamGuard.exe` connects to the server.
+6. Set bot env vars `GETKEY_CHANNEL_ID`, `DISCORD_INVITE`, `ADMIN_USER_IDS`.
+7. Restart bot.
+8. Test end-to-end: `!getkey` → activate in app → `!linkyoutube` → verify YouTube check.
 
 ## Important Files
 
