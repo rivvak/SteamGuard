@@ -1,39 +1,29 @@
 name: Deploy to Cloud Run
-# Triggers automatically whenever you push to the main branch.
-# Works for both you editing locally AND me (Devin) making changes.
 on:
   push:
     branches: [main]
-    paths:
-      - "server/**"   # only redeploy when server code changes
-      - "steamguard.py"   # rebuild client when main script changes
-      - "requirements.txt"   # rebuild client when dependencies change
-  workflow_dispatch: # allow manual trigger from the Actions tab
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # required for Workload Identity auth
+      id-token: write
     steps:
-      # 1. Check out the repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Authenticate to Google Cloud using the service account key
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # 3. Set up gcloud CLI
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: fabled-mystery-474200-i1
 
-      # 4. Build & deploy to Cloud Run from source
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy steamguard \
@@ -43,15 +33,10 @@ jobs:
           --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
           --quiet
 
-      # 5. Print the live URL so it appears in the Actions log
-      - name: Print service URL
-        run: |
-          gcloud run services describe steamguard \
-          --region us-central1 \
-          --format="value(status.url)"
-
   build-windows-client:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -66,17 +51,50 @@ jobs:
           pip install nuitka ordered-set zstandard
           if (Test-Path "requirements.txt") { pip install -r requirements.txt }
 
-      - name: Build with Nuitka
+      - name: Build Hardened Binary with Nuitka
         run: |
           python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --output-filename=SteamGuard.exe steamguard.py
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      # Authenticate Windows Runner to GCP for Bucket Upload
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          files: SteamGuard.exe
-          tag_name: v${{ github.run_number }}
-          name: Release v${{ github.run_number }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Upload the compiled binary to your public Cloud Storage bucket
+      - name: Upload Binary to GCP Storage
+        shell: bash
+        run: |
+          gcloud storage cp ./dist/SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe
+
+      # Post a beautiful embed to your Discord channel instead of GitHub Releases
+      - name: Post Embed to Discord
+        shell: bash
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{
+                 "embeds": [{
+                   "title": "🛡️ SteamGuard Client Updated!",
+                   "description": "**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys.",
+                   "color": 2450411,
+                   "fields": [
+                     {
+                       "name": "📝 Requirements",
+                       "value": "• Be a Member of this server\n• Be subscribed to our YouTube channel\n• Must launch the application as Windows Administrator (auto-handled)",
+                       "inline": false
+                     },
+                     {
+                       "name": "📥 Download Area (Latest Build)",
+                       "value": "👉 **[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**",
+                       "inline": false
+                     }
+                   ],
+                   "footer": {
+                     "text": "SteamGuard Security • Build v'"$GITHUB_RUN_NUMBER"'"
+                   }
+                 }]
+               }' "${{ secrets.DISCORD_WEBHOOK_URL }}"
