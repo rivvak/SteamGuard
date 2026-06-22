@@ -1,5 +1,6 @@
 @echo off
 :: SteamGuard — Upgraded Nuitka build script
+
 :: Compiles Python → native C++ → x86-64 binary with admin auto-elevation and hardened protection.
 
 cd /d "%~dp0"
