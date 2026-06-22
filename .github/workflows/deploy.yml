@@ -58,7 +58,7 @@ jobs:
 
       - name: Build Hardened Binary with Nuitka
         run: |
-          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --no-dependency-walker --output-filename=SteamGuard.exe steamguard.py
+          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --assume-yes-for-downloads --output-filename=SteamGuard.exe steamguard.py
 
       - name: Verify Build
         shell: pwsh
