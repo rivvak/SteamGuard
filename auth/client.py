@@ -1,7 +1,7 @@
 """
 License server client.
 Handles activate / verify calls with request signing and
-certificate pinning (rejects MITM proxies).
+dynamic certificate pinning (rejects MITM proxies).
 """
 
 import hmac
@@ -38,11 +38,23 @@ LOG = logging.getLogger("sg-client")
 _SERVER_URL  = "https://steamguard-775181381055.us-central1.run.app"
 _HMAC_SECRET = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
 
-# TODO: PASTE THE 64-CHARACTER HASH RETURNED FROM STEP 1 HERE
-_SERVER_CERT_HASHES: tuple[str, ...] = (
-    "PASTE_YOUR_NEW_HASH_FROM_STEP_1_HERE", 
-    "9e2b9c67d1f15b8d7a29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # previous
-)
+
+def load_valid_hashes() -> list[str]:
+    """
+    Fetch the latest trusted certificate fingerprints dynamically from GitHub.
+    Allows changing certificates on the fly without forcing users to re-download the app.
+    """
+    try:
+        import urllib.request
+        # Raw GitHub link to your hashes.txt file
+        url = "https://raw.githubusercontent.com/rivvak/SteamGuard/main/hashes.txt"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            content = resp.read().decode("utf-8")
+            return [line.strip().lower() for line in content.splitlines() if line.strip()]
+    except Exception as e:
+        LOG.warning(f"Failed to fetch dynamic cert hashes from GitHub: {e}")
+        # Secure hardcoded fallback backup hash
+        return ["9e2b9c67d1f15b8d7a29dedf913aa03304562810989d8d26c1010b11a42c3fa0"]
 
 
 # ── Request signing ───────────────────────────────────────────────────────────
@@ -96,12 +108,13 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            # Certificate pinning check
-            if _SERVER_CERT_HASHES and "PASTE_" not in _SERVER_CERT_HASHES[0]:
+            # Certificate pinning check using dynamic hashes
+            valid_hashes = load_valid_hashes()
+            if valid_hashes:
                 got = _get_cert_hash(resp)
                 LOG.info(f"Server cert fingerprint: {got or 'unknown'}")
-                if got and got.lower() not in {h.lower() for h in _SERVER_CERT_HASHES}:
-                    err = f"Certificate pinning failed (expected one of {_SERVER_CERT_HASHES}, got {got[:16]}…)"
+                if got and got.lower() not in valid_hashes:
+                    err = f"Certificate pinning failed (expected one of {valid_hashes}, got {got[:16]}…)"
                     LOG.error(err)
                     return {"error": err}
             
@@ -186,4 +199,3 @@ def verify(key: str, discord_user_id: str) -> AuthResult:
     err = data.get("error", "Unknown error")
     LOG.warning(f"verify failed: {err}")
     return AuthResult(ok=False, error=err)
-
