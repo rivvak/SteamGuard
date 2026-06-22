@@ -1,17 +1,10 @@
 @echo off
-:: SteamGuard — Nuitka build script
-:: Compiles Python → native x86-64 exe (no .pyc files)
-::
-:: Prerequisites:
-::   pip install nuitka ordered-set zstandard
-::   (Nuitka requires a C compiler — auto-downloaded if missing)
-::
-:: Output: steamapp\dist\SteamGuard.exe
+:: SteamGuard — Upgraded Nuitka build script
+:: Compiles Python → native C++ → x86-64 binary with admin auto-elevation and hardened protection.
 
-:: Change to the directory where this script lives
 cd /d "%~dp0"
 
-echo [SteamGuard Build] Starting Nuitka compilation...
+echo [SteamGuard Build] Starting native hardened compilation...
 echo.
 
 set DIST=dist
@@ -20,6 +13,7 @@ if not exist %DIST% mkdir %DIST%
 python -m nuitka ^
     --onefile ^
     --windows-console-mode=disable ^
+    --windows-uac-admin ^
     --enable-plugin=tk-inter ^
     --output-filename=SteamGuard.exe ^
     --output-dir=%DIST% ^
@@ -33,6 +27,8 @@ python -m nuitka ^
     --product-version=1.0.0.0 ^
     --assume-yes-for-downloads ^
     --remove-output ^
+    --no-pyi-file ^
+    --experimental=disable-all-tracebacks ^
     steamguard.py
 
 if %ERRORLEVEL% EQU 0 (
@@ -47,3 +43,4 @@ if %ERRORLEVEL% EQU 0 (
     echo.
     echo [SteamGuard Build] FAILED — check errors above
 )
+
