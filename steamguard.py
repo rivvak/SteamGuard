@@ -49,6 +49,34 @@ import winsound
 from datetime import datetime, timedelta
 from ipaddress import ip_address, ip_network
 from pathlib import Path
+import tkinter as tk
+from tkinter import messagebox
+import urllib.request
+import webbrowser
+import sys
+
+CURRENT_VERSION = "1.0.0"
+
+def check_for_updates():
+    """Checks GitHub on startup and forces user to get the update via Linkvertise if outdated."""
+    try:
+        url = "https://raw.githubusercontent.com/rivvak/SteamGuard/main/version.txt"
+        with urllib.request.urlopen(url, timeout=4) as resp:
+            latest_version = resp.read().decode("utf-8").strip()
+            
+        if latest_version != CURRENT_VERSION:
+            messagebox.showwarning(
+                "Update Required",
+                f"A new version of SteamGuard (v{latest_version}) is available!\n\n"
+                "We are redirecting you to get the latest update now."
+            )
+            # Redirect them to your linkvertise link to download the update
+            webbrowser.open("https://linkvertise.com/YOUR_LINK_HERE")
+            sys.exit(0)
+    except SystemExit:
+        sys.exit(0)
+    except Exception:
+        pass # Fallback gracefully if offline/network error
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App data paths
@@ -2003,6 +2031,9 @@ TIPS
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # ── 0. Update Check (First thing on startup) ─────────────────────────────
+    check_for_updates()
+
     # ── 1. Anti-tamper checks (before any window opens) ──────────────────────
     try:
         from auth.guard import run_checks
