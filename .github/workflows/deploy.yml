@@ -1,22 +1,21 @@
 name: Deploy to Cloud Run
-
 # Triggers automatically whenever you push to the main branch.
 # Works for both you editing locally AND me (Devin) making changes.
 on:
   push:
     branches: [main]
     paths:
-      - "server/**"          # only redeploy when server code changes
-  workflow_dispatch:           # allow manual trigger from the Actions tab
+      - "server/**"   # only redeploy when server code changes
+      - "steamguard.py"   # rebuild client when main script changes
+      - "requirements.txt"   # rebuild client when dependencies change
+  workflow_dispatch: # allow manual trigger from the Actions tab
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
-      id-token: write        # required for Workload Identity auth
-
+      id-token: write  # required for Workload Identity auth
     steps:
       # 1. Check out the repo
       - name: Checkout
@@ -38,15 +37,46 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy steamguard \
-            --source ./server \
-            --region us-central1 \
-            --allow-unauthenticated \
-            --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
-            --quiet
+          --source ./server \
+          --region us-central1 \
+          --allow-unauthenticated \
+          --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
+          --quiet
 
       # 5. Print the live URL so it appears in the Actions log
       - name: Print service URL
         run: |
           gcloud run services describe steamguard \
-            --region us-central1 \
-            --format="value(status.url)"
+          --region us-central1 \
+          --format="value(status.url)"
+
+  build-windows-client:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard
+          if (Test-Path "requirements.txt") { pip install -r requirements.txt }
+
+      - name: Build with Nuitka
+        run: |
+          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --output-filename=SteamGuard.exe steamguard.py
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SteamGuard.exe
+          tag_name: v${{ github.run_number }}
+          name: Release v${{ github.run_number }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
