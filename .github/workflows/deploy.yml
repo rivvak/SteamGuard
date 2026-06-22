@@ -2,6 +2,10 @@ name: Deploy to Cloud Run
 on:
   push:
     branches: [main]
+    paths:
+      - "server/**"
+      - "steamguard.py"
+      - "requirements.txt"
   workflow_dispatch:
 
 jobs:
@@ -36,7 +40,8 @@ jobs:
   build-windows-client:
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -53,9 +58,18 @@ jobs:
 
       - name: Build Hardened Binary with Nuitka
         run: |
-          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --output-filename=SteamGuard.exe steamguard.py
+          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --no-dependency-walker --output-filename=SteamGuard.exe steamguard.py
 
-      # Authenticate Windows Runner to GCP for Bucket Upload
+      - name: Verify Build
+        shell: pwsh
+        run: |
+          if (Test-Path "SteamGuard.exe") {
+            Write-Host "Build successful! File size:"
+            (Get-Item "SteamGuard.exe").Length / 1MB
+          } else {
+            throw "SteamGuard.exe not found!"
+          }
+
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -63,38 +77,47 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: fabled-mystery-474200-i1
 
-      # Upload the compiled binary to your public Cloud Storage bucket
       - name: Upload Binary to GCP Storage
-        shell: bash
+        shell: pwsh
         run: |
-          gcloud storage cp ./dist/SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe
+          gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
 
-      # Post a beautiful embed to your Discord channel instead of GitHub Releases
       - name: Post Embed to Discord
-        shell: bash
+        shell: pwsh
         run: |
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d '{
-                 "embeds": [{
-                   "title": "🛡️ SteamGuard Client Updated!",
-                   "description": "**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys.",
-                   "color": 2450411,
-                   "fields": [
-                     {
-                       "name": "📝 Requirements",
-                       "value": "• Be a Member of this server\n• Be subscribed to our YouTube channel\n• Must launch the application as Windows Administrator (auto-handled)",
-                       "inline": false
-                     },
-                     {
-                       "name": "📥 Download Area (Latest Build)",
-                       "value": "👉 **[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**",
-                       "inline": false
-                     }
-                   ],
-                   "footer": {
-                     "text": "SteamGuard Security • Build v'"$GITHUB_RUN_NUMBER"'"
-                   }
-                 }]
-               }' "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          $body = @{
+            embeds = @(
+              @{
+                title = "`U{1F6E1}`U{FE0F} SteamGuard Client Updated!"
+                description = "**Terms of Service & EULA (v1.1) Acceptance Required.**`
+This tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys."
+                color = 2450411
+                fields = @(
+                  @{
+                    name = "`U{1F4DD} Requirements"
+                    value = "`U{2022} Be a Member of this server`
+`U{2022} Be subscribed to our YouTube channel`
+`U{2022} Must launch the application as Windows Administrator (auto-handled)"
+                    inline = $false
+                  },
+                  @{
+                    name = "`U{1F4E5} Download Area (Latest Build)"
+                    value = "`U{1F449} **[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**"
+                    inline = $false
+                  }
+                )
+                footer = @{
+                  text = "SteamGuard Security `U{2022} Build v$env:GITHUB_RUN_NUMBER"
+                }
+              }
+            )
+          } | ConvertTo-Json -Depth 10
+          curl -H "Content-Type: application/json" `
+               -Method POST `
+               -Body $body `
+               $env:DISCORD_WEBHOOK_URL
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
