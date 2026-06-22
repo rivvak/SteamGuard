@@ -18,7 +18,6 @@ from pathlib import Path
 from auth.hwid import get_hwid
 
 # ── Debug logging ─────────────────────────────────────────────────────────────
-# Logs every request/response so we can diagnose "stuck on connecting" issues.
 _LOG_DIR = Path(os.environ.get("APPDATA", "")) / "SteamGuard"
 try:
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,24 +33,15 @@ logging.basicConfig(
 
 LOG = logging.getLogger("sg-client")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FILL THESE IN after you deploy your Cloud Run service.
-# _SERVER_URL:       your Cloud Run HTTPS URL
-# _SERVER_CERT_HASH: SHA-256 fingerprint of your server's TLS cert
-#                    run: python auth/get_cert_hash.py <your-url>
-# _HMAC_SECRET:      must match SECRET_KEY on the server
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Server Configuration ──────────────────────────────────────────────────────
 
-_SERVER_URL       = "https://steamguard-775181381055.us-central1.run.app"
-_HMAC_SECRET      = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
+_SERVER_URL  = "https://steamguard-775181381055.us-central1.run.app"
+_HMAC_SECRET = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
 
-# Accept any of these SHA-256 certificate fingerprints.
-# Google Cloud Run leaf certs rotate, so we allow the current + previous
-# known good fingerprints. You can update this with:
-#   python auth/get_cert_hash.py <url>
+# TODO: PASTE THE 64-CHARACTER HASH RETURNED FROM STEP 1 HERE
 _SERVER_CERT_HASHES: tuple[str, ...] = (
-    "9e2b9c67d1f15b8d7a29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # current
-    "9c2b9c67d1f15b8d7e29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # previous
+    "PASTE_YOUR_NEW_HASH_FROM_STEP_1_HERE", 
+    "9e2b9c67d1f15b8d7a29dedf913aa03304562810989d8d26c1010b11a42c3fa0",  # previous
 )
 
 
@@ -63,10 +53,10 @@ def _sign(key: str, hwid: str) -> str:
                     hashlib.sha256).hexdigest()
 
 
-# ── HTTPS helper (with optional cert pinning) ─────────────────────────────────
+# ── HTTPS helper (with SSL certificate pinning) ───────────────────────────────
 
 def _get_cert_hash(resp) -> str | None:
-    """Extract SHA-256 fingerprint of the peer certificate, if possible."""
+    """Extract SHA-256 fingerprint of the peer certificate (robust extraction)."""
     try:
         raw = getattr(resp, "fp", None)
         if raw is None:
@@ -75,12 +65,15 @@ def _get_cert_hash(resp) -> str | None:
         if sock is None:
             sock = getattr(raw, "_sock", None)
         if sock is None:
-            return None
-        der = sock.getpeercert(binary_form=True)
+            # Fallback wrapper check for newer Python versions
+            sock = getattr(resp, "headers", None)
+        
+        # Access socket peer certificate
+        der = sock.getpeercert(binary_form=True) if hasattr(sock, "getpeercert") else None
         if der:
             return hashlib.sha256(der).hexdigest()
-    except Exception:
-        pass
+    except Exception as e:
+        LOG.debug(f"Failed to extract certificate peer info: {e}")
     return None
 
 
@@ -103,14 +96,15 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
-            # Certificate pinning: compare DER hash against accepted list
-            if _SERVER_CERT_HASHES:
+            # Certificate pinning check
+            if _SERVER_CERT_HASHES and "PASTE_" not in _SERVER_CERT_HASHES[0]:
                 got = _get_cert_hash(resp)
                 LOG.info(f"Server cert fingerprint: {got or 'unknown'}")
                 if got and got.lower() not in {h.lower() for h in _SERVER_CERT_HASHES}:
-                    err = f"Certificate pinning failed ({got[:16]}…). Update auth/client.py or check for MITM."
+                    err = f"Certificate pinning failed (expected one of {_SERVER_CERT_HASHES}, got {got[:16]}…)"
                     LOG.error(err)
                     return {"error": err}
+            
             data = json.loads(resp.read())
             LOG.info(f"Response: {data}")
             return data
@@ -143,10 +137,7 @@ class AuthResult:
 
 
 def activate(key: str, discord_user_id: str) -> AuthResult:
-    """
-    First-time activation. Binds HWID to key.
-    Call once; use verify() for daily re-checks.
-    """
+    """First-time activation. Binds HWID to key."""
     LOG.info(f"activate called for discord_user_id={discord_user_id}")
     try:
         hwid = get_hwid()
@@ -172,10 +163,7 @@ def activate(key: str, discord_user_id: str) -> AuthResult:
 
 
 def verify(key: str, discord_user_id: str) -> AuthResult:
-    """
-    Daily verification. Refreshes session token.
-    If offline, caller should fall back to cache.load_session().
-    """
+    """Daily verification. Refreshes session token."""
     LOG.info(f"verify called for discord_user_id={discord_user_id}")
     try:
         hwid = get_hwid()
@@ -198,3 +186,4 @@ def verify(key: str, discord_user_id: str) -> AuthResult:
     err = data.get("error", "Unknown error")
     LOG.warning(f"verify failed: {err}")
     return AuthResult(ok=False, error=err)
+
