@@ -88,36 +88,7 @@ jobs:
       - name: Post Embed to Discord
         shell: pwsh
         run: |
-          $body = @{
-            embeds = @(
-              @{
-                title = "`U{1F6E1}`U{FE0F} SteamGuard Client Updated!"
-                description = "**Terms of Service & EULA (v1.1) Acceptance Required.**`
-This tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys."
-                color = 2450411
-                fields = @(
-                  @{
-                    name = "`U{1F4DD} Requirements"
-                    value = "`U{2022} Be a Member of this server`
-`U{2022} Be subscribed to our YouTube channel`
-`U{2022} Must launch the application as Windows Administrator (auto-handled)"
-                    inline = $false
-                  },
-                  @{
-                    name = "`U{1F4E5} Download Area (Latest Build)"
-                    value = "`U{1F449} **[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**"
-                    inline = $false
-                  }
-                )
-                footer = @{
-                  text = "SteamGuard Security `U{2022} Build v$env:GITHUB_RUN_NUMBER"
-                }
-              }
-            )
-          } | ConvertTo-Json -Depth 10
-          curl -H "Content-Type: application/json" `
-               -Method POST `
-               -Body $body `
-               $env:DISCORD_WEBHOOK_URL
+          $json = '{"embeds":[{"title":"SteamGuard Client Updated!","description":"**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys.","color":2450411,"fields":[{"name":"Requirements","value":"- Be a Member of this server\n- Be subscribed to our YouTube channel\n- Must launch the application as Windows Administrator (auto-handled)","inline":false},{"name":"Download Area (Latest Build)","value":"**[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**","inline":false}],"footer":{"text":"SteamGuard Security - Build v$env:GITHUB_RUN_NUMBER"}}]}'
+          Invoke-WebRequest -Uri $env:DISCORD_WEBHOOK_URL -Method POST -ContentType "application/json" -Body $json
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
