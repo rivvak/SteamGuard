@@ -390,6 +390,77 @@ def _dpapi_unprotect(blob: bytes) -> bytes:
         return blob
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Debug & Self-Healing System
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DEBUG_LOG_FILE = _APPDATA_DIR / "steamguard_debug.log"
+_debug_log_handle = None
+
+def _open_debug_log():
+    global _debug_log_handle
+    try:
+        _ensure_appdata_dir()
+        _debug_log_handle = open(_DEBUG_LOG_FILE, "a", encoding="utf-8", buffering=1)
+        _debug_log_handle.write(
+            f"\n{'='*60}\n"
+            f"SteamGuard DEBUG session {datetime.now():%Y-%m-%d %H:%M:%S}\n"
+            f"Python {sys.version}\n"
+            f"{'='*60}\n")
+    except Exception:
+        _debug_log_handle = None
+
+def debug_log(msg: str, level: str = "INFO"):
+    """Write a debug entry to steamguard_debug.log."""
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    line = f"[{ts}] [{level}] {msg}\n"
+    if _debug_log_handle:
+        try:
+            _debug_log_handle.write(line)
+        except Exception:
+            pass
+
+def _install_exception_hook():
+    """Install a global exception handler that logs all unhandled exceptions
+    to the debug log instead of silently dying."""
+    import traceback
+    _original_hook = sys.excepthook
+
+    def _hook(exc_type, exc_value, exc_tb):
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        debug_log(f"UNHANDLED EXCEPTION:\n{tb_str}", level="CRITICAL")
+        log_to_file(f"CRASH: {exc_type.__name__}: {exc_value}")
+        # Also try to show a non-fatal message box so the user knows
+        try:
+            import tkinter.messagebox as _mb
+            _mb.showerror(
+                "SteamGuard — Unexpected Error",
+                f"An error occurred:\n{exc_type.__name__}: {exc_value}\n\n"
+                f"Details saved to:\n{_DEBUG_LOG_FILE}\n\n"
+                "The app will attempt to continue.")
+        except Exception:
+            pass
+        # Call original hook for any additional OS-level handling
+        try:
+            _original_hook(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
+def _safe_call(fn, *args, label: str = "", **kwargs):
+    """Call fn(*args, **kwargs) and log any exception without crashing.
+    Returns (success, result_or_None)."""
+    import traceback
+    try:
+        return True, fn(*args, **kwargs)
+    except Exception as e:
+        tb = traceback.format_exc()
+        debug_log(f"Error in {label or fn.__name__}: {e}\n{tb}", level="ERROR")
+        return False, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1068,12 +1139,18 @@ class SteamGuard(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.overrideredirect(True)
+        # Do NOT use overrideredirect — it causes a black window when a
+        # fullscreen DirectX game is running (Windows won't composite it).
+        # Instead we use pywinstyles to paint the native title bar dark,
+        # which works even behind fullscreen games.
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
         self.title("SteamGuard")
+        self.wm_attributes("-topmost", True)
 
         _open_log_file()
+        _open_debug_log()
+        debug_log(f"SteamGuard v{CURRENT_VERSION} starting")
         self._cfg = load_config()
 
         self._admin          = is_admin()
@@ -1149,6 +1226,9 @@ class SteamGuard(tk.Tk):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
+        # Apply dark title bar via pywinstyles (graceful fallback if not installed)
+        self._apply_dark_titlebar()
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._tray_icon = None
         self._minimized_to_tray = False
@@ -1156,6 +1236,8 @@ class SteamGuard(tk.Tk):
 
         # Hourly heal rotation
         self.after(3600000, self._rotate_hourly_heals)
+        # Keep window on top even when a game is running
+        self.after(5000, self._keepalive_topmost)
 
     def _save_settings(self):
         cfg = {
@@ -1179,32 +1261,34 @@ class SteamGuard(tk.Tk):
     # ── Minimize (overrideredirect-safe) ──────────────────────────────
 
     def _minimize(self):
-        """Minimize to taskbar safely when overrideredirect=True.
-
-        Strategy: save position, withdraw the window (hides it but keeps
-        it in the taskbar via a hidden helper Toplevel), then iconify
-        the helper. On restore we deiconify, re-show at saved position.
-        """
-        # Save current geometry so we can restore exact position
-        self._saved_geometry = self.geometry()
-        # Turn off overrideredirect so Windows shows it in the taskbar
-        self.overrideredirect(False)
+        """Minimize to taskbar. Simple now that overrideredirect is gone."""
         self.iconify()
-        # Poll until the window is restored (wm_state == 'normal')
-        self.after(200, self._check_restore)
 
     def _check_restore(self):
-        state = self.wm_state()
-        if state == "iconic" or state == "withdrawn":
-            # Still minimized — keep polling
-            self.after(200, self._check_restore)
-        else:
-            # Window has been restored by the user
-            self.overrideredirect(True)
-            if hasattr(self, "_saved_geometry"):
-                self.geometry(self._saved_geometry)
+        """No-op kept for compatibility — not needed without overrideredirect."""
+        pass
+
+    def _apply_dark_titlebar(self):
+        """Paint the native Windows title bar dark using pywinstyles.
+        Gracefully skips if pywinstyles is not installed."""
+        try:
+            import pywinstyles
+            pywinstyles.apply_style(self, "dark")
+        except ImportError:
+            pass  # pywinstyles not installed — title bar will be default color
+        except Exception:
+            pass
+
+    def _keepalive_topmost(self):
+        """Re-assert topmost every 5s so the window stays visible over fullscreen games."""
+        if not self._app_running:
+            return
+        try:
+            self.wm_attributes("-topmost", True)
             self.lift()
-            self.focus_force()
+        except Exception:
+            pass
+        self.after(5000, self._keepalive_topmost)
 
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
@@ -2130,6 +2214,56 @@ class SteamGuard(tk.Tk):
             relief="flat", bd=0, state="disabled", wrap="word")
         self._log_w.pack(fill="both", expand=True)
 
+        # ── Tab 2: Debug ────────────────────────────────────────────────────────
+        debug_frame = tk.Frame(nb, bg=BG_DARK)
+        nb.add(debug_frame, text="DEBUG")
+
+        dbg_outer = tk.Frame(debug_frame, bg=BG_DARK)
+        dbg_outer.pack(fill="both", expand=True, padx=12, pady=(8, 8))
+
+        dbg_head = tk.Frame(dbg_outer, bg=BG_DARK)
+        dbg_head.pack(fill="x", pady=(0, 4))
+        tk.Label(dbg_head, text="DEBUG LOG", bg=BG_DARK, fg=TEXT_DIM,
+                 font=F_LABEL).pack(side="left")
+
+        # Clear + Open File buttons
+        def _clear_debug():
+            self._dbg_w.config(state="normal")
+            self._dbg_w.delete("1.0", "end")
+            self._dbg_w.config(state="disabled")
+
+        def _open_debug_file():
+            try:
+                import subprocess as _sp
+                _sp.Popen(["notepad", str(_DEBUG_LOG_FILE)],
+                          creationflags=subprocess.CREATE_NO_WINDOW)
+            except Exception:
+                pass
+
+        btn_row_dbg = tk.Frame(dbg_head, bg=BG_DARK)
+        btn_row_dbg.pack(side="right")
+        tk.Button(btn_row_dbg, text="Clear", bg=BG_CARD, fg=TEXT_DIM,
+                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                  command=_clear_debug).pack(side="left", padx=(0, 4))
+        tk.Button(btn_row_dbg, text="Open File", bg=BG_CARD, fg=TEXT_DIM,
+                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                  command=_open_debug_file).pack(side="left")
+
+        self._dbg_w = scrolledtext.ScrolledText(
+            dbg_outer, bg=BG_BASE, fg=TEXT_MAIN, font=F_MONO, height=11,
+            relief="flat", bd=0, state="disabled", wrap="word")
+        self._dbg_w.pack(fill="both", expand=True)
+
+        # Color tags for debug log
+        self._dbg_w.tag_configure("critical", foreground=RED)
+        self._dbg_w.tag_configure("error",    foreground=RED)
+        self._dbg_w.tag_configure("warn",     foreground=YELLOW)
+        self._dbg_w.tag_configure("info",     foreground=TEXT_MAIN)
+        self._dbg_w.tag_configure("dim",      foreground=TEXT_DIM)
+
+        # Start the debug log tail loop
+        self.after(1000, self._tail_debug_log)
+
         # ── Admin warning banner ──────────────────────────────────────────────
         if not self._admin:
             warn = tk.Frame(self, bg=YELLOW, cursor="hand2")
@@ -2168,6 +2302,55 @@ class SteamGuard(tk.Tk):
     def _update_stats_tab(self):
         """Stats tab removed — no-op kept so call sites don't crash."""
         pass
+
+    # ── Debug log tail ──────────────────────────────────────────────────────────────
+
+    _dbg_file_pos = 0  # class-level read cursor for the debug log file
+
+    def _tail_debug_log(self):
+        """Read new lines from the debug log file and append to the DEBUG tab."""
+        if not self._app_running:
+            return
+        try:
+            if _DEBUG_LOG_FILE.exists():
+                with open(_DEBUG_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(SteamGuard._dbg_file_pos)
+                    new_text = f.read()
+                    SteamGuard._dbg_file_pos = f.tell()
+                if new_text:
+                    self._dbg_w.config(state="normal")
+                    for line in new_text.splitlines(keepends=True):
+                        tag = "dim"
+                        lu = line.upper()
+                        if "[CRITICAL]" in lu:
+                            tag = "critical"
+                        elif "[ERROR]" in lu:
+                            tag = "error"
+                        elif "[WARN" in lu:
+                            tag = "warn"
+                        elif "[INFO]" in lu:
+                            tag = "info"
+                        self._dbg_w.insert("end", line, tag)
+                    self._dbg_w.see("end")
+                    self._dbg_w.config(state="disabled")
+        except Exception:
+            pass
+        self.after(2000, self._tail_debug_log)
+
+    def debug_log_ui(self, msg: str, level: str = "INFO"):
+        """Write to the debug log AND show in-app DEBUG tab immediately."""
+        debug_log(msg, level=level)
+        try:
+            tag = {"CRITICAL": "critical", "ERROR": "error",
+                   "WARN": "warn", "INFO": "info"}.get(level.upper(), "dim")
+            ts = datetime.now().strftime("%H:%M:%S")
+            self._dbg_w.config(state="normal")
+            self._dbg_w.insert("end", f"[{ts}] [{level}] {msg}\n", tag)
+            self._dbg_w.see("end")
+            self._dbg_w.config(state="disabled")
+        except Exception:
+            pass
+
 
     # ── Game art ──────────────────────────────────────────────────────────────
 
@@ -3006,7 +3189,13 @@ KEYBOARD SHORTCUTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # ── 0. Update Check (First thing on startup) ─────────────────────────────
+    # ── 0. Debug log + exception hook (very first thing) ──────────────────────────────
+    _ensure_appdata_dir()
+    _open_debug_log()
+    _install_exception_hook()
+    debug_log("Process started")
+
+    # ── 1. Update Check (First thing on startup) ─────────────────────────────
     check_for_updates()
 
     # ── 1. Anti-tamper checks (before any window opens) ──────────────────────

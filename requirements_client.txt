@@ -8,6 +8,7 @@ wmi
 
 # UI enhancements (optional but strongly recommended)
 Pillow       # game art thumbnails + share card PNG export
+pywinstyles  # dark title bar on Windows (fixes black window behind games)
 
 # Discord integration (optional)
 pypresence   # Discord Rich Presence (shows game in Discord status)
