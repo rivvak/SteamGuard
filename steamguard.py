@@ -61,10 +61,11 @@ import json as _json_mod
 from steam_features import (
     WhyLockedDialog, SteamDeckHealthDialog, OfflineReadinessDialog,
     FamilyCooldownDialog, DLCAdvisorDialog, PreLaunchWarning,
-    classify_game, GameBadgePanel
+    classify_game, GameBadgePanel,
+    get_running_appid_reg, _reg_get,
 )
 
-CURRENT_VERSION = "1.3.0"
+CURRENT_VERSION = "1.4.0"
 
 def check_for_updates():
     """Check GitHub for updates. Verifies SHA-256 of manifest if available."""
@@ -340,23 +341,33 @@ def refresh_cm_cidrs() -> tuple[int, int]:
 # Palette
 # ─────────────────────────────────────────────────────────────────────────────
 
-BG_DARK   = "#0d1117"
-BG_MID    = "#161b22"
-BG_PANEL  = "#1c2128"
-BG_CARD   = "#21262d"
-ACCENT    = "#58a6ff"
-GREEN     = "#3fb950"
-RED       = "#f85149"
-YELLOW    = "#d29922"
-PURPLE    = "#bc8cff"
-TEXT_MAIN = "#e6edf3"
-TEXT_DIM  = "#8b949e"
-BORDER    = "#30363d"
+# ── "Steam Vault" palette (from UI research) ──────────────────────────────────
+BG_BASE     = "#0D1117"   # app background (deepest)
+BG_SIDEBAR  = "#161B22"   # sidebar / nav rail
+BG_CARD     = "#1C2128"   # cards / panels
+BG_ELEVATED = "#21262D"   # hover / elevated surfaces
+ACCENT      = "#23A559"   # primary accent — green (trust/secure)
+ACCENT_CYAN = "#00E5FF"   # cyber accent for focus rings / secondary
+ACCENT_BLUE = "#58A6FF"   # info / links
+GREEN       = "#23A559"   # secure / verified
+RED         = "#F23F43"
+YELLOW      = "#F0B232"
+PURPLE      = "#BC8CFF"
+TEXT_MAIN   = "#E6EDF3"
+TEXT_DIM    = "#8B949E"
+BORDER      = "#30363D"
 
-F_HEAD  = ("Segoe UI", 13, "bold")
-F_BODY  = ("Segoe UI", 10)
-F_SMALL = ("Segoe UI", 9)
-F_MONO  = ("Consolas", 9)
+# Backward-compat aliases (older code paths reference these names)
+BG_DARK   = BG_BASE
+BG_MID    = BG_SIDEBAR
+BG_PANEL  = BG_CARD
+
+F_HEAD   = ("Segoe UI", 14, "bold")    # section headings
+F_BODY   = ("Segoe UI", 11)            # body text
+F_SMALL  = ("Segoe UI", 10)            # small text
+F_MONO   = ("Consolas", 10)            # codes / logs
+F_TITLE  = ("Segoe UI", 16, "bold")    # app title
+F_LABEL  = ("Segoe UI", 9)             # dim section labels / caps
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DPAPI helpers
@@ -1100,6 +1111,27 @@ class SteamGuard(tk.Tk):
         # Badge/achievement system
         self._badges: list = []
 
+        # ── New feature state (v1.4) ──────────────────────────────────────
+        # Feature A: Playtime tracker pill widget refs
+        self._pill_session_val = None
+        self._pill_protected_val = None
+        self._pill_heals_val = None
+        self._after_pills_id = None
+        # Feature B: Library locked status detector
+        self._library_status = "unknown"   # "locked" / "free" / "unknown"
+        self._lib_dot_cv = None
+        self._lib_dot = None
+        self._lib_lbl = None
+        self._after_library_id = None
+        # Feature C: Session playtime countdown (inside game card)
+        self._game_detected_at: datetime | None = None
+        self._playing_lbl = None
+        self._after_playing_id = None
+        # Feature D: Family lock quick-lock
+        self._family_lock_active = False
+        self._family_lock_after_id = None
+        self._family_lock_btn = None
+
         # Trace auto-protect changes → persist
         self._auto_heal.trace_add("write", lambda *_: self._save_settings())
 
@@ -1116,7 +1148,7 @@ class SteamGuard(tk.Tk):
         self._initial_load()
 
         self.update_idletasks()
-        w, h = 500, 760
+        w, h = 520, 800
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
@@ -1423,7 +1455,7 @@ class SteamGuard(tk.Tk):
             import io, os
 
             W, H = 600, 280
-            img = Image.new("RGB", (W, H), color=(13, 17, 23))  # BG_DARK
+            img = Image.new("RGB", (W, H), color=(13, 17, 23))  # BG_BASE #0D1117
             d = ImageDraw.Draw(img)
 
             # Background gradient effect (simple horizontal bands)
@@ -1435,14 +1467,14 @@ class SteamGuard(tk.Tk):
                 d.line([(0, y), (W, y)], fill=(r, g, b))
 
             # Shield icon area (left panel)
-            d.rectangle([0, 0, 160, H], fill=(28, 33, 40))  # BG_PANEL
+            d.rectangle([0, 0, 160, H], fill=(22, 27, 34))  # BG_SIDEBAR #161B22
 
             # Shield polygon
             cx, cy = 80, 100
             pts = [cx, cy-40, cx+34, cy-24, cx+34, cy+10, cx, cy+46, cx-34, cy+10, cx-34, cy-24]
             filled = self._protected
-            d.polygon(pts, fill=(26, 58, 92) if not filled else (13, 42, 13),
-                     outline=(88, 166, 255) if not filled else (63, 185, 80), width=2)
+            d.polygon(pts, fill=(33, 38, 45) if not filled else (28, 33, 40),
+                     outline=(88, 166, 255) if not filled else (35, 165, 89), width=2)  # ACCENT_BLUE / ACCENT
 
             # Try to load a font, fall back to default
             try:
@@ -1454,12 +1486,12 @@ class SteamGuard(tk.Tk):
                 font_big = font_med = font_small = font_bold = ImageFont.load_default()
 
             # "SteamGuard" title in shield panel
-            d.text((80, 158), "SteamGuard", fill=(88, 166, 255), font=font_med, anchor="mm")
-            d.text((80, 175), f"v{CURRENT_VERSION}", fill=(139, 148, 158), font=font_small, anchor="mm")
+            d.text((80, 158), "SteamGuard", fill=(88, 166, 255), font=font_med, anchor="mm")  # ACCENT_BLUE
+            d.text((80, 175), f"v{CURRENT_VERSION}", fill=(139, 148, 158), font=font_small, anchor="mm")  # TEXT_DIM
 
             # Status
             status_text = "PROTECTED" if self._protected else "STANDBY"
-            status_color = (63, 185, 80) if self._protected else (139, 148, 158)
+            status_color = (35, 165, 89) if self._protected else (139, 148, 158)  # ACCENT / TEXT_DIM
             d.text((80, 195), status_text, fill=status_color, font=font_small, anchor="mm")
 
             # Stats panel (right)
@@ -1483,7 +1515,7 @@ class SteamGuard(tk.Tk):
 
             for i, (label, value) in enumerate(stats):
                 y = 65 + i * 52
-                d.rectangle([175, y-4, 585, y+44], fill=(33, 38, 45))  # BG_CARD
+                d.rectangle([175, y-4, 585, y+44], fill=(28, 33, 40))  # BG_CARD #1C2128
                 d.text((195, y+4), label, fill=(139, 148, 158), font=font_small)
                 d.text((195, y+22), value, fill=(230, 237, 243), font=font_bold)
 
@@ -1736,27 +1768,27 @@ class SteamGuard(tk.Tk):
 
     def _build_ui(self):
         # ── Custom draggable title bar ─────────────────────────────────────────
-        hdr = tk.Frame(self, bg=BG_PANEL, height=48)
+        hdr = tk.Frame(self, bg=BG_SIDEBAR, height=56)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
-        # Shield canvas icon (28x28)
-        hc = tk.Canvas(hdr, width=28, height=28, bg=BG_PANEL, highlightthickness=0)
-        hc.place(x=12, y=10)
-        hc.create_polygon(14, 2, 26, 7, 26, 16, 14, 26, 2, 16, 2, 7,
+        # Shield canvas icon (36x36)
+        hc = tk.Canvas(hdr, width=36, height=36, bg=BG_SIDEBAR, highlightthickness=0)
+        hc.place(x=14, y=10)
+        hc.create_polygon(18, 3, 33, 9, 33, 21, 18, 33, 3, 21, 3, 9,
                           fill=ACCENT, outline="", smooth=False)
-        hc.create_text(14, 15, text="S", fill="white", font=("Segoe UI", 9, "bold"))
+        hc.create_text(18, 19, text="S", fill="white", font=("Segoe UI", 12, "bold"))
 
-        title_lbl = tk.Label(hdr, text="SteamGuard", bg=BG_PANEL, fg=TEXT_MAIN,
-                             font=("Segoe UI", 13, "bold"))
-        title_lbl.place(x=48, y=10)
+        title_lbl = tk.Label(hdr, text="SteamGuard", bg=BG_SIDEBAR, fg=TEXT_MAIN,
+                             font=F_TITLE)
+        title_lbl.place(x=58, y=12)
 
-        ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_PANEL, fg=TEXT_DIM, font=F_SMALL)
-        ver_lbl.place(x=155, y=14)
+        ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_SIDEBAR, fg=TEXT_DIM, font=F_SMALL)
+        ver_lbl.place(x=178, y=18)
 
         # Admin pill canvas (70x20)
-        pill_cv = tk.Canvas(hdr, width=70, height=20, bg=BG_PANEL, highlightthickness=0)
-        pill_cv.place(relx=1.0, x=-140, y=14)
+        pill_cv = tk.Canvas(hdr, width=70, height=20, bg=BG_SIDEBAR, highlightthickness=0)
+        pill_cv.place(relx=1.0, x=-140, y=18)
         if self._admin:
             pill_color = GREEN
             pill_text  = "✓ ADMIN"
@@ -1768,17 +1800,17 @@ class SteamGuard(tk.Tk):
                             font=("Segoe UI", 7, "bold"))
 
         # Minimize button
-        min_btn = tk.Label(hdr, text="─", bg=BG_PANEL, fg=TEXT_DIM,
+        min_btn = tk.Label(hdr, text="─", bg=BG_SIDEBAR, fg=TEXT_DIM,
                            font=("Segoe UI", 12), cursor="hand2")
-        min_btn.place(relx=1.0, x=-64, y=12)
+        min_btn.place(relx=1.0, x=-64, y=16)
         min_btn.bind("<Button-1>", lambda e: self._minimize())
         min_btn.bind("<Enter>", lambda e: min_btn.config(fg=TEXT_MAIN))
         min_btn.bind("<Leave>", lambda e: min_btn.config(fg=TEXT_DIM))
 
         # Close button
-        close_btn = tk.Label(hdr, text="✕", bg=BG_PANEL, fg=RED,
+        close_btn = tk.Label(hdr, text="✕", bg=BG_SIDEBAR, fg=RED,
                              font=("Segoe UI", 12), cursor="hand2")
-        close_btn.place(relx=1.0, x=-32, y=12)
+        close_btn.place(relx=1.0, x=-32, y=16)
         close_btn.bind("<Button-1>", lambda e: self._on_close())
         close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#ff6b6b"))
         close_btn.bind("<Leave>", lambda e: close_btn.config(fg=RED))
@@ -1795,11 +1827,11 @@ class SteamGuard(tk.Tk):
             widget.bind("<ButtonPress-1>", _drag_start)
             widget.bind("<B1-Motion>", _drag_motion)
 
-        # 1px border at bottom of header
+        # 1px border separator at bottom of header (title bar)
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # ── Animated shield canvas (centrepiece) ──────────────────────────────
-        SHIELD_W, SHIELD_H = 500, 150
+        SHIELD_W, SHIELD_H = 520, 150
         self._shield_cv = tk.Canvas(self, width=SHIELD_W, height=SHIELD_H,
                                     bg=BG_DARK, highlightthickness=0)
         self._shield_cv.pack(fill="x")
@@ -1827,7 +1859,7 @@ class SteamGuard(tk.Tk):
         SW, SH = 76, 86
         self._shield_body = self._shield_cv.create_polygon(
             *shield_pts(cx, cy, SW, SH),
-            fill="#1a3a5c", outline=ACCENT, width=2, smooth=False)
+            fill=BG_ELEVATED, outline=ACCENT, width=2, smooth=False)
         self._shield_letter = self._shield_cv.create_text(
             cx, cy+2, text="S", fill=ACCENT,
             font=("Segoe UI", 28, "bold"))
@@ -1844,33 +1876,42 @@ class SteamGuard(tk.Tk):
         ]
 
         # ── 3-column status indicators ────────────────────────────────────────
-        status_outer = tk.Frame(self, bg=BG_DARK)
-        status_outer.pack(fill="x", padx=12, pady=(0, 0))
+        status_outer = tk.Frame(self, bg=BORDER)   # BORDER bg shows through as dividers
+        status_outer.pack(fill="x", padx=12, pady=(2, 0))
 
-        def _make_indicator(parent, label):
+        self._status_cards = []
+
+        def _make_indicator(parent, label, add_divider):
+            if add_divider:
+                tk.Frame(parent, bg=BORDER, width=1).pack(side="left", fill="y")
             card = tk.Frame(parent, bg=BG_CARD)
-            card.pack(side="left", fill="both", expand=True, padx=(0, 4))
+            card.pack(side="left", fill="both", expand=True)
             tk.Label(card, text=label, bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", 7, "bold")).pack(pady=(7, 1))
-            dot_cv = tk.Canvas(card, width=10, height=10, bg=BG_CARD,
+                     font=F_LABEL).pack(pady=(12, 2), padx=10)
+            dot_cv = tk.Canvas(card, width=12, height=12, bg=BG_CARD,
                                highlightthickness=0)
             dot_cv.pack()
-            dot = dot_cv.create_oval(1, 1, 9, 9, fill=TEXT_DIM, outline="")
+            dot = dot_cv.create_oval(1, 1, 11, 11, fill=TEXT_DIM, outline="")
             lbl = tk.Label(card, text="—", bg=BG_CARD, fg=TEXT_DIM,
                            font=("Segoe UI", 8, "bold"))
-            lbl.pack(pady=(1, 7))
+            lbl.pack(pady=(2, 12), padx=10)
+            self._status_cards.append(card)
             return dot_cv, dot, lbl
 
-        self._fw_dot_cv,   self._fw_dot,   self._fw_lbl   = _make_indicator(status_outer, "FIREWALL")
-        self._heal_dot_cv, self._heal_dot, self._heal_count_lbl = _make_indicator(status_outer, "AUTO-HEAL")
-        self._net_dot_cv,  self._net_dot,  self._net_lbl  = _make_indicator(status_outer, "NETWORK")
-        # Fix last card: no right padding
-        status_outer.winfo_children()[-1].pack_configure(padx=0)
+        self._fw_dot_cv,   self._fw_dot,   self._fw_lbl   = _make_indicator(status_outer, "FIREWALL", False)
+        self._heal_dot_cv, self._heal_dot, self._heal_count_lbl = _make_indicator(status_outer, "AUTO-HEAL", True)
+        self._net_dot_cv,  self._net_dot,  self._net_lbl  = _make_indicator(status_outer, "NETWORK", True)
+        # Feature B: 4th LIBRARY card
+        self._lib_dot_cv,  self._lib_dot,  self._lib_lbl  = _make_indicator(status_outer, "LIBRARY", True)
 
         # Add tooltips to indicators
         Tooltip(self._fw_dot_cv,   "Firewall rule status: BLOCKING = active protection")
         Tooltip(self._heal_dot_cv, "Auto-heal count: times the block was re-applied after reconnect")
         Tooltip(self._net_dot_cv,  "Internet connectivity status")
+        Tooltip(self._lib_dot_cv,  "Shared library status: LOCKED means someone else is using it")
+
+        # Section separator after status row
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=(8, 0))
 
         # ── Game detection card ───────────────────────────────────────────────
         game_section = tk.Frame(self, bg=BG_DARK)
@@ -1878,42 +1919,79 @@ class SteamGuard(tk.Tk):
         tk.Label(game_section, text="DETECTED GAME", bg=BG_DARK, fg=TEXT_DIM,
                  font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0, 3))
 
-        self._game_card = tk.Frame(game_section, bg=BG_CARD)
+        # 2px BORDER outline; border recoloured ACCENT when a game is detected
+        self._game_card = tk.Frame(game_section, bg=BG_CARD,
+                                   highlightbackground=BORDER,
+                                   highlightcolor=BORDER, highlightthickness=2,
+                                   bd=0)
         self._game_card.pack(fill="x")
 
-        self._game_icon = tk.Label(self._game_card, text="🎮", bg=BG_CARD,
-                                   font=("Segoe UI Emoji", 18),
-                                   compound="center")
-        self._game_icon.pack(side="left", padx=(12, 8), pady=6)
+        # Top row: icon + text + badge
+        game_top = tk.Frame(self._game_card, bg=BG_CARD)
+        game_top.pack(fill="x")
 
-        game_text = tk.Frame(self._game_card, bg=BG_CARD)
-        game_text.pack(side="left", fill="x", expand=True, pady=10)
+        self._game_icon = tk.Label(game_top, text="🎮", bg=BG_CARD,
+                                   font=("Segoe UI Emoji", 20),
+                                   compound="center")
+        self._game_icon.pack(side="left", padx=(14, 10), pady=10)
+
+        game_text = tk.Frame(game_top, bg=BG_CARD)
+        game_text.pack(side="left", fill="x", expand=True, pady=12)
         self._game_name_lbl = tk.Label(game_text, text="Waiting for game to launch…",
-                                       bg=BG_CARD, fg=TEXT_DIM, font=F_BODY, anchor="w")
+                                       bg=BG_CARD, fg=TEXT_DIM, font=F_HEAD, anchor="w")
         self._game_name_lbl.pack(fill="x")
         self._game_meta_lbl = tk.Label(game_text, text="Launch a Steam game to begin",
                                        bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL, anchor="w")
         self._game_meta_lbl.pack(fill="x")
 
-        self._game_badge = tk.Label(self._game_card, text="", bg=BG_CARD,
+        # Feature C: session playtime countdown banner inside game card
+        self._playing_lbl = tk.Label(game_text, text="", bg=BG_CARD,
+                                     fg=TEXT_DIM, font=F_SMALL, anchor="w")
+        self._playing_lbl.pack(fill="x")
+
+        self._game_badge = tk.Label(game_top, text="", bg=BG_CARD,
                                     fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
-        self._game_badge.pack(side="right", padx=10)
+        self._game_badge.pack(side="right", padx=12)
 
         # ── Game badge panel (shareable / VAC / 3rd-party badges) ─────────────
         self._badge_panel = GameBadgePanel(game_section)
         self._badge_panel.pack(fill="x", pady=(2, 0))
+
+        # Section separator after game card
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(8, 0))
+
+        # ── Feature A: Playtime tracker pills ─────────────────────────────────
+        pills_outer = tk.Frame(self, bg=BG_DARK)
+        pills_outer.pack(fill="x", padx=12, pady=(8, 0))
+
+        def _make_pill(parent, label, init_val):
+            pill = tk.Frame(parent, bg=BG_CARD)
+            pill.pack(side="left", fill="both", expand=True, padx=(0, 6))
+            tk.Label(pill, text=label, bg=BG_CARD, fg=TEXT_DIM,
+                     font=F_LABEL).pack(pady=(8, 0), padx=10)
+            val = tk.Label(pill, text=init_val, bg=BG_CARD, fg=TEXT_MAIN,
+                           font=("Segoe UI", 11, "bold"))
+            val.pack(pady=(0, 8), padx=10)
+            return pill, val
+
+        _, self._pill_session_val   = _make_pill(pills_outer, "SESSION",   "0h 0m")
+        _, self._pill_protected_val = _make_pill(pills_outer, "PROTECTED", "0h 0m")
+        _, self._pill_heals_val     = _make_pill(pills_outer, "HEALS",     "0")
+        # Last pill: no right padding
+        pills_outer.winfo_children()[-1].pack_configure(padx=0)
+        self._after_pills_id = self.after(1000, self._update_playtime_pills)
 
         # ── Big protect button ────────────────────────────────────────────────
         self._protect_btn = tk.Button(
             self, text="🛡  START PROTECTION",
             bg=ACCENT, fg="white",
             font=("Segoe UI", 12, "bold"),
-            relief="flat", bd=0, cursor="hand2",
-            activebackground="#1c6cc4",
+            relief="raised", bd=2, cursor="hand2",
+            activebackground=BG_ELEVATED,
             command=self._on_protect_toggle)
-        self._protect_btn.pack(fill="x", padx=12, pady=(10, 0), ipady=13)
-        self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#1c6cc4"))
-        self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, ACCENT))
+        self._protect_btn.pack(fill="x", padx=12, pady=(12, 0), ipady=12)
+        self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, BG_ELEVATED))
+        self._protect_btn.bind("<Leave>", lambda e: self._update_protect_btn())
         Tooltip(self._protect_btn, "Toggle Steam CM firewall block on/off")
 
         # ── Session stats strip ───────────────────────────────────────────────
@@ -1926,11 +2004,7 @@ class SteamGuard(tk.Tk):
         self._after_stats_id = self.after(1000, self._update_stats_strip)
 
         # ── Kill counter row ──────────────────────────────────────────────────
-        kill_row = tk.Frame(self, bg=BG_DARK)
-        kill_row.pack(fill="x", padx=12, pady=(0, 2))
-        self._kill_lbl = tk.Label(kill_row, text="⚡ Connections severed: 0",
-            bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 8), anchor="w")
-        self._kill_lbl.pack(side="left")
+        # (kill counter moved above event log — see EVENTS section below)
 
         # ── Tabbed notebook ───────────────────────────────────────────────────
         style = ttk.Style()
@@ -1975,25 +2049,67 @@ class SteamGuard(tk.Tk):
         _sb.bind("<Leave>", lambda e: self._hover_leave(_sb, BG_CARD))
         Tooltip(_sb, "Re-scan Steam library for installed games")
 
-        # Row 2: tools buttons
-        ctrl_r2 = tk.Frame(ctrl, bg=BG_DARK)
-        ctrl_r2.pack(fill="x", pady=(3,0))
-        for _lbl, _cmd, _tip in [
-            ("🔒 Why Locked?",  lambda: WhyLockedDialog(self, self._steam_dir),       "See who locked your shared library"),
-            ("💿 DLC Advisor",   lambda: DLCAdvisorDialog(self, self._steam_dir),      "Check DLC sharing coverage"),
-            ("🎮 Deck Health",   lambda: SteamDeckHealthDialog(self, self._steam_dir), "Verify Steam Deck sharing setup"),
-            ("✈ Offline Ready",  lambda: OfflineReadinessDialog(self, self._steam_dir),  "Check offline play readiness"),
-            ("⏰ Cooldown Sim",   lambda: FamilyCooldownDialog(self, self._steam_dir),    "Simulate cooldown scenarios"),
-            ("📤 Share Card",   self._export_share_card,                               "Export PNG share card"),
-            ("Export Log",        self._export_log,                                      "Save event log to Desktop"),
-        ]:
-            _b = tk.Button(ctrl_r2, text=_lbl, bg=BG_CARD, fg=TEXT_DIM,
-                           font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                           activebackground=BORDER, command=_cmd)
-            _b.pack(side="left", ipady=3, ipadx=6, padx=(0,3))
-            _b.bind("<Enter>", lambda e, b=_b: self._hover_enter(b, BORDER))
-            _b.bind("<Leave>", lambda e, b=_b: self._hover_leave(b, BG_CARD))
-            Tooltip(_b, _tip)
+        # Row 2: tool buttons — 2-row grid
+        def _make_tool_btn(parent, label, cmd, tip, is_family=False):
+            b = tk.Button(parent, text=label, bg=BG_CARD, fg=TEXT_DIM,
+                          font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                          activebackground=BG_ELEVATED, command=cmd)
+            b.pack(side="left", fill="x", expand=True, ipady=4, padx=(0, 4))
+            def _enter(e, bb=b):
+                bb.config(bg=BG_ELEVATED, fg=TEXT_MAIN)
+            def _leave(e, bb=b):
+                # Family lock keeps RED when active
+                if is_family and self._family_lock_active:
+                    bb.config(bg=RED, fg="white")
+                else:
+                    bb.config(bg=BG_CARD, fg=TEXT_DIM)
+            b.bind("<Enter>", _enter)
+            b.bind("<Leave>", _leave)
+            Tooltip(b, tip)
+            return b
+
+        tool_grid_r1 = tk.Frame(ctrl, bg=BG_DARK)
+        tool_grid_r1.pack(fill="x", pady=(4, 0))
+        _make_tool_btn(tool_grid_r1, "🔒 Why Locked?",
+                       lambda: WhyLockedDialog(self, self._steam_dir),
+                       "See who locked your shared library")
+        _make_tool_btn(tool_grid_r1, "💿 DLC Advisor",
+                       lambda: DLCAdvisorDialog(self, self._steam_dir),
+                       "Check DLC sharing coverage")
+        _make_tool_btn(tool_grid_r1, "🖥 Deck Health",
+                       lambda: SteamDeckHealthDialog(self, self._steam_dir),
+                       "Verify Steam Deck sharing setup")
+        # Last in row: no right padding
+        tool_grid_r1.winfo_children()[-1].pack_configure(padx=0)
+
+        tool_grid_r2 = tk.Frame(ctrl, bg=BG_DARK)
+        tool_grid_r2.pack(fill="x", pady=(4, 0))
+        _make_tool_btn(tool_grid_r2, "📡 Offline Ready",
+                       lambda: OfflineReadinessDialog(self, self._steam_dir),
+                       "Check offline play readiness")
+        _make_tool_btn(tool_grid_r2, "📅 Cooldown",
+                       lambda: FamilyCooldownDialog(self, self._steam_dir),
+                       "Simulate cooldown scenarios")
+        _make_tool_btn(tool_grid_r2, "📤 Share Card",
+                       self._export_share_card,
+                       "Export PNG share card")
+        _make_tool_btn(tool_grid_r2, "📋 Copy Stats",
+                       self._copy_stats_text,
+                       "Copy session stats to clipboard")
+        tool_grid_r2.winfo_children()[-1].pack_configure(padx=0)
+
+        # Row 3: Family Lock (Feature D) + Export Log
+        tool_grid_r3 = tk.Frame(ctrl, bg=BG_DARK)
+        tool_grid_r3.pack(fill="x", pady=(4, 0))
+        self._family_lock_btn = _make_tool_btn(
+            tool_grid_r3, "🔐 Family Lock",
+            self._open_family_lock,
+            "Quick-lock Steam for a set number of minutes (educational)",
+            is_family=True)
+        _make_tool_btn(tool_grid_r3, "📄 Export Log",
+                       self._export_log,
+                       "Save event log to Desktop")
+        tool_grid_r3.winfo_children()[-1].pack_configure(padx=0)
 
         # Heartbeat status label (needed by heartbeat loop)
         self._heartbeat_status_lbl = tk.Label(ctrl, text="● Server sync: —",
@@ -2011,10 +2127,18 @@ class SteamGuard(tk.Tk):
 
         log_outer = tk.Frame(events_frame, bg=BG_DARK)
         log_outer.pack(fill="both", expand=True, padx=12, pady=(8, 8))
-        tk.Label(log_outer, text="EVENT LOG", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0, 3))
+
+        # Header row: EVENTS label (left) + kill counter (right-aligned)
+        log_head = tk.Frame(log_outer, bg=BG_DARK)
+        log_head.pack(fill="x", pady=(0, 4))
+        tk.Label(log_head, text="EVENTS", bg=BG_DARK, fg=TEXT_DIM,
+                 font=F_LABEL).pack(side="left")
+        self._kill_lbl = tk.Label(log_head, text="⚡ Connections severed: 0",
+                                  bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 8), anchor="e")
+        self._kill_lbl.pack(side="right")
+
         self._log_w = scrolledtext.ScrolledText(
-            log_outer, bg=BG_PANEL, fg=TEXT_DIM, font=F_MONO,
+            log_outer, bg=BG_BASE, fg=TEXT_MAIN, font=F_MONO, height=11,
             relief="flat", bd=0, state="disabled", wrap="word")
         self._log_w.pack(fill="both", expand=True)
 
@@ -2032,6 +2156,8 @@ class SteamGuard(tk.Tk):
 
         # Start network status poller
         self._poll_net_status()
+        # Feature B: start library locked status detector (5s poll)
+        self._after_library_id = self.after(2000, self._poll_library_status)
 
         # ── Keyboard shortcuts ────────────────────────────────────────────────
         self.bind("<Control-p>", lambda e: self._on_protect_toggle())
@@ -2160,7 +2286,7 @@ class SteamGuard(tk.Tk):
         if self._protected:
             # Update shield to green + start pulse animation
             self._shield_cv.itemconfig(self._shield_body,
-                                       fill="#0d2a0d", outline=GREEN)
+                                       fill=BG_CARD, outline=GREEN)
             self._shield_cv.itemconfig(self._shield_letter, fill=GREEN)
             self._shield_cv.itemconfig(self._shield_status_txt,
                                        text="PROTECTED", fill=GREEN)
@@ -2171,7 +2297,7 @@ class SteamGuard(tk.Tk):
             # Snap back to blue/dim, stop animation
             self._anim_running = False
             self._shield_cv.itemconfig(self._shield_body,
-                                       fill="#1a3a5c", outline=ACCENT)
+                                       fill=BG_ELEVATED, outline=ACCENT)
             self._shield_cv.itemconfig(self._shield_letter, fill=ACCENT)
             self._shield_cv.itemconfig(self._shield_status_txt,
                                        text="UNPROTECTED", fill=TEXT_DIM)
@@ -2222,6 +2348,17 @@ class SteamGuard(tk.Tk):
                 text=f"AppID {game['appid']}  •  detected via {game.get('method','?')}",
                 fg=TEXT_DIM)
             self._game_badge.config(text="● ACTIVE", fg=GREEN)
+            # Game card border glows ACCENT green when a game is detected
+            try:
+                self._game_card.config(highlightbackground=ACCENT,
+                                       highlightcolor=ACCENT)
+            except Exception:
+                pass
+            # Feature C: start/keep the "Playing for" timer
+            if self._game_detected_at is None:
+                self._game_detected_at = datetime.now()
+                if self._after_playing_id is None:
+                    self._after_playing_id = self.after(1000, self._update_playing_timer)
             self._fetch_game_art(game["appid"])
             self._badge_panel.update_game(game["appid"], game["name"])
             # Update rich presence
@@ -2244,6 +2381,16 @@ class SteamGuard(tk.Tk):
             self._game_icon.config(image="", text="🎮")
             self._game_art_photo = None
             self._badge_panel.update_game(None, "")
+            # Reset game card border to neutral
+            try:
+                self._game_card.config(highlightbackground=BORDER,
+                                       highlightcolor=BORDER)
+            except Exception:
+                pass
+            # Feature C: clear the playing timer
+            self._game_detected_at = None
+            if self._playing_lbl is not None:
+                self._playing_lbl.config(text="")
 
     def _anim_tick(self):
         """
@@ -2263,7 +2410,7 @@ class SteamGuard(tk.Tk):
         import math
         import time as _time
 
-        SHIELD_W, SHIELD_H = 500, 150
+        SHIELD_W, SHIELD_H = 520, 150
         cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
         SW, SH = 76, 86
 
@@ -2319,19 +2466,22 @@ class SteamGuard(tk.Tk):
 
     def _update_protect_btn(self):
         if self._protected:
+            # Active: elevated surface w/ GREEN text
             self._protect_btn.config(
                 state="normal",
-                text="🛡  PROTECTION ON — Click to Stop",
-                bg="#1a6b1a", activebackground="#145214")
-            # Re-bind hover for protected state
-            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#145214"))
-            self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, "#1a6b1a"))
+                text="✓  PROTECTION ACTIVE",
+                bg=BG_ELEVATED, fg=GREEN, activebackground=BG_CARD,
+                relief="raised", bd=2)
+            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, BG_CARD))
+            self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, BG_ELEVATED))
         else:
+            # Inactive: accent-green call-to-action
             self._protect_btn.config(
                 state="normal",
                 text="🛡  START PROTECTION",
-                bg=ACCENT, activebackground="#1c6cc4")
-            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#1c6cc4"))
+                bg=ACCENT, fg="white", activebackground=BG_ELEVATED,
+                relief="raised", bd=2)
+            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, BG_ELEVATED))
             self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, ACCENT))
 
     def _on_protect_toggle(self):
@@ -2361,6 +2511,204 @@ class SteamGuard(tk.Tk):
             ))
         threading.Thread(target=check, daemon=True).start()
         self.after(3000, self._poll_net_status)
+
+
+    # ── Feature A: Playtime tracker pills (30s update) ─────────────────────────
+
+    def _update_playtime_pills(self):
+        """Refresh the SESSION / PROTECTED / HEALS pills."""
+        if not self._app_running:
+            return
+
+        def _fmt_hm(secs: int) -> str:
+            secs = max(0, int(secs))
+            h = secs // 3600
+            m = (secs % 3600) // 60
+            return f"{h}h {m}m"
+
+        try:
+            sess = (datetime.now() - self._session_start).total_seconds()
+            if self._pill_session_val is not None:
+                self._pill_session_val.config(text=_fmt_hm(sess))
+
+            if self._protected and self._protect_start:
+                prot = (datetime.now() - self._protect_start).total_seconds()
+            else:
+                prot = 0
+            if self._pill_protected_val is not None:
+                self._pill_protected_val.config(text=_fmt_hm(prot))
+
+            total_heals = self._heal_count + self._rule_heal_cnt
+            if self._pill_heals_val is not None:
+                self._pill_heals_val.config(text=str(total_heals))
+        except Exception:
+            pass
+
+        self._after_pills_id = self.after(30000, self._update_playtime_pills)
+
+    # ── Feature B: Library locked status detector (5s poll) ────────────────────
+
+    def _poll_library_status(self):
+        """Detect whether the shared Steam library appears locked.
+
+        Simple heuristic via registry:
+          - ActiveUser non-zero  AND  RunningAppID == 0  -> likely LOCKED
+          - otherwise (a game is running / user active)   -> FREE
+          - registry unavailable / error                  -> unknown
+        """
+        if not self._app_running:
+            return
+
+        status = "unknown"
+        try:
+            if winreg is not None:
+                subkey = r"SOFTWARE\Valve\Steam\ActiveProcess"
+                active_user = _reg_get(winreg.HKEY_CURRENT_USER, subkey, "ActiveUser")
+                running_appid = get_running_appid_reg()
+                if active_user is not None:
+                    if int(active_user) != 0 and (running_appid in (None, 0)):
+                        status = "locked"
+                    else:
+                        status = "free"
+        except Exception:
+            status = "unknown"
+
+        self._library_status = status
+        try:
+            if status == "locked":
+                color, text = RED, "LOCKED"
+            elif status == "free":
+                color, text = GREEN, "FREE"
+            else:
+                color, text = TEXT_DIM, "—"
+            if self._lib_dot_cv is not None:
+                self._lib_dot_cv.itemconfig(self._lib_dot, fill=color)
+            if self._lib_lbl is not None:
+                self._lib_lbl.config(text=text, fg=color)
+        except Exception:
+            pass
+
+        self._after_library_id = self.after(5000, self._poll_library_status)
+
+    # ── Feature C: Session playtime countdown (1s update) ──────────────────────
+
+    def _update_playing_timer(self):
+        """Update the 'Playing for: Xm Ys' banner inside the game card."""
+        if not self._app_running:
+            return
+        try:
+            if self._game_detected_at is not None and self._playing_lbl is not None:
+                secs = int((datetime.now() - self._game_detected_at).total_seconds())
+                mins = secs // 60
+                rem = secs % 60
+                self._playing_lbl.config(text=f"Playing for: {mins}m {rem}s",
+                                         fg=TEXT_DIM)
+                self._after_playing_id = self.after(1000, self._update_playing_timer)
+            else:
+                self._after_playing_id = None
+        except Exception:
+            self._after_playing_id = None
+
+    # ── Feature D: Parental control quick-lock ─────────────────────────────────
+
+    def _open_family_lock(self):
+        """Open the Quick Lock dialog (educational / visual feature only)."""
+        if self._family_lock_active:
+            messagebox.showinfo(
+                "Family Lock",
+                "A family lock is already active. It will lift automatically.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Quick Lock")
+        win.configure(bg=BG_BASE)
+        win.resizable(False, False)
+        win.transient(self)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        tk.Label(win, text="🔐  Family Lock", bg=BG_BASE, fg=TEXT_MAIN,
+                 font=F_HEAD).pack(anchor="w", padx=18, pady=(16, 4))
+        tk.Label(win, text="Lock Steam for [X] minutes?", bg=BG_BASE, fg=TEXT_DIM,
+                 font=F_BODY).pack(anchor="w", padx=18)
+
+        spin_row = tk.Frame(win, bg=BG_BASE)
+        spin_row.pack(fill="x", padx=18, pady=(12, 4))
+        tk.Label(spin_row, text="Minutes:", bg=BG_BASE, fg=TEXT_DIM,
+                 font=F_SMALL).pack(side="left")
+        minutes_var = tk.IntVar(value=30)
+        spin = tk.Spinbox(spin_row, from_=5, to=120, increment=5,
+                          textvariable=minutes_var, width=6,
+                          bg=BG_CARD, fg=TEXT_MAIN, font=F_BODY,
+                          buttonbackground=BG_ELEVATED, relief="flat",
+                          insertbackground=TEXT_MAIN, justify="center")
+        spin.pack(side="left", padx=(8, 0))
+
+        btn_row = tk.Frame(win, bg=BG_BASE)
+        btn_row.pack(fill="x", padx=18, pady=(14, 16))
+
+        def _confirm():
+            try:
+                mins = int(minutes_var.get())
+            except Exception:
+                mins = 30
+            mins = max(5, min(120, mins))
+            self._activate_family_lock(mins)
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        lock_btn = tk.Button(btn_row, text="🔒  Lock", bg=RED, fg="white",
+                             font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
+                             cursor="hand2", activebackground=BG_ELEVATED,
+                             command=_confirm)
+        lock_btn.pack(side="right", ipadx=10, ipady=5)
+        cancel_btn = tk.Button(btn_row, text="Cancel", bg=BG_CARD, fg=TEXT_DIM,
+                               font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                               activebackground=BG_ELEVATED,
+                               command=win.destroy)
+        cancel_btn.pack(side="right", ipadx=8, ipady=5, padx=(0, 8))
+
+        win.update_idletasks()
+        try:
+            px, py = self.winfo_x(), self.winfo_y()
+            pw, ph = self.winfo_width(), self.winfo_height()
+            ww, wh = win.winfo_width(), win.winfo_height()
+            win.geometry(f"+{px + (pw - ww)//2}+{py + (ph - wh)//2}")
+        except Exception:
+            pass
+
+    def _activate_family_lock(self, minutes: int):
+        """Engage the (educational) family lock for the given minutes."""
+        self._family_lock_active = True
+        self._log(f"Family lock: Steam restricted for {minutes} minutes",
+                  level="info")
+        if self._family_lock_btn is not None:
+            try:
+                self._family_lock_btn.config(bg=RED, fg="white")
+            except Exception:
+                pass
+        if self._family_lock_after_id is not None:
+            try:
+                self.after_cancel(self._family_lock_after_id)
+            except Exception:
+                pass
+        self._family_lock_after_id = self.after(
+            minutes * 60000, self._unlock_family_lock)
+
+    def _unlock_family_lock(self):
+        """Lift the family lock and restore the button."""
+        self._family_lock_active = False
+        self._family_lock_after_id = None
+        if self._family_lock_btn is not None:
+            try:
+                self._family_lock_btn.config(bg=BG_CARD, fg=TEXT_DIM)
+            except Exception:
+                pass
+        self._log("Family lock lifted", level="info")
 
     def _rescan_games(self):
         def worker():
