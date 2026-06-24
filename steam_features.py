@@ -8,10 +8,9 @@ import os, json, re, time, threading, sqlite3
 import tkinter as tk
 from tkinter import scrolledtext
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional, List, Tuple
-import urllib.request, urllib.error
-import psutil
+import urllib.request
 
 try:
     import winreg
@@ -34,33 +33,74 @@ F_SMALL  = ("Segoe UI", 9)
 F_MONO   = ("Consolas", 9)
 F_HEAD   = ("Segoe UI", 12, "bold")
 
+
+def _safe_grab(win) -> None:
+    """Grab input for a Toplevel without crashing if it is not yet viewable.
+    Retries shortly after the window is mapped."""
+    try:
+        win.grab_set()
+    except tk.TclError:
+        try:
+            win.after(120, lambda: _safe_grab(win))
+        except Exception:
+            pass
+
+
+def _center_over_parent(win, parent, w: int, h: int) -> None:
+    """Center `win` over `parent`, falling back to screen-center if parent
+    geometry is unavailable (e.g. parent not yet mapped)."""
+    try:
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        if pw <= 1 or ph <= 1:
+            raise ValueError
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+    except Exception:
+        try:
+            sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+            x, y = (sw - w) // 2, (sh - h) // 2
+        except Exception:
+            x, y = 100, 100
+    win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 1 — VDF PARSER (fallback when vdf library not installed)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _parse_vdf_fallback(text: str) -> dict:
     """Minimal regex-based KeyValues1 parser. Lowercase keys."""
+    # Strip line comments (// ...) outside of quotes to avoid false tokens.
     tokens = re.findall(r'"((?:[^"\\]|\\.)*)"|(\{)|(\})', text)
     stack: list = [{}]
     pending_key: Optional[str] = None
     for quoted, open_b, close_b in tokens:
         if open_b:
+            # A block opens. If we have a pending key, this block is its value
+            # (already attached to the current parent). Otherwise it's an
+            # anonymous block — attach under a synthetic key so it isn't lost.
             new: dict = {}
             if pending_key is not None:
                 stack[-1][pending_key] = new
                 pending_key = None
+            else:
+                stack[-1].setdefault("_anon", new)
             stack.append(new)
         elif close_b:
+            # Discard any dangling key with no value so it does not leak
+            # into the parent scope.
+            pending_key = None
             if len(stack) > 1:
-                finished = stack.pop()
-                # attach finished block to parent if key was set before {
+                stack.pop()
             else:
                 break
         else:
+            # Unescape common VDF escapes so values are usable.
+            value = quoted.replace('\\\\', '\\').replace('\\"', '"').replace('\\n', '\n').replace('\\t', '\t')
             if pending_key is None:
-                pending_key = quoted.lower()
+                pending_key = value.lower()
             else:
-                stack[-1][pending_key] = quoted
+                stack[-1][pending_key] = value
                 pending_key = None
     return stack[0] if stack else {}
 
@@ -168,14 +208,20 @@ def steamid64_to_accountid(sid64: str) -> str:
 
 
 def get_running_appid_reg() -> Optional[int]:
-    """Read HKCU\\Software\\Valve\\Steam\\ActiveProcess\\RunningAppID."""
-    val = _reg_get(winreg.HKEY_CURRENT_USER if winreg else None,
-                   r"Software\Valve\Steam\ActiveProcess", "RunningAppID")
-    try:
-        appid = int(val or 0)
-        return appid if appid != 0 else None
-    except Exception:
+    """Read Steam's RunningAppID. Checks the top-level Steam key first (where
+    modern Steam writes it), then the legacy ActiveProcess sub-key."""
+    if winreg is None:
         return None
+    for subkey in (r"Software\Valve\Steam",
+                   r"Software\Valve\Steam\ActiveProcess"):
+        val = _reg_get(winreg.HKEY_CURRENT_USER, subkey, "RunningAppID")
+        try:
+            appid = int(val or 0)
+        except (TypeError, ValueError):
+            continue
+        if appid != 0:
+            return appid
+    return None
 
 
 def get_app_registry_info(appid: int) -> dict:
@@ -293,6 +339,23 @@ def get_steam_update_channel(steam_dir: Optional[Path] = None) -> str:
     return "stable"
 
 
+def is_running_on_steam_deck() -> bool:
+    """Best-effort detection of whether THIS machine is a Steam Deck.
+    On ordinary Windows PCs this returns False (expected)."""
+    # SteamDeck registry flag (set by Steam client on Deck/SteamOS).
+    if winreg is not None:
+        val = _reg_get(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamDeck")
+        try:
+            if val is not None and int(val) == 1:
+                return True
+        except (TypeError, ValueError):
+            pass
+    # Environment hint present on SteamOS.
+    if os.environ.get("SteamDeck") == "1" or os.environ.get("SteamOS") == "1":
+        return True
+    return False
+
+
 def get_authorized_devices(steam_dir: Optional[Path] = None) -> List[dict]:
     """
     Read legacy authorized device blocks from Steam\\config\\config.vdf.
@@ -369,12 +432,21 @@ def get_local_user_activity(steam_dir: Path, account_id: str) -> dict:
 
 def get_steam_offline_flag() -> Optional[int]:
     """Read HKCU\\Software\\Valve\\Steam\\Offline. Returns 1=offline, 0=online, None=unknown."""
-    val = _reg_get(winreg.HKEY_CURRENT_USER if winreg else None,
-                   r"Software\Valve\Steam", "Offline")
-    try:
-        return int(val or 0)
-    except Exception:
+    if winreg is None:
         return None
+    val = _reg_get(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "Offline")
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_wants_offline(steam_dir: Optional[Path] = None) -> bool:
+    """Whether the most-recent Steam user has WantsOfflineMode set in loginusers.vdf."""
+    users = get_all_steam_users(steam_dir)
+    return bool(users and users[0].get("wantsoffline"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -525,15 +597,22 @@ class PreLaunchWarning:
     Uses registry polling (500ms) — catches launch within ~0.5s.
     """
 
-    def __init__(self, steam_dir: Path, on_warning_cb):
-        self._steam_dir = steam_dir
+    def __init__(self, steam_dir: Optional[Path], on_warning_cb):
+        self._steam_dir = Path(steam_dir) if steam_dir else None
         self._on_warning = on_warning_cb
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._warned: set = set()
 
     def start(self):
+        if self._running:
+            return
         self._running = True
+        # Pre-seed _warned with whatever is ALREADY running so that a game
+        # which launched before the app started never triggers a warning.
+        startup_appid = get_running_appid_reg()
+        if startup_appid:
+            self._warned.add(startup_appid)
         self._thread = threading.Thread(target=self._loop, daemon=True, name="PreLaunchWarn")
         self._thread.start()
 
@@ -592,15 +671,14 @@ class WhyLockedDialog(tk.Toplevel):
 
     def __init__(self, parent, steam_dir: Optional[Path] = None):
         super().__init__(parent)
-        self._steam_dir = steam_dir or get_steam_dir()
+        self._steam_dir = Path(steam_dir) if steam_dir else get_steam_dir()
         self.title("Library Lock Diagnostics")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
-        self.grab_set()
-
-        w, h = 480, 400
-        self.geometry(f"{w}x{h}+{parent.winfo_rootx()+(parent.winfo_width()-w)//2}"
-                      f"+{parent.winfo_rooty()+(parent.winfo_height()-h)//2}")
+        _center_over_parent(self, parent, 480, 400)
+        _safe_grab(self)
+        self._auto_id: Optional[str] = None
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build()
         self._refresh()
 
@@ -655,18 +733,27 @@ class WhyLockedDialog(tk.Toplevel):
                   command=self._refresh).pack(side="left", ipady=5, ipadx=12)
         tk.Button(btn_row, text="✕  Close", bg=BG_CARD, fg=TEXT_DIM,
                   font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                  command=self.destroy).pack(side="right", ipady=5, ipadx=12)
+                  command=self._on_close).pack(side="right", ipady=5, ipadx=12)
 
         self._schedule_auto_refresh()
 
     def _schedule_auto_refresh(self):
         if self.winfo_exists():
-            self.after(5000, self._auto_refresh)
+            self._auto_id = self.after(5000, self._auto_refresh)
 
     def _auto_refresh(self):
         if self.winfo_exists():
             self._refresh()
             self._schedule_auto_refresh()
+
+    def _on_close(self):
+        if self._auto_id is not None:
+            try:
+                self.after_cancel(self._auto_id)
+            except Exception:
+                pass
+            self._auto_id = None
+        self.destroy()
 
     def _refresh(self):
         lock  = get_shared_library_lock(self._steam_dir)
@@ -716,11 +803,22 @@ class GameBadgePanel(tk.Frame):
         super().__init__(parent, bg=BG_DARK, height=1, **kwargs)
         self.pack_propagate(False)
         self._labels: List[tk.Label] = []
+        self._gen = 0           # generation token to drop stale fetches
+        self._cur_appid: Optional[int] = None
+
+    def _clear(self):
+        for lbl in self._labels:
+            try:
+                lbl.destroy()
+            except Exception:
+                pass
+        self._labels.clear()
 
     def update_game(self, appid: Optional[int], name: str = ""):
-        for lbl in self._labels:
-            lbl.destroy()
-        self._labels.clear()
+        self._gen += 1
+        gen = self._gen
+        self._cur_appid = appid if appid else None
+        self._clear()
         if not appid:
             self.config(height=1)
             return
@@ -729,21 +827,28 @@ class GameBadgePanel(tk.Frame):
                                 bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7))
         placeholder.pack(side="left", padx=(4,4))
         self._labels.append(placeholder)
-        threading.Thread(target=self._fetch, args=(appid, name),
+        threading.Thread(target=self._fetch, args=(appid, name, gen),
                          daemon=True).start()
 
-    def _fetch(self, appid: int, name: str):
+    def _fetch(self, appid: int, name: str, gen: int):
         try:
             c = classify_game(appid, name)
-            self.after(0, lambda: self._show(c))
         except Exception:
+            c = {"badges": []}
+        try:
+            if self.winfo_exists():
+                self.after(0, lambda: self._show(c, gen))
+        except (tk.TclError, RuntimeError):
             pass
 
-    def _show(self, c: dict):
-        for lbl in self._labels:
-            lbl.destroy()
-        self._labels.clear()
-        badges = c.get("badges", [])
+    def _show(self, c: dict, gen: int = None):
+        # Drop results from a superseded update_game() call.
+        if gen is not None and gen != self._gen:
+            return
+        if not self.winfo_exists():
+            return
+        self._clear()
+        badges = c.get("badges", []) if isinstance(c, dict) else []
         if not badges:
             self.config(height=1)
             return
@@ -768,20 +873,25 @@ class GameBadgePanel(tk.Frame):
 class DLCAdvisorDialog(tk.Toplevel):
     """Shows DLC coverage for current game and recommends best copy to use."""
 
-    def __init__(self, parent, appid: int, game_name: str,
-                 steam_dir: Optional[Path] = None):
+    def __init__(self, parent, steam_dir: Optional[Path] = None,
+                 appid: Optional[int] = None, game_name: str = ""):
+        """Called as DLCAdvisorDialog(parent, steam_dir). The current game is
+        auto-detected from the Steam registry when appid is not supplied."""
         super().__init__(parent)
-        self._appid = appid
-        self._game_name = game_name
-        self._steam_dir = steam_dir or get_steam_dir()
-        self.title(f"DLC Advisor")
+        self._steam_dir = Path(steam_dir) if steam_dir else get_steam_dir()
+        # Auto-detect the running game if no explicit appid was passed.
+        if appid is None:
+            appid = get_running_appid_reg()
+        try:
+            self._appid = int(appid) if appid else None
+        except (TypeError, ValueError):
+            self._appid = None
+        self._game_name = game_name or (f"AppID {self._appid}" if self._appid else "")
+        self.title("DLC Advisor")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
-        self.grab_set()
-
-        w, h = 520, 480
-        self.geometry(f"{w}x{h}+{parent.winfo_rootx()+(parent.winfo_width()-w)//2}"
-                      f"+{parent.winfo_rooty()+(parent.winfo_height()-h)//2}")
+        _center_over_parent(self, parent, 520, 480)
+        _safe_grab(self)
         self._build()
         threading.Thread(target=self._load, daemon=True).start()
 
@@ -789,7 +899,8 @@ class DLCAdvisorDialog(tk.Toplevel):
         hdr = tk.Frame(self, bg=BG_PANEL, height=52)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        tk.Label(hdr, text=f"💿  DLC Advisor — {self._game_name[:32]}",
+        _title = self._game_name[:32] if self._game_name else "No game detected"
+        tk.Label(hdr, text=f"💿  DLC Advisor — {_title}",
                  bg=BG_PANEL, fg=TEXT_MAIN, font=F_HEAD).pack(side="left", padx=16, pady=12)
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
@@ -820,8 +931,20 @@ class DLCAdvisorDialog(tk.Toplevel):
                   command=self.destroy).pack(pady=8, ipady=5, ipadx=20)
 
     def _load(self):
-        c = classify_game(self._appid, self._game_name)
-        dlc_ids = c.get("dlc_appids", [])
+        # No game detected — show a friendly message instead of crashing.
+        if not self._appid:
+            msg = ("No running game detected.\n\n"
+                   "Launch a Steam game first, then reopen the DLC Advisor "
+                   "to see DLC coverage for that game.")
+            self.after(0, lambda: self._show(
+                msg, "Start a game to analyze its DLC sharing coverage."))
+            return
+
+        try:
+            c = classify_game(self._appid, self._game_name)
+        except Exception:
+            c = {}
+        dlc_ids = c.get("dlc_appids", []) if isinstance(c, dict) else []
         owned   = get_owned_appids_reg()
 
         # Fetch DLC names (max 15, 0.1s delay between)
@@ -865,7 +988,10 @@ class DLCAdvisorDialog(tk.Toplevel):
                        f"Check if a family member owns the DLC — launching from their copy "
                        f"may grant access to it during your session per Steam Family rules.")
 
-        self.after(0, lambda: self._show("\n".join(lines), rec))
+        try:
+            self.after(0, lambda: self._show("\n".join(lines), rec))
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _show(self, text: str, rec: str):
         if not self.winfo_exists():
@@ -888,15 +1014,12 @@ class SteamDeckHealthDialog(tk.Toplevel):
 
     def __init__(self, parent, steam_dir: Optional[Path] = None):
         super().__init__(parent)
-        self._steam_dir = steam_dir or get_steam_dir()
+        self._steam_dir = Path(steam_dir) if steam_dir else get_steam_dir()
         self.title("Steam Deck Health Check")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
-        self.grab_set()
-
-        w, h = 500, 520
-        self.geometry(f"{w}x{h}+{parent.winfo_rootx()+(parent.winfo_width()-w)//2}"
-                      f"+{parent.winfo_rooty()+(parent.winfo_height()-h)//2}")
+        _center_over_parent(self, parent, 500, 520)
+        _safe_grab(self)
         self._items: List[Tuple[tk.Label, tk.Label]] = []
         self._build()
         threading.Thread(target=self._run_checks, daemon=True).start()
@@ -946,16 +1069,27 @@ class SteamDeckHealthDialog(tk.Toplevel):
                   font=F_SMALL, relief="flat", bd=0, cursor="hand2",
                   command=self.destroy).pack(pady=8, ipady=5, ipadx=20)
 
-    def _set(self, i: int, ok: bool, detail: str):
+    def _set(self, i: int, status, detail: str):
+        """status: True=ok (green ✅), False=warn (yellow ⚠), 'info'=neutral (blue ℹ)."""
+        if status == "info":
+            icon, icon_fg, det_fg = "ℹ", ACCENT, TEXT_DIM
+        elif status:
+            icon, icon_fg, det_fg = "✅", GREEN, TEXT_MAIN
+        else:
+            icon, icon_fg, det_fg = "⚠", YELLOW, YELLOW
         def _do():
             if not self.winfo_exists(): return
-            self._items[i][0].config(text="✅" if ok else "⚠", fg=GREEN if ok else YELLOW)
-            self._items[i][1].config(text=detail, fg=TEXT_MAIN if ok else YELLOW)
-        self.after(0, _do)
+            self._items[i][0].config(text=icon, fg=icon_fg)
+            self._items[i][1].config(text=detail, fg=det_fg)
+        try:
+            self.after(0, _do)
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _run_checks(self):
         recs: list = []
         now = int(time.time())
+        is_deck = is_running_on_steam_deck()
 
         # 0. Update channel
         ch = get_steam_update_channel(self._steam_dir)
@@ -970,19 +1104,31 @@ class SteamDeckHealthDialog(tk.Toplevel):
         if not enabled:
             recs.append("• Family Sharing appears disabled in config. Go to Steam → Settings → Family.")
 
-        # 2. Authorized Deck devices
+        # 2. Authorized Deck devices.
+        # On a non-Deck Windows PC, having no Deck is normal — show neutral info,
+        # not a warning, so the check doesn't "fail" on ordinary machines.
         devices = get_authorized_devices(self._steam_dir)
         decks   = [d for d in devices if d["is_deck"]]
-        self._set(2, len(decks) > 0,
-                  f"{len(decks)} Deck(s), {len(devices)} total" if devices else "None found")
-        if not decks:
-            recs.append("• No Steam Deck found in authorized devices. Log into Steam on your Deck first.")
+        if decks:
+            self._set(2, True, f"{len(decks)} Deck(s), {len(devices)} total")
+        elif is_deck:
+            # This machine IS a Deck but isn't in the authorized list — real issue.
+            self._set(2, False, "This Deck not authorized")
+            recs.append("• This Steam Deck is not in the authorized device list. "
+                        "Log into Steam on it and enable Family Sharing.")
+        else:
+            self._set(2, "info",
+                      f"No Deck ({len(devices)} other device(s))" if devices else "No Deck (PC)")
+            recs.append("• No Steam Deck detected on this PC. This is normal if you "
+                        "don't own a Deck; otherwise log into Steam on your Deck first.")
 
         # 3. Stale devices
         stale = [d for d in devices
                  if d["last_seen_ts"] and (now - d["last_seen_ts"]) > 180 * 86400]
-        self._set(3, len(stale) == 0,
-                  f"{len(stale)} stale" if stale else "All recent")
+        if not devices:
+            self._set(3, "info", "No devices listed")
+        else:
+            self._set(3, len(stale) == 0, f"{len(stale)} stale" if stale else "All recent")
         if stale:
             names = ", ".join(d["name"] for d in stale[:3])
             recs.append(f"• {len(stale)} device(s) not seen in 180+ days: {names}. "
@@ -1010,7 +1156,10 @@ class SteamDeckHealthDialog(tk.Toplevel):
             self._rec_box.delete("1.0","end")
             self._rec_box.insert("end", rec_text)
             self._rec_box.config(state="disabled")
-        self.after(0, _show)
+        try:
+            self.after(0, _show)
+        except (tk.TclError, RuntimeError):
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1020,20 +1169,24 @@ class SteamDeckHealthDialog(tk.Toplevel):
 class OfflineReadinessDialog(tk.Toplevel):
     """Checks whether a game can be played offline in shared mode."""
 
-    def __init__(self, parent, appid: int, game_name: str,
-                 steam_dir: Optional[Path] = None):
+    def __init__(self, parent, steam_dir: Optional[Path] = None,
+                 appid: Optional[int] = None, game_name: str = ""):
+        """Called as OfflineReadinessDialog(parent, steam_dir). The current game
+        is auto-detected from the Steam registry when appid is not supplied."""
         super().__init__(parent)
-        self._appid     = appid
-        self._game_name = game_name
-        self._steam_dir = steam_dir or get_steam_dir()
+        self._steam_dir = Path(steam_dir) if steam_dir else get_steam_dir()
+        if appid is None:
+            appid = get_running_appid_reg()
+        try:
+            self._appid = int(appid) if appid else None
+        except (TypeError, ValueError):
+            self._appid = None
+        self._game_name = game_name or (f"AppID {self._appid}" if self._appid else "")
         self.title("Offline Readiness Checker")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
-        self.grab_set()
-
-        w, h = 460, 400
-        self.geometry(f"{w}x{h}+{parent.winfo_rootx()+(parent.winfo_width()-w)//2}"
-                      f"+{parent.winfo_rooty()+(parent.winfo_height()-h)//2}")
+        _center_over_parent(self, parent, 460, 400)
+        _safe_grab(self)
         self._items: List[Tuple[tk.Label, tk.Label]] = []
         self._build()
         threading.Thread(target=self._run_checks, daemon=True).start()
@@ -1082,17 +1235,34 @@ class OfflineReadinessDialog(tk.Toplevel):
                   relief="flat", bd=0, cursor="hand2",
                   command=self.destroy).pack(pady=6, ipady=5, ipadx=20)
 
-    def _set(self, i: int, ok: bool, detail: str = ""):
+    def _set(self, i: int, status, detail: str = ""):
+        """status: True=ok, False=warn, 'info'=neutral."""
+        if status == "info":
+            icon, fg = "ℹ", ACCENT
+        elif status:
+            icon, fg = "✅", GREEN
+        else:
+            icon, fg = "⚠", YELLOW
         def _do():
             if not self.winfo_exists(): return
-            self._items[i][0].config(text="✅" if ok else "⚠", fg=GREEN if ok else YELLOW)
+            self._items[i][0].config(text=icon, fg=fg)
             self._items[i][1].config(text=detail)
-        self.after(0, _do)
+        try:
+            self.after(0, _do)
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _run_checks(self):
         if not self._appid:
-            self.after(0, lambda: self._verdict.config(
-                text="⚠ No game detected. Launch a game first.", fg=YELLOW))
+            def _no_game():
+                if not self.winfo_exists(): return
+                self._verdict.config(
+                    text="⚠ No running game detected.\nLaunch a Steam game first, "
+                         "then reopen this checker.", fg=YELLOW)
+            try:
+                self.after(0, _no_game)
+            except (tk.TclError, RuntimeError):
+                pass
             return
 
         results: list = []
@@ -1119,30 +1289,53 @@ class OfflineReadinessDialog(tk.Toplevel):
         # 2. Launched before? (localconfig.vdf LastPlayed or userdata dir)
         launched = False
         if account_id:
-            activity = get_local_user_activity(self._steam_dir, account_id)
+            try:
+                activity = get_local_user_activity(self._steam_dir, account_id)
+            except Exception:
+                activity = {}
             info = activity.get(self._appid, {})
-            lp = int(info.get("LastPlayed", info.get("lastplayed", 0)) or 0)
-            pt = int(info.get("Playtime",   info.get("playtime",   0)) or 0)
+            def _as_int(v):
+                try:
+                    return int(v or 0)
+                except (TypeError, ValueError):
+                    return 0
+            lp = _as_int(info.get("LastPlayed", info.get("lastplayed", 0)))
+            pt = _as_int(info.get("Playtime", info.get("playtime", 0)))
             launched = lp > 0 or pt > 0
             if not launched:
                 # fallback: check userdata/{accountid}/{appid}/ exists
-                ud = self._steam_dir / "userdata" / str(account_id) / str(self._appid)
-                launched = ud.exists()
+                try:
+                    ud = self._steam_dir / "userdata" / str(account_id) / str(self._appid)
+                    launched = ud.exists()
+                except Exception:
+                    launched = False
         self._set(2, launched, "Yes" if launched else "Not detected — launch online first")
         results.append(launched)
 
         # 3. Cloud save present?
         cloud = False
         if account_id:
-            remote = self._steam_dir / "userdata" / str(account_id) / str(self._appid) / "remote"
-            cloud = remote.exists() and any(True for _ in remote.iterdir()) if remote.exists() else False
-        self._set(3, cloud, "Cloud data found" if cloud else "No cloud data (may be normal)")
+            try:
+                remote = (self._steam_dir / "userdata" / str(account_id)
+                          / str(self._appid) / "remote")
+                cloud = remote.exists() and any(True for _ in remote.iterdir())
+            except Exception:
+                cloud = False
+        # Informational only — neutral icon, never a warning.
+        self._set(3, True if cloud else "info",
+                  "Cloud data found" if cloud else "No cloud data (may be normal)")
         results.append(True)  # not blocking — informational only
 
         # 4. Offline mode
         offline_flag = get_steam_offline_flag()
-        note = "Currently OFFLINE" if offline_flag == 1 else "Available (go offline before trip)"
-        self._set(4, True, note)
+        wants_offline = get_wants_offline(self._steam_dir)
+        if offline_flag == 1 or wants_offline:
+            note = "Currently OFFLINE"
+        elif offline_flag == 0:
+            note = "Online (go offline before trip)"
+        else:
+            note = "Available (go offline before trip)"
+        self._set(4, "info", note)
         results.append(True)
 
         # Verdict
@@ -1160,7 +1353,10 @@ class OfflineReadinessDialog(tk.Toplevel):
                 if not results[2]: issues.append("launch online at least once first")
                 self._verdict.config(
                     text=f"⚠ Not offline ready: {', '.join(issues)}.", fg=YELLOW)
-        self.after(0, _verdict)
+        try:
+            self.after(0, _verdict)
+        except (tk.TclError, RuntimeError):
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1175,16 +1371,22 @@ class FamilyCooldownDialog(tk.Toplevel):
 
     def __init__(self, parent, steam_dir: Optional[Path] = None):
         super().__init__(parent)
-        self._steam_dir = steam_dir or get_steam_dir()
+        self._steam_dir = Path(steam_dir) if steam_dir else get_steam_dir()
         self.title("Steam Family Cooldown Simulator")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
-        self.grab_set()
-
-        w, h = 520, 540
-        self.geometry(f"{w}x{h}+{parent.winfo_rootx()+(parent.winfo_width()-w)//2}"
-                      f"+{parent.winfo_rooty()+(parent.winfo_height()-h)//2}")
+        _center_over_parent(self, parent, 520, 540)
+        _safe_grab(self)
         self._build()
+
+    @staticmethod
+    def _add_one_year(d: datetime) -> datetime:
+        """Return d + 1 calendar year, handling Feb 29 → Feb 28 safely."""
+        try:
+            return d.replace(year=d.year + 1)
+        except ValueError:
+            # d is Feb 29 and the next year is not a leap year.
+            return d.replace(year=d.year + 1, day=28)
 
     def _build(self):
         hdr = tk.Frame(self, bg=BG_PANEL, height=52)
@@ -1259,9 +1461,12 @@ class FamilyCooldownDialog(tk.Toplevel):
         users = get_all_steam_users(self._steam_dir)
         lines = ["STEAM ACCOUNTS ON THIS MACHINE\n" + "─"*42]
         for u in users[:8]:
-            name = u["personaname"] or u["accountname"]
+            name = u["personaname"] or u["accountname"] or u["steamid64"]
             ts   = u["timestamp"]
-            last = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "unknown"
+            try:
+                last = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "unknown"
+            except (OSError, OverflowError, ValueError):
+                last = "unknown"
             tag  = " ← active" if u["mostrecent"] else ""
             lines.append(f"  {name:<28} last login: {last}{tag}")
         lines += ["", "Select a scenario above to simulate the cooldown impact."]
@@ -1269,7 +1474,7 @@ class FamilyCooldownDialog(tk.Toplevel):
 
     def _sim_remove(self):
         today   = datetime.now()
-        unlock  = today + timedelta(days=self.COOLDOWN_DAYS)
+        unlock  = self._add_one_year(today)
         lines = [
             "SCENARIO: Remove a member from your family\n" + "─"*48,
             "",
@@ -1292,7 +1497,7 @@ class FamilyCooldownDialog(tk.Toplevel):
 
     def _sim_leave(self):
         today  = datetime.now()
-        unlock = today + timedelta(days=self.COOLDOWN_DAYS)
+        unlock = self._add_one_year(today)
         lines = [
             "SCENARIO: You leave your current family\n" + "─"*46,
             "",
