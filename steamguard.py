@@ -1151,14 +1151,19 @@ class SteamGuard(tk.Tk):
 
     def _minimize(self):
         """Minimize to taskbar safely when overrideredirect=True."""
+        self._minimized = True
         self.overrideredirect(False)
         self.iconify()
         self.bind("<Map>", self._on_restore)
 
     def _on_restore(self, event=None):
+        # Only act when we triggered the minimize ourselves
+        if not getattr(self, "_minimized", False):
+            return
+        self._minimized = False
         self.unbind("<Map>")
-        self.overrideredirect(True)
-        self.focus_force()
+        # Small delay so wm_state settles before we re-apply overrideredirect
+        self.after(50, lambda: (self.overrideredirect(True), self.focus_force()))
 
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
