@@ -1110,7 +1110,7 @@ class SteamGuard(tk.Tk):
         self._initial_load()
 
         self.update_idletasks()
-        w, h = 540, 820
+        w, h = 500, 760
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
@@ -1388,19 +1388,19 @@ class SteamGuard(tk.Tk):
             icon, name, desc = BADGE_DEFS.get(badge_key, ("?", badge_key, ""))
             earned = badge_key in self._badges
 
-            cell = tk.Frame(row, bg=BG_CARD if earned else BG_PANEL, width=70, height=70)
+            cell = tk.Frame(row, bg=BG_CARD if earned else BG_PANEL, width=56, height=56)
             cell.pack(side="left", padx=3, pady=2)
             cell.pack_propagate(False)
 
             tk.Label(cell, text=icon, bg=BG_CARD if earned else BG_PANEL,
-                     font=("Segoe UI Emoji", 18),
-                     fg=TEXT_MAIN if earned else TEXT_DIM).pack(pady=(8,0))
+                     font=("Segoe UI Emoji", 14),
+                     fg=TEXT_MAIN if earned else TEXT_DIM).pack(pady=(5,0))
             tk.Label(cell, text=name, bg=BG_CARD if earned else BG_PANEL,
                      font=("Segoe UI", 6, "bold"),
                      fg=TEXT_MAIN if earned else TEXT_DIM,
-                     wraplength=65).pack()
+                     wraplength=52).pack()
 
-            if i == 7:  # wrap to next row
+            if i == 3:  # wrap to next row after 4 badges
                 row = tk.Frame(self._badge_frame_inner, bg=BG_DARK)
                 row.pack(fill="x")
 
@@ -1791,7 +1791,7 @@ class SteamGuard(tk.Tk):
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # ── Animated shield canvas (centrepiece) ──────────────────────────────
-        SHIELD_W, SHIELD_H = 540, 160
+        SHIELD_W, SHIELD_H = 500, 150
         self._shield_cv = tk.Canvas(self, width=SHIELD_W, height=SHIELD_H,
                                     bg=BG_DARK, highlightthickness=0)
         self._shield_cv.pack(fill="x")
@@ -1950,21 +1950,35 @@ class SteamGuard(tk.Tk):
         nb.add(stats_tab_outer, text="STATS")
 
         # Scrollable container for stats tab
-        stats_tab_frame = tk.Frame(stats_tab_outer, bg=BG_DARK)
-        stats_tab_frame.pack(fill="both", expand=True)
+        _stats_canvas = tk.Canvas(stats_tab_outer, bg=BG_DARK, highlightthickness=0)
+        _stats_vsb    = tk.Scrollbar(stats_tab_outer, orient="vertical", command=_stats_canvas.yview)
+        _stats_canvas.configure(yscrollcommand=_stats_vsb.set)
+        _stats_vsb.pack(side="right", fill="y")
+        _stats_canvas.pack(side="left", fill="both", expand=True)
+        stats_tab_frame = tk.Frame(_stats_canvas, bg=BG_DARK)
+        _stats_win_id = _stats_canvas.create_window((0, 0), window=stats_tab_frame, anchor="nw")
+        def _on_stats_configure(event):
+            _stats_canvas.configure(scrollregion=_stats_canvas.bbox("all"))
+            _stats_canvas.itemconfig(_stats_win_id, width=_stats_canvas.winfo_width())
+        stats_tab_frame.bind("<Configure>", _on_stats_configure)
+        _stats_canvas.bind("<Configure>",
+            lambda e: _stats_canvas.itemconfig(_stats_win_id, width=e.width))
+        def _on_stats_mousewheel(event):
+            _stats_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        _stats_canvas.bind_all("<MouseWheel>", _on_stats_mousewheel)
 
         # Chart canvas
         chart_lbl = tk.Label(stats_tab_frame, text="HEALS LAST 7 HOURS",
                              bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
         chart_lbl.pack(pady=(8, 2))
-        self._chart_cv = tk.Canvas(stats_tab_frame, width=490, height=140,
+        self._chart_cv = tk.Canvas(stats_tab_frame, width=470, height=110,
                                    bg=BG_PANEL, highlightthickness=0)
-        self._chart_cv.pack(padx=12, pady=(0, 8))
+        self._chart_cv.pack(padx=12, pady=(0, 4))
         self._redraw_chart()
 
         # Stat cells 2x2
         stat_grid = tk.Frame(stats_tab_frame, bg=BG_DARK)
-        stat_grid.pack(fill="x", padx=12)
+        stat_grid.pack(fill="x", padx=12, pady=(0,4))
 
         def _make_stat_cell(parent, row, col, name):
             cell = tk.Frame(parent, bg=BG_CARD, padx=10, pady=8)
@@ -1972,7 +1986,7 @@ class SteamGuard(tk.Tk):
                       pady=(0, 4) if row == 0 else 0, sticky="nsew")
             parent.columnconfigure(col, weight=1)
             val_lbl = tk.Label(cell, text="—", bg=BG_CARD, fg=TEXT_MAIN,
-                               font=("Segoe UI", 16, "bold"))
+                               font=("Segoe UI", 14, "bold"))
             val_lbl.pack()
             tk.Label(cell, text=name, bg=BG_CARD, fg=TEXT_DIM,
                      font=("Segoe UI", 8)).pack()
@@ -2018,7 +2032,20 @@ class SteamGuard(tk.Tk):
         nb.add(settings_frame, text="SETTINGS")
 
         # Use a frame variable for the settings tab content
-        settings_tab_frame = settings_frame
+        # Scrollable settings tab
+        _set_canvas = tk.Canvas(settings_frame, bg=BG_DARK, highlightthickness=0)
+        _set_vsb    = tk.Scrollbar(settings_frame, orient="vertical", command=_set_canvas.yview)
+        _set_canvas.configure(yscrollcommand=_set_vsb.set)
+        _set_vsb.pack(side="right", fill="y")
+        _set_canvas.pack(side="left", fill="both", expand=True)
+        settings_tab_frame = tk.Frame(_set_canvas, bg=BG_DARK)
+        _set_win_id = _set_canvas.create_window((0, 0), window=settings_tab_frame, anchor="nw")
+        def _on_set_configure(event):
+            _set_canvas.configure(scrollregion=_set_canvas.bbox("all"))
+            _set_canvas.itemconfig(_set_win_id, width=_set_canvas.winfo_width())
+        settings_tab_frame.bind("<Configure>", _on_set_configure)
+        _set_canvas.bind("<Configure>",
+            lambda e: _set_canvas.itemconfig(_set_win_id, width=e.width))
 
         opts1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
         opts1.pack(fill="x", padx=12, pady=(10, 0))
@@ -2137,7 +2164,7 @@ class SteamGuard(tk.Tk):
     def _redraw_chart(self):
         cv = self._chart_cv
         cv.delete("all")
-        W, H = 490, 120
+        W, H = 470, 110
         cv.create_text(W//2, 8, text="HEALS — LAST 7 HOURS",
                        fill=TEXT_DIM, font=("Segoe UI", 7, "bold"))
         max_v = max(max(self._hourly_heals), 1)
@@ -2376,7 +2403,7 @@ class SteamGuard(tk.Tk):
         import math
         import time as _time
 
-        SHIELD_W, SHIELD_H = 540, 160
+        SHIELD_W, SHIELD_H = 500, 150
         cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
         SW, SH = 76, 86
 
