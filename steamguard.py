@@ -31,6 +31,7 @@ REQUIREMENTS:
 
 import tkinter as tk
 from tkinter import scrolledtext
+from tkinter import ttk
 import subprocess
 import threading
 import ctypes
@@ -46,6 +47,8 @@ import urllib.request
 import math
 import struct
 import winsound
+import io
+import base64
 from datetime import datetime, timedelta
 from ipaddress import ip_address, ip_network
 from pathlib import Path
@@ -54,8 +57,9 @@ from tkinter import messagebox
 import urllib.request
 import webbrowser
 import sys
+import json as _json_mod
 
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.2.0"
 
 def check_for_updates():
     """Checks GitHub on startup and forces user to get the update via Linkvertise if outdated."""
@@ -971,6 +975,44 @@ def set_autostart(enabled: bool) -> bool:
         return False
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tooltip helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Tooltip:
+    def __init__(self, widget, text, delay=600):
+        self._widget = widget
+        self._text = text
+        self._delay = delay
+        self._tip_win = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._cancel)
+        widget.bind("<ButtonPress>", self._cancel)
+
+    def _schedule(self, event=None):
+        self._cancel()
+        self._after_id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self, event=None):
+        if self._after_id:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
+
+    def _show(self):
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip_win = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(tw, text=self._text, bg="#1c2128", fg="#e6edf3",
+                 font=("Segoe UI", 8), relief="flat", bd=0,
+                 padx=8, pady=4).pack()
+        tw.after(3000, self._cancel)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main Application
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -978,9 +1020,10 @@ class SteamGuard(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("SteamGuard")
+        self.overrideredirect(True)
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
+        self.title("SteamGuard")
 
         _open_log_file()
         self._cfg = load_config()
@@ -1003,6 +1046,16 @@ class SteamGuard(tk.Tk):
         self._app_running    = True   # cleared in _on_close to stop bg threads
         self._protection_busy = False  # True while rule create/enable is in flight
 
+        # New instance vars
+        self._drag_x = 0
+        self._drag_y = 0
+        self._kill_counter = 0
+        self._hourly_heals = [0] * 7
+        self._game_art_photo = None
+        self._rpc = None
+        self._session_history_file = _APPDATA_DIR / "session_history.json"
+        self._spark_ids = []
+
         # Trace auto-protect changes → persist
         self._auto_heal.trace_add("write", lambda *_: self._save_settings())
 
@@ -1018,7 +1071,7 @@ class SteamGuard(tk.Tk):
         self._initial_load()
 
         self.update_idletasks()
-        w, h = 520, 740
+        w, h = 540, 820
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
@@ -1027,12 +1080,34 @@ class SteamGuard(tk.Tk):
         self._minimized_to_tray = False
         self._try_start_tray()
 
+        # Hourly heal rotation
+        self.after(3600000, self._rotate_hourly_heals)
+
     def _save_settings(self):
         cfg = {
             "auto_protect": self._auto_heal.get(),
             "autostart":    self._autostart_var.get(),
         }
         save_config(cfg)
+
+    # ── Hover helpers ─────────────────────────────────────────────────────────
+
+    def _hover_enter(self, btn, color_in): btn.config(bg=color_in)
+    def _hover_leave(self, btn, color_out): btn.config(bg=color_out)
+
+    # ── Hourly heal rotation ──────────────────────────────────────────────────
+
+    def _rotate_hourly_heals(self):
+        self._hourly_heals = self._hourly_heals[1:] + [0]
+        self._redraw_chart()
+        self.after(3600000, self._rotate_hourly_heals)
+
+    # ── Kill counter ──────────────────────────────────────────────────────────
+
+    def _increment_kill_counter(self, n: int):
+        self._kill_counter += n
+        self._kill_lbl.config(text=f"⚡ Connections severed: {self._kill_counter}", fg=YELLOW)
+        self.after(400, lambda: self._kill_lbl.config(fg=TEXT_DIM))
 
     # ── Initial load ──────────────────────────────────────────────────────────
 
@@ -1113,6 +1188,25 @@ class SteamGuard(tk.Tk):
             # connections that form while protection is active
             threading.Thread(target=self._connection_kill_loop, daemon=True).start()
 
+            # Discord rich presence (best-effort)
+            def _start_rich_presence():
+                try:
+                    from pypresence import Presence
+                    RPC = Presence("1234567890123456789")  # placeholder app ID
+                    RPC.connect()
+                    self._rpc = RPC
+                    game_name = self._running_game["name"] if self._running_game else "Idle"
+                    RPC.update(
+                        state=f"Playing {game_name}",
+                        details="Protected via SteamGuard",
+                        large_image="shield",
+                        start=int(self._session_start.timestamp())
+                    )
+                except Exception:
+                    pass  # pypresence not installed or Discord not running
+
+            threading.Thread(target=_start_rich_presence, daemon=True).start()
+
         threading.Thread(target=worker, daemon=True).start()
 
     # ── Game detection loop ───────────────────────────────────────────────────
@@ -1181,9 +1275,23 @@ class SteamGuard(tk.Tk):
         extra = f", severed {killed} connection(s)" if killed else ""
         msg = (f"AUTO-HEAL #{self._heal_count} [{source}]  "
                f"Block re-applied{extra}. ({detail})")
-        self._log(msg, color=PURPLE)
+        self._log(msg, level="heal")
         self._sync_fw_state(True)
         self._update_heal_badge()
+
+        # Increment hourly heal chart
+        self._hourly_heals[6] += 1
+        self._redraw_chart()
+
+        # Kill counter
+        if killed:
+            self.after(0, lambda n=killed: self._increment_kill_counter(n))
+
+        # Session history
+        self._append_heal_event(source, detail, killed)
+
+        # Update stats tab values
+        self._update_stats_tab()
 
     # ── Protection on/off ────────────────────────────────────────────────────
 
@@ -1232,9 +1340,11 @@ class SteamGuard(tk.Tk):
                 # Must kill the live connection so Steam reconnects through the
                 # now-active block and goes offline.
                 killed = _kill_valve_connections()
-                self.after(0, lambda n=killed: self._log(
-                    f"Severed {n} live Valve CM connection(s) — Steam now offline.",
-                    color=YELLOW) if n else None)
+                if killed:
+                    self.after(0, lambda n=killed: self._log(
+                        f"Severed {n} live Valve CM connection(s) — Steam now offline.",
+                        color=YELLOW))
+                    self.after(0, lambda n=killed: self._increment_kill_counter(n))
             self.after(0, lambda: self._on_protection_started(ok))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1255,10 +1365,21 @@ class SteamGuard(tk.Tk):
             self._update_status_banner()
             game_name = self._running_game["name"] if self._running_game else "manual"
             self._log(f"Protection ON  —  {game_name}. Auto-heal watching network.",
-                      color=GREEN)
+                      level="success")
             _play_protect_sound()
             _show_toast("SteamGuard — Protected",
                         f"Library lock blocked for {game_name}. Tell your friend to launch now.")
+            # Update rich presence
+            if self._rpc is not None:
+                try:
+                    self._rpc.update(
+                        state=f"Playing {game_name}",
+                        details="Protected via SteamGuard",
+                        large_image="shield",
+                        start=int(self._session_start.timestamp())
+                    )
+                except Exception:
+                    pass
         else:
             self._update_protect_btn()
             self._log("Failed to enable firewall rule — check admin rights.", True)
@@ -1291,30 +1412,71 @@ class SteamGuard(tk.Tk):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Header bar ────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=BG_PANEL, height=52)
+        # ── Custom draggable title bar ─────────────────────────────────────────
+        hdr = tk.Frame(self, bg=BG_PANEL, height=48)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
-        # Small shield icon in header
+        # Shield canvas icon (28x28)
         hc = tk.Canvas(hdr, width=28, height=28, bg=BG_PANEL, highlightthickness=0)
-        hc.place(x=14, y=12)
-        hc.create_polygon(14,2, 26,7, 26,16, 14,26, 2,16, 2,7,
+        hc.place(x=12, y=10)
+        hc.create_polygon(14, 2, 26, 7, 26, 16, 14, 26, 2, 16, 2, 7,
                           fill=ACCENT, outline="", smooth=False)
-        hc.create_text(14,15, text="S", fill="white", font=("Segoe UI",9,"bold"))
+        hc.create_text(14, 15, text="S", fill="white", font=("Segoe UI", 9, "bold"))
 
-        tk.Label(hdr, text="SteamGuard", bg=BG_PANEL, fg=TEXT_MAIN,
-                 font=("Segoe UI", 13, "bold")).place(x=48, y=8)
-        tk.Label(hdr, text="Family Sharing bypass",
-                 bg=BG_PANEL, fg=TEXT_DIM, font=F_SMALL).place(x=48, y=29)
+        title_lbl = tk.Label(hdr, text="SteamGuard", bg=BG_PANEL, fg=TEXT_MAIN,
+                             font=("Segoe UI", 13, "bold"))
+        title_lbl.place(x=48, y=10)
 
-        badge_text  = "✓ Admin" if self._admin else "⚠ No Admin"
-        badge_color = GREEN if self._admin else YELLOW
-        tk.Label(hdr, text=badge_text, bg=BG_PANEL, fg=badge_color,
-                 font=F_SMALL).place(relx=1.0, x=-14, y=18, anchor="ne")
+        ver_lbl = tk.Label(hdr, text="v1.2.0", bg=BG_PANEL, fg=TEXT_DIM, font=F_SMALL)
+        ver_lbl.place(x=155, y=14)
+
+        # Admin pill canvas (70x20)
+        pill_cv = tk.Canvas(hdr, width=70, height=20, bg=BG_PANEL, highlightthickness=0)
+        pill_cv.place(relx=1.0, x=-140, y=14)
+        if self._admin:
+            pill_color = GREEN
+            pill_text  = "✓ ADMIN"
+        else:
+            pill_color = YELLOW
+            pill_text  = "⚠ NO ADMIN"
+        pill_cv.create_rectangle(0, 0, 70, 20, fill=pill_color, outline="")
+        pill_cv.create_text(35, 10, text=pill_text, fill=BG_DARK,
+                            font=("Segoe UI", 7, "bold"))
+
+        # Minimize button
+        min_btn = tk.Label(hdr, text="─", bg=BG_PANEL, fg=TEXT_DIM,
+                           font=("Segoe UI", 12), cursor="hand2")
+        min_btn.place(relx=1.0, x=-64, y=12)
+        min_btn.bind("<Button-1>", lambda e: self.iconify())
+        min_btn.bind("<Enter>", lambda e: min_btn.config(fg=TEXT_MAIN))
+        min_btn.bind("<Leave>", lambda e: min_btn.config(fg=TEXT_DIM))
+
+        # Close button
+        close_btn = tk.Label(hdr, text="✕", bg=BG_PANEL, fg=RED,
+                             font=("Segoe UI", 12), cursor="hand2")
+        close_btn.place(relx=1.0, x=-32, y=12)
+        close_btn.bind("<Button-1>", lambda e: self._on_close())
+        close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#ff6b6b"))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(fg=RED))
+
+        # Drag bindings
+        def _drag_start(e):
+            self._drag_x = e.x_root - self.winfo_x()
+            self._drag_y = e.y_root - self.winfo_y()
+
+        def _drag_motion(e):
+            self.geometry(f"+{e.x_root - self._drag_x}+{e.y_root - self._drag_y}")
+
+        for widget in (hdr, title_lbl, ver_lbl):
+            widget.bind("<ButtonPress-1>", _drag_start)
+            widget.bind("<B1-Motion>", _drag_motion)
+
+        # 1px border at bottom of header
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # ── Animated shield canvas (centrepiece) ──────────────────────────────
-        SHIELD_W, SHIELD_H = 520, 160
+        SHIELD_W, SHIELD_H = 540, 160
         self._shield_cv = tk.Canvas(self, width=SHIELD_W, height=SHIELD_H,
                                     bg=BG_DARK, highlightthickness=0)
         self._shield_cv.pack(fill="x")
@@ -1322,9 +1484,11 @@ class SteamGuard(tk.Tk):
         cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
 
         # Pulse rings (drawn behind shield, updated by animation)
+        ring_colors = [GREEN, ACCENT, PURPLE]
         self._ring_ids = [
-            self._shield_cv.create_oval(0,0,0,0, outline=GREEN, width=2, state="hidden")
-            for _ in range(3)
+            self._shield_cv.create_oval(0, 0, 0, 0, outline=ring_colors[i],
+                                        width=2, state="hidden")
+            for i in range(3)
         ]
 
         # Shield body — large polygon
@@ -1350,22 +1514,28 @@ class SteamGuard(tk.Tk):
             cx, cy + SH//2 + 16, text="UNPROTECTED",
             fill=TEXT_DIM, font=("Segoe UI", 9, "bold"))
 
+        # 8 orbiting spark particles
+        self._spark_ids = [
+            self._shield_cv.create_oval(0, 0, 4, 4, fill=ACCENT, outline="", state="hidden")
+            for _ in range(8)
+        ]
+
         # ── 3-column status indicators ────────────────────────────────────────
         status_outer = tk.Frame(self, bg=BG_DARK)
         status_outer.pack(fill="x", padx=12, pady=(0, 0))
 
         def _make_indicator(parent, label):
             card = tk.Frame(parent, bg=BG_CARD)
-            card.pack(side="left", fill="both", expand=True, padx=(0,4))
+            card.pack(side="left", fill="both", expand=True, padx=(0, 4))
             tk.Label(card, text=label, bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", 7, "bold")).pack(pady=(7,1))
+                     font=("Segoe UI", 7, "bold")).pack(pady=(7, 1))
             dot_cv = tk.Canvas(card, width=10, height=10, bg=BG_CARD,
                                highlightthickness=0)
             dot_cv.pack()
-            dot = dot_cv.create_oval(1,1,9,9, fill=TEXT_DIM, outline="")
+            dot = dot_cv.create_oval(1, 1, 9, 9, fill=TEXT_DIM, outline="")
             lbl = tk.Label(card, text="—", bg=BG_CARD, fg=TEXT_DIM,
                            font=("Segoe UI", 8, "bold"))
-            lbl.pack(pady=(1,7))
+            lbl.pack(pady=(1, 7))
             return dot_cv, dot, lbl
 
         self._fw_dot_cv,   self._fw_dot,   self._fw_lbl   = _make_indicator(status_outer, "FIREWALL")
@@ -1374,18 +1544,23 @@ class SteamGuard(tk.Tk):
         # Fix last card: no right padding
         status_outer.winfo_children()[-1].pack_configure(padx=0)
 
+        # Add tooltips to indicators
+        Tooltip(self._fw_dot_cv,   "Firewall rule status: BLOCKING = active protection")
+        Tooltip(self._heal_dot_cv, "Auto-heal count: times the block was re-applied after reconnect")
+        Tooltip(self._net_dot_cv,  "Internet connectivity status")
+
         # ── Game detection card ───────────────────────────────────────────────
         game_section = tk.Frame(self, bg=BG_DARK)
         game_section.pack(fill="x", padx=12, pady=(8, 0))
         tk.Label(game_section, text="DETECTED GAME", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0,3))
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0, 3))
 
         self._game_card = tk.Frame(game_section, bg=BG_CARD)
         self._game_card.pack(fill="x")
 
         self._game_icon = tk.Label(self._game_card, text="🎮", bg=BG_CARD,
                                    font=("Segoe UI Emoji", 18))
-        self._game_icon.pack(side="left", padx=(12,8), pady=10)
+        self._game_icon.pack(side="left", padx=(12, 8), pady=10)
 
         game_text = tk.Frame(self._game_card, bg=BG_CARD)
         game_text.pack(side="left", fill="x", expand=True, pady=10)
@@ -1409,6 +1584,9 @@ class SteamGuard(tk.Tk):
             activebackground="#1c6cc4",
             command=self._on_protect_toggle)
         self._protect_btn.pack(fill="x", padx=12, pady=(10, 0), ipady=13)
+        self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#1c6cc4"))
+        self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, ACCENT))
+        Tooltip(self._protect_btn, "Toggle Steam CM firewall block on/off")
 
         # ── Session stats strip ───────────────────────────────────────────────
         stats_row = tk.Frame(self, bg=BG_DARK)
@@ -1419,48 +1597,130 @@ class SteamGuard(tk.Tk):
         self._stats_lbl.pack(side="left")
         self._after_stats_id = self.after(1000, self._update_stats_strip)
 
-        # ── Options rows ──────────────────────────────────────────────────────
-        opts1 = tk.Frame(self, bg=BG_DARK)
-        opts1.pack(fill="x", padx=12, pady=(6, 0))
+        # ── Kill counter row ──────────────────────────────────────────────────
+        kill_row = tk.Frame(self, bg=BG_DARK)
+        kill_row.pack(fill="x", padx=12, pady=(0, 2))
+        self._kill_lbl = tk.Label(kill_row, text="⚡ Connections severed: 0",
+            bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 8), anchor="w")
+        self._kill_lbl.pack(side="left")
+
+        # ── Tabbed notebook ───────────────────────────────────────────────────
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Dark.TNotebook", background=BG_DARK, borderwidth=0)
+        style.configure("Dark.TNotebook.Tab", background=BG_CARD, foreground=TEXT_DIM,
+                        font=F_SMALL, padding=[12, 5])
+        style.map("Dark.TNotebook.Tab",
+                  background=[("selected", BG_PANEL)],
+                  foreground=[("selected", TEXT_MAIN)])
+
+        nb = ttk.Notebook(self, style="Dark.TNotebook")
+        nb.pack(fill="both", expand=True, padx=0, pady=(8, 0))
+
+        # ── Tab 1: Events ──────────────────────────────────────────────────────
+        events_frame = tk.Frame(nb, bg=BG_DARK)
+        nb.add(events_frame, text="EVENTS")
+
+        log_outer = tk.Frame(events_frame, bg=BG_DARK)
+        log_outer.pack(fill="both", expand=True, padx=12, pady=(8, 8))
+        tk.Label(log_outer, text="EVENT LOG", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0, 3))
+        self._log_w = scrolledtext.ScrolledText(
+            log_outer, bg=BG_PANEL, fg=TEXT_DIM, font=F_MONO,
+            relief="flat", bd=0, state="disabled", wrap="word")
+        self._log_w.pack(fill="both", expand=True)
+
+        # ── Tab 2: Stats ───────────────────────────────────────────────────────
+        stats_frame = tk.Frame(nb, bg=BG_DARK)
+        nb.add(stats_frame, text="STATS")
+
+        # Chart canvas
+        chart_lbl = tk.Label(stats_frame, text="HEALS LAST 7 HOURS",
+                             bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
+        chart_lbl.pack(pady=(8, 2))
+        self._chart_cv = tk.Canvas(stats_frame, width=490, height=140,
+                                   bg=BG_PANEL, highlightthickness=0)
+        self._chart_cv.pack(padx=12, pady=(0, 8))
+        self._redraw_chart()
+
+        # Stat cells 2x2
+        stat_grid = tk.Frame(stats_frame, bg=BG_DARK)
+        stat_grid.pack(fill="x", padx=12)
+
+        def _make_stat_cell(parent, row, col, name):
+            cell = tk.Frame(parent, bg=BG_CARD, padx=10, pady=8)
+            cell.grid(row=row, column=col, padx=(0, 4) if col == 0 else 0,
+                      pady=(0, 4) if row == 0 else 0, sticky="nsew")
+            parent.columnconfigure(col, weight=1)
+            val_lbl = tk.Label(cell, text="—", bg=BG_CARD, fg=TEXT_MAIN,
+                               font=("Segoe UI", 16, "bold"))
+            val_lbl.pack()
+            tk.Label(cell, text=name, bg=BG_CARD, fg=TEXT_DIM,
+                     font=("Segoe UI", 8)).pack()
+            return val_lbl
+
+        self._stat_session_lbl   = _make_stat_cell(stat_grid, 0, 0, "Session Time")
+        self._stat_protected_lbl = _make_stat_cell(stat_grid, 0, 1, "Protected Time")
+        self._stat_heals_lbl     = _make_stat_cell(stat_grid, 1, 0, "Total Heals")
+        self._stat_lastheal_lbl  = _make_stat_cell(stat_grid, 1, 1, "Last Heal")
+
+        # ── Tab 3: Settings ────────────────────────────────────────────────────
+        settings_frame = tk.Frame(nb, bg=BG_DARK)
+        nb.add(settings_frame, text="SETTINGS")
+
+        opts1 = tk.Frame(settings_frame, bg=BG_DARK)
+        opts1.pack(fill="x", padx=12, pady=(10, 0))
         tk.Checkbutton(opts1, text="Auto-protect when game launches",
                        variable=self._auto_heal,
                        bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
                        selectcolor=BG_CARD, activebackground=BG_DARK,
                        activeforeground=TEXT_MAIN,
                        highlightthickness=0).pack(side="left")
-        tk.Button(opts1, text="Scan games", bg=BG_CARD, fg=TEXT_DIM,
-                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                  activebackground=BORDER,
-                  command=self._rescan_games).pack(side="right", ipady=4, ipadx=8)
+        scan_btn = tk.Button(opts1, text="Scan games", bg=BG_CARD, fg=TEXT_DIM,
+                             font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                             activebackground=BORDER,
+                             command=self._rescan_games)
+        scan_btn.pack(side="right", ipady=4, ipadx=8)
+        scan_btn.bind("<Enter>", lambda e: self._hover_enter(scan_btn, BORDER))
+        scan_btn.bind("<Leave>", lambda e: self._hover_leave(scan_btn, BG_CARD))
+        Tooltip(scan_btn, "Re-scan all Steam library folders for installed games")
 
-        opts2 = tk.Frame(self, bg=BG_DARK)
-        opts2.pack(fill="x", padx=12, pady=(3, 0))
+        opts2 = tk.Frame(settings_frame, bg=BG_DARK)
+        opts2.pack(fill="x", padx=12, pady=(6, 0))
         tk.Checkbutton(opts2, text="Start with Windows",
                        variable=self._autostart_var,
                        bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
                        selectcolor=BG_CARD, activebackground=BG_DARK,
                        activeforeground=TEXT_MAIN, highlightthickness=0,
                        command=self._on_autostart_toggle).pack(side="left")
-        tk.Button(opts2, text="? Help", bg=BG_CARD, fg=ACCENT,
-                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                  activebackground=BORDER,
-                  command=self._show_help).pack(side="right", ipady=4, ipadx=8)
-        tk.Button(opts2, text="Steam Integration", bg=BG_CARD, fg=TEXT_DIM,
-                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                  activebackground=BORDER,
-                  command=self._show_steam_integration
-                  ).pack(side="right", ipady=4, ipadx=8, padx=(0,4))
+        help_btn = tk.Button(opts2, text="? Help", bg=BG_CARD, fg=ACCENT,
+                             font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                             activebackground=BORDER,
+                             command=self._show_help)
+        help_btn.pack(side="right", ipady=4, ipadx=8)
+        help_btn.bind("<Enter>", lambda e: self._hover_enter(help_btn, BORDER))
+        help_btn.bind("<Leave>", lambda e: self._hover_leave(help_btn, BG_CARD))
 
-        # ── Log ───────────────────────────────────────────────────────────────
-        log_outer = tk.Frame(self, bg=BG_DARK)
-        log_outer.pack(fill="both", expand=True, padx=12, pady=(8, 8))
-        tk.Label(log_outer, text="EVENT LOG", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0,3))
-        self._log_w = scrolledtext.ScrolledText(
-            log_outer, bg=BG_PANEL, fg=TEXT_DIM, font=F_MONO,
-            relief="flat", bd=0, state="disabled", wrap="word")
-        self._log_w.pack(fill="both", expand=True)
+        steam_int_btn = tk.Button(opts2, text="Steam Integration", bg=BG_CARD, fg=TEXT_DIM,
+                                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                                  activebackground=BORDER,
+                                  command=self._show_steam_integration)
+        steam_int_btn.pack(side="right", ipady=4, ipadx=8, padx=(0, 4))
+        steam_int_btn.bind("<Enter>", lambda e: self._hover_enter(steam_int_btn, BORDER))
+        steam_int_btn.bind("<Leave>", lambda e: self._hover_leave(steam_int_btn, BG_CARD))
 
+        opts3 = tk.Frame(settings_frame, bg=BG_DARK)
+        opts3.pack(fill="x", padx=12, pady=(6, 0))
+        export_btn = tk.Button(opts3, text="Export Log", bg=BG_CARD, fg=TEXT_DIM,
+                               font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                               activebackground=BORDER,
+                               command=self._export_log)
+        export_btn.pack(side="left", ipady=4, ipadx=8)
+        export_btn.bind("<Enter>", lambda e: self._hover_enter(export_btn, BORDER))
+        export_btn.bind("<Leave>", lambda e: self._hover_leave(export_btn, BG_CARD))
+        Tooltip(export_btn, "Save the event log to your Desktop as a .txt file")
+
+        # ── Admin warning banner ──────────────────────────────────────────────
         if not self._admin:
             warn = tk.Frame(self, bg=YELLOW, cursor="hand2")
             warn.pack(fill="x")
@@ -1474,6 +1734,134 @@ class SteamGuard(tk.Tk):
 
         # Start network status poller
         self._poll_net_status()
+
+        # ── Keyboard shortcuts ────────────────────────────────────────────────
+        self.bind("<Control-p>", lambda e: self._on_protect_toggle())
+        self.bind("<Control-l>", lambda e: (self._log_w.config(state="normal"),
+                                             self._log_w.delete("1.0", "end"),
+                                             self._log_w.config(state="disabled")))
+        self.bind("<Control-e>", lambda e: self._export_log())
+        self.bind("<Control-s>", lambda e: self._rescan_games())
+        self.bind("<F1>",        lambda e: self._show_help())
+        self.bind("<Escape>",    lambda e: self.iconify())
+
+    # ── Chart drawing ─────────────────────────────────────────────────────────
+
+    def _redraw_chart(self):
+        cv = self._chart_cv
+        cv.delete("all")
+        W, H = 490, 120
+        cv.create_text(W//2, 8, text="HEALS — LAST 7 HOURS",
+                       fill=TEXT_DIM, font=("Segoe UI", 7, "bold"))
+        max_v = max(max(self._hourly_heals), 1)
+        bar_w = 40
+        gap   = (W - 7 * bar_w) // 8
+        for i, val in enumerate(self._hourly_heals):
+            x0 = gap + i * (bar_w + gap)
+            bar_h = max(2, int((val / max_v) * 80))
+            y1 = H - 20
+            y0 = y1 - bar_h
+            color = PURPLE if val > 0 else BG_CARD
+            cv.create_rectangle(x0, y0, x0+bar_w, y1, fill=color, outline="")
+            label = f"-{6-i}h" if i < 6 else "now"
+            cv.create_text(x0 + bar_w//2, H - 10, text=label,
+                           fill=TEXT_DIM, font=("Segoe UI", 7))
+            if val > 0:
+                cv.create_text(x0 + bar_w//2, y0 - 6, text=str(val),
+                               fill=PURPLE, font=("Segoe UI", 7, "bold"))
+
+    # ── Stats tab updater ─────────────────────────────────────────────────────
+
+    def _update_stats_tab(self):
+        def _fmt(secs: int) -> str:
+            if secs < 60:   return f"{secs}s"
+            if secs < 3600: return f"{secs//60}m {secs%60}s"
+            return f"{secs//3600}h {(secs%3600)//60}m"
+
+        try:
+            elapsed = int((datetime.now() - self._session_start).total_seconds())
+            self._stat_session_lbl.config(text=_fmt(elapsed))
+
+            total_heals = self._heal_count + self._rule_heal_cnt
+            self._stat_heals_lbl.config(text=str(total_heals))
+
+            if self._protect_start:
+                pt = int((datetime.now() - self._protect_start).total_seconds())
+                self._stat_protected_lbl.config(text=_fmt(pt))
+            else:
+                self._stat_protected_lbl.config(text="—")
+
+            if self._last_heal_time:
+                ago = int((datetime.now() - self._last_heal_time).total_seconds())
+                last = f"{ago}s ago" if ago < 3600 else self._last_heal_time.strftime("%H:%M")
+                self._stat_lastheal_lbl.config(text=last)
+            else:
+                self._stat_lastheal_lbl.config(text="—")
+        except Exception:
+            pass
+
+    # ── Game art ──────────────────────────────────────────────────────────────
+
+    def _fetch_game_art(self, appid: int):
+        def worker():
+            try:
+                url = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+                with urllib.request.urlopen(url, timeout=5) as r:
+                    data = r.read()
+                from PIL import Image, ImageTk
+                img = Image.open(io.BytesIO(data)).resize((80, 37), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.after(0, lambda p=photo: self._set_game_art(p))
+            except Exception:
+                self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _set_game_art(self, photo):
+        self._game_art_photo = photo  # keep reference
+        self._game_icon.config(image=photo, text="", compound="center")
+
+    # ── Session history ───────────────────────────────────────────────────────
+
+    def _append_heal_event(self, source: str, detail: str, killed: int):
+        try:
+            history = []
+            if self._session_history_file.exists():
+                history = json.loads(self._session_history_file.read_text("utf-8"))
+            history.append({
+                "ts": datetime.now().isoformat(),
+                "source": source,
+                "detail": detail,
+                "killed": killed,
+                "game": self._running_game["name"] if self._running_game else "unknown"
+            })
+            # Keep last 500 events
+            history = history[-500:]
+            self._session_history_file.write_text(json.dumps(history, indent=2), "utf-8")
+        except Exception:
+            pass
+
+    # ── Export log ────────────────────────────────────────────────────────────
+
+    def _export_log(self):
+        import tkinter.filedialog as fd
+        desktop = Path(os.path.expanduser("~")) / "Desktop"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default = desktop / f"SteamGuard_log_{ts}.txt"
+        path = fd.asksaveasfilename(
+            initialfile=str(default.name),
+            initialdir=str(desktop),
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Export Event Log")
+        if not path:
+            return
+        try:
+            content = self._log_w.get("1.0", "end")
+            header = f"SteamGuard v1.2.0 — Event Log\nExported: {datetime.now()}\n{'='*60}\n"
+            Path(path).write_text(header + content, encoding="utf-8")
+            self._log(f"Log exported to {path}", level="success")
+        except Exception as e:
+            self._log(f"Export failed: {e}", error=True)
 
     # ── UI updates ────────────────────────────────────────────────────────────
 
@@ -1517,6 +1905,8 @@ class SteamGuard(tk.Tk):
                                        text="UNPROTECTED", fill=TEXT_DIM)
             for rid in self._ring_ids:
                 self._shield_cv.itemconfig(rid, state="hidden")
+            for sid in self._spark_ids:
+                self._shield_cv.itemconfig(sid, state="hidden")
 
     def _update_stats_strip(self):
         def _fmt(secs: int) -> str:
@@ -1549,6 +1939,9 @@ class SteamGuard(tk.Tk):
         self._stats_lbl.config(text="  |  ".join(parts))
         self._after_stats_id = self.after(1000, self._update_stats_strip)
 
+        # Also refresh stats tab
+        self._update_stats_tab()
+
     def _update_game_card(self, game: dict | None):
         if game:
             self._game_name_lbl.config(
@@ -1557,31 +1950,46 @@ class SteamGuard(tk.Tk):
                 text=f"AppID {game['appid']}  •  detected via {game.get('method','?')}",
                 fg=TEXT_DIM)
             self._game_badge.config(text="● ACTIVE", fg=GREEN)
-            self._game_icon.config(text="🎮")
+            self._fetch_game_art(game["appid"])
+            # Update rich presence
+            if self._rpc is not None:
+                try:
+                    self._rpc.update(
+                        state=f"Playing {game['name']}",
+                        details="Protected via SteamGuard",
+                        large_image="shield",
+                        start=int(self._session_start.timestamp())
+                    )
+                except Exception:
+                    pass
         else:
             self._game_name_lbl.config(
                 text="No game running", fg=TEXT_DIM)
             self._game_meta_lbl.config(
                 text="Launch a Steam game to begin", fg=TEXT_DIM)
             self._game_badge.config(text="", fg=TEXT_DIM)
+            self._game_icon.config(image="", text="🎮")
+            self._game_art_photo = None
 
     def _anim_tick(self):
         """
         Animation tick — runs every 50 ms while protection is active.
 
-        Two effects:
+        Effects:
         1. Shield glow: the outline colour brightness pulses smoothly
            between dim-green and bright-green using a sine wave.
         2. Pulse rings: three concentric ovals expand outward from the
            shield and fade out, staggered 800 ms apart, looping every
-           2.4 s.
+           2.4 s. Each ring uses a different color (GREEN, ACCENT, PURPLE).
+        3. Spark particles: 8 small ovals orbit around the shield.
         """
         if not self._anim_running or not self._app_running:
             return
 
-        import math, time as _time
+        import math
+        import time as _time
 
-        SHIELD_W, SHIELD_H = 520, 160
+        SHIELD_W, SHIELD_H = 540, 160
         cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
         SW, SH = 76, 86
 
@@ -1600,6 +2008,7 @@ class SteamGuard(tk.Tk):
         RING_MAX_R  = 68   # max extra radius beyond shield edge
         BASE_R_X    = SW // 2 + 4
         BASE_R_Y    = SH // 2 + 4
+        ring_colors = [GREEN, ACCENT, PURPLE]
 
         for i, rid in enumerate(self._ring_ids):
             phase = ((t + i * (RING_PERIOD / len(self._ring_ids)))
@@ -1607,12 +2016,30 @@ class SteamGuard(tk.Tk):
             rx = BASE_R_X + phase * RING_MAX_R
             ry = BASE_R_Y + phase * RING_MAX_R
             alpha = max(0.0, 1.0 - phase * 1.6)       # fade out by ~62%
-            green_v = int(alpha * 0xaa)
-            col = f"#00{green_v:02x}00"
+
+            # Each ring has its own color
+            base_col = ring_colors[i]
+            r_int = int(int(base_col[1:3], 16) * alpha)
+            g_int = int(int(base_col[3:5], 16) * alpha)
+            b_int = int(int(base_col[5:7], 16) * alpha)
+            col = f"#{r_int:02x}{g_int:02x}{b_int:02x}"
+
             self._shield_cv.coords(rid,
                 cx - rx, cy - ry, cx + rx, cy + ry)
             self._shield_cv.itemconfig(rid,
                 outline=col, state="normal" if alpha > 0.02 else "hidden")
+
+        # ── Spark particles: 8 small ovals orbiting the shield ────────────
+        spark_colors = [ACCENT, PURPLE]
+        for i, sid in enumerate(self._spark_ids):
+            angle = (t * 1.2 + i * math.pi / 4) % (2 * math.pi)
+            rx = 52 + math.cos(angle) * 3
+            ry = 58 + math.sin(angle) * 3
+            sx = cx + math.cos(angle) * rx - 2
+            sy = cy + math.sin(angle) * ry - 2
+            col = spark_colors[i % 2]
+            self._shield_cv.coords(sid, sx, sy, sx + 4, sy + 4)
+            self._shield_cv.itemconfig(sid, fill=col, state="normal")
 
         self.after(50, self._anim_tick)
 
@@ -1622,11 +2049,16 @@ class SteamGuard(tk.Tk):
                 state="normal",
                 text="🛡  PROTECTION ON — Click to Stop",
                 bg="#1a6b1a", activebackground="#145214")
+            # Re-bind hover for protected state
+            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#145214"))
+            self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, "#1a6b1a"))
         else:
             self._protect_btn.config(
                 state="normal",
                 text="🛡  START PROTECTION",
                 bg=ACCENT, activebackground="#1c6cc4")
+            self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, "#1c6cc4"))
+            self._protect_btn.bind("<Leave>", lambda e: self._hover_leave(self._protect_btn, ACCENT))
 
     def _on_protect_toggle(self):
         if self._protected:
@@ -1711,7 +2143,7 @@ class SteamGuard(tk.Tk):
         self._sync_fw_state(True)
         self._log(
             f"RULE SELF-HEAL #{self._rule_heal_cnt}: rule was {action} automatically.",
-            color=PURPLE)
+            level="heal")
         self._update_heal_badge()
 
     def _connection_kill_loop(self):
@@ -1735,7 +2167,8 @@ class SteamGuard(tk.Tk):
                 if killed:
                     self.after(0, lambda n=killed: self._log(
                         f"Connection watchdog: severed {n} Valve connection(s).",
-                        color=YELLOW))
+                        level="kill"))
+                    self.after(0, lambda n=killed: self._increment_kill_counter(n))
             except Exception:
                 pass
             time.sleep(0.2)
@@ -1847,6 +2280,15 @@ TIPS
 • SteamGuard targets only Valve CM IPs — your game's own servers are
   never blocked (multiplayer, achievements, and cloud saves work normally
   as long as they do not route through CM servers).
+
+KEYBOARD SHORTCUTS
+──────────────────
+  Ctrl+P   Toggle protection on/off
+  Ctrl+L   Clear event log
+  Ctrl+E   Export log to file
+  Ctrl+S   Re-scan Steam library
+  F1       Show this help
+  Escape   Minimize window
 """
         txt.insert("1.0", GUIDE)
         txt.config(state="disabled")
@@ -1986,10 +2428,26 @@ TIPS
 
     _LOG_MAX_LINES = 500
 
-    def _log(self, text: str, error: bool = False, color: str | None = None):
+    def _log(self, text: str, error: bool = False, color: str | None = None, level: str = "info"):
         log_to_file(text)   # write to %APPDATA%\SteamGuard\steamguard.log
         ts = datetime.now().strftime("%H:%M:%S")
-        c  = color or (RED if error else TEXT_DIM)
+
+        # Level color mapping
+        _level_colors = {
+            "heal":    PURPLE,
+            "warn":    YELLOW,
+            "error":   RED,
+            "kill":    YELLOW,
+            "success": GREEN,
+        }
+
+        if color:
+            c = color
+        elif error:
+            c = RED
+        else:
+            c = _level_colors.get(level, TEXT_DIM)
+
         w  = self._log_w
         w.config(state="normal")
 
@@ -2019,6 +2477,12 @@ TIPS
         if self._tray_icon:
             try:
                 self._tray_icon.stop()
+            except Exception:
+                pass
+        # Close rich presence
+        if self._rpc is not None:
+            try:
+                self._rpc.close()
             except Exception:
                 pass
         self._monitor.stop()

@@ -1,0 +1,13 @@
+# SteamGuard client dependencies
+# Core (required)
+psutil
+pywin32
+wmi
+
+# UI enhancements (optional but recommended)
+Pillow       # game art thumbnails in the game card
+pypresence   # Discord rich presence (shows game in Discord status)
+pystray      # system tray icon (minimize to tray)
+
+# Build tool
+nuitka

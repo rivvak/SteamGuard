@@ -15,18 +15,19 @@ from pathlib import Path
 from datetime import datetime
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-BG_DARK  = "#0f1923"
-BG_PANEL = "#16202c"
-BG_CARD  = "#1e2d3d"
-BORDER   = "#253a4e"
-TEXT_MAIN= "#e2e8f0"
-TEXT_DIM = "#64748b"
-ACCENT   = "#2563eb"
-GREEN    = "#22c55e"
-RED      = "#ef4444"
-YELLOW   = "#f59e0b"
+BG_DARK  = "#0d1117"
+BG_PANEL = "#1c2128"
+BG_CARD  = "#21262d"
+BORDER   = "#30363d"
+TEXT_MAIN= "#e6edf3"
+TEXT_DIM = "#8b949e"
+ACCENT   = "#58a6ff"
+GREEN    = "#3fb950"
+RED      = "#f85149"
+YELLOW   = "#d29922"
 F_BODY   = ("Segoe UI", 10)
 F_SMALL  = ("Segoe UI", 9)
+F_MONO   = ("Consolas", 9)
 
 # ── Config / persistence ──────────────────────────────────────────────────────
 _APPDATA     = Path(os.environ.get("APPDATA", "")) / "SteamGuard"
@@ -34,7 +35,7 @@ _CONFIG_FILE = _APPDATA / "config.json"
 
 TOS_VERSION  = "1.1"
 
-# (TOS_TEXT remains the same as your original)
+# (TOS_TEXT remains the same as original)
 TOS_TEXT = """STEAMGUARD — END USER LICENSE AGREEMENT & TERMS OF SERVICE
 Version 1.1 — Effective upon acceptance
 
@@ -193,7 +194,44 @@ def _tos_accepted() -> bool:
     return _load_config().get("tos_version") == TOS_VERSION
 
 
-# ── TOS Window (Remains unchanged) ────────────────────────────────────────────
+# ── Tooltip ───────────────────────────────────────────────────────────────────
+
+class Tooltip:
+    def __init__(self, widget, text, delay=600):
+        self._widget = widget
+        self._text = text
+        self._delay = delay
+        self._tip_win = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._cancel)
+        widget.bind("<ButtonPress>", self._cancel)
+
+    def _schedule(self, event=None):
+        self._cancel()
+        self._after_id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self, event=None):
+        if self._after_id:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
+
+    def _show(self):
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip_win = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(tw, text=self._text, bg="#1c2128", fg="#e6edf3",
+                 font=("Segoe UI", 8), relief="flat", bd=0,
+                 padx=8, pady=4).pack()
+        tw.after(3000, self._cancel)
+
+
+# ── TOS Window ────────────────────────────────────────────────────────────────
 
 class TOSWindow(tk.Toplevel):
     def __init__(self, parent: tk.Tk):
@@ -212,12 +250,24 @@ class TOSWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._decline)
 
     def _build(self):
-        hdr = tk.Frame(self, bg=BG_PANEL, height=50)
+        # ── Improved header: 56px with shield icon ──
+        hdr = tk.Frame(self, bg=BG_PANEL, height=56)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="Terms of Service & License Agreement",
-                 bg=BG_PANEL, fg=TEXT_MAIN, font=("Segoe UI", 12, "bold")
-                 ).place(relx=0.5, rely=0.5, anchor="center")
+
+        # Small shield canvas at x=14, y=11 (30x34)
+        shield_cv = tk.Canvas(hdr, width=30, height=34, bg=BG_PANEL, highlightthickness=0)
+        shield_cv.place(x=14, y=11)
+        # Shield polygon fitted to 30x34
+        pts = [15, 0,  30, 6,  30, 20,  15, 34,  0, 20,  0, 6]
+        shield_cv.create_polygon(*pts, fill=ACCENT, outline="")
+        shield_cv.create_text(15, 17, text="S", fill="white", font=("Segoe UI", 11, "bold"))
+
+        # Title and subtitle
+        tk.Label(hdr, text="Terms of Service", bg=BG_PANEL, fg=TEXT_MAIN,
+                 font=("Segoe UI", 12, "bold")).place(x=56, y=10)
+        tk.Label(hdr, text="Read carefully before using SteamGuard", bg=BG_PANEL,
+                 fg=TEXT_DIM, font=F_SMALL).place(x=56, y=30)
 
         tk.Label(hdr, text=f"v{TOS_VERSION}", bg=BG_PANEL, fg=TEXT_DIM,
                  font=F_SMALL).place(relx=1.0, x=-12, rely=0.5, anchor="e")
@@ -225,8 +275,9 @@ class TOSWindow(tk.Toplevel):
         tk.Label(self, text="Scroll to the bottom and check the box to continue.",
                  bg=BG_DARK, fg=YELLOW, font=F_SMALL).pack(pady=(8, 2))
 
+        # TOS scrolled text: bg=BG_CARD, fg=TEXT_DIM, font=Consolas 9
         self._text = scrolledtext.ScrolledText(
-            self, bg=BG_CARD, fg=TEXT_DIM, font=("Courier New", 9),
+            self, bg=BG_CARD, fg=TEXT_DIM, font=("Consolas", 9),
             relief="flat", bd=0, wrap="word", state="normal", height=22)
         self._text.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self._text.insert("end", TOS_TEXT)
@@ -235,14 +286,16 @@ class TOSWindow(tk.Toplevel):
         self._text.bind("<MouseWheel>",  self._check_scroll)
         self._text.bind("<ButtonRelease>", self._check_scroll)
 
+        # Progress bar: 6px tall, ACCENT fill, BG_CARD background
         self._progress_var = tk.DoubleVar(value=0.0)
         prog_frame = tk.Frame(self, bg=BG_DARK)
         prog_frame.pack(fill="x", padx=12, pady=(0, 4))
-        self._prog_bar_bg = tk.Frame(prog_frame, bg=BORDER, height=4)
+        self._prog_bar_bg = tk.Frame(prog_frame, bg=BG_CARD, height=6)
         self._prog_bar_bg.pack(fill="x")
-        self._prog_bar_fg = tk.Frame(self._prog_bar_bg, bg=ACCENT, height=4, width=0)
+        self._prog_bar_fg = tk.Frame(self._prog_bar_bg, bg=ACCENT, height=6, width=0)
         self._prog_bar_fg.place(x=0, y=0, relheight=1.0)
 
+        # Checkbox: disabled until scrolled; enabled state uses TEXT_MAIN + ACCENT selectcolor
         self._accepted_var = tk.BooleanVar(value=False)
         self._chk = tk.Checkbutton(
             self, text="I have read, understood, and agree to the Terms of Service",
@@ -254,12 +307,14 @@ class TOSWindow(tk.Toplevel):
         btn_row = tk.Frame(self, bg=BG_DARK)
         btn_row.pack(fill="x", padx=12, pady=(0, 12))
 
+        # Accept button: disabled uses TEXT_DIM; when enabled uses GREEN
         self._accept_btn = tk.Button(
             btn_row, text="I Accept", bg=TEXT_DIM, fg="white",
             font=("Segoe UI", 10, "bold"), relief="flat", bd=0, cursor="hand2",
             state="disabled", command=self._accept)
         self._accept_btn.pack(side="right", ipady=8, ipadx=24)
 
+        # Decline button: bg=BG_CARD, fg=RED
         tk.Button(btn_row, text="Decline & Exit", bg=BG_CARD, fg=RED,
                   font=F_SMALL, relief="flat", bd=0, cursor="hand2",
                   command=self._decline).pack(side="right", ipady=8, ipadx=16, padx=(0, 8))
@@ -273,13 +328,15 @@ class TOSWindow(tk.Toplevel):
             total_w = self._prog_bar_bg.winfo_width()
             self._prog_bar_fg.place_configure(width=int(total_w * end))
             if end >= 0.97:
-                self._chk.config(state="normal", fg=TEXT_MAIN)
+                # When enabled: TEXT_MAIN fg with ACCENT selectcolor
+                self._chk.config(state="normal", fg=TEXT_MAIN, selectcolor=ACCENT)
         except Exception:
             pass
 
     def _on_checkbox(self):
         if self._accepted_var.get():
-            self._accept_btn.config(state="normal", bg=ACCENT, activebackground="#1c6cc4")
+            # Accept button becomes GREEN when checkbox is ticked
+            self._accept_btn.config(state="normal", bg=GREEN, activebackground="#2ea043")
         else:
             self._accept_btn.config(state="disabled", bg=TEXT_DIM)
 
@@ -295,7 +352,7 @@ class TOSWindow(tk.Toplevel):
         self.destroy()
 
 
-# ── License / Activation Window (Thread-Safe Upgrade!) ───────────────────────
+# ── License / Activation Window ───────────────────────────────────────────────
 
 class LicenseWindow(tk.Toplevel):
     def __init__(self, parent: tk.Tk, prefill_key: str = "", error: str = ""):
@@ -304,83 +361,149 @@ class LicenseWindow(tk.Toplevel):
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
         self.grab_set()
-        
+
         self.session = None
         self._busy   = False
         self._prefill_error = error
         self._timeout_id = None
-        
+        self._spinner_id = None
+        self._spinner_state = 0
+
         # Safe thread-communication queue
         self._queue = queue.Queue()
 
         self._build(prefill_key)
         self.update_idletasks()
-        w, h = 500, 420
+        w, h = 500, 440
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self, prefill_key: str):
-        # Header
-        hdr = tk.Frame(self, bg=BG_PANEL, height=50)
+        # ── Improved header: 56px with shield icon ──
+        hdr = tk.Frame(self, bg=BG_PANEL, height=56)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
+
+        # Small shield canvas on the left
+        shield_cv = tk.Canvas(hdr, width=30, height=34, bg=BG_PANEL, highlightthickness=0)
+        shield_cv.place(x=14, y=11)
+        pts = [15, 0,  30, 6,  30, 20,  15, 34,  0, 20,  0, 6]
+        shield_cv.create_polygon(*pts, fill=ACCENT, outline="")
+        shield_cv.create_text(15, 17, text="S", fill="white", font=("Segoe UI", 11, "bold"))
+
+        # Title centered
         tk.Label(hdr, text="Activate SteamGuard", bg=BG_PANEL, fg=TEXT_MAIN,
-                 font=("Segoe UI", 12, "bold")).place(relx=0.5, rely=0.5, anchor="center")
+                 font=("Segoe UI", 12, "bold")).place(relx=0.5, rely=0.35, anchor="center")
 
-        # Shield icon
-        shield_frame = tk.Frame(self, bg=BG_DARK)
-        shield_frame.pack(pady=(16, 4))
-        cv = tk.Canvas(shield_frame, width=56, height=62, bg=BG_DARK, highlightthickness=0)
-        cv.pack()
-        cx, cy = 28, 31
-        pts = [cx, cy-28, cx+22, cy-18, cx+22, cy+4, cx, cy+28, cx-22, cy+4, cx-22, cy-18]
-        cv.create_polygon(*pts, fill="#1a3a5c", outline=ACCENT, width=2)
-        cv.create_text(cx, cy+2, text="S", fill=ACCENT, font=("Segoe UI", 18, "bold"))
-
+        # Subtitle
         tk.Label(self, text="Enter your license key and Discord User ID",
-                 bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL).pack()
+                 bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL).pack(pady=(14, 0))
+
+        # Thin separator line after subtitle
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=24, pady=(8, 0))
 
         form = tk.Frame(self, bg=BG_DARK)
         form.pack(fill="x", padx=32, pady=(16, 0))
 
-        tk.Label(form, text="License Key", bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        self._key_var = tk.StringVar(value=prefill_key)
-        key_entry = tk.Entry(form, textvariable=self._key_var, bg=BG_CARD, fg=TEXT_MAIN,
-                             insertbackground=TEXT_MAIN, font=("Courier New", 11), relief="flat", bd=6)
-        key_entry.pack(fill="x", pady=(2, 10))
-        key_entry.bind("<KeyRelease>", lambda e: self._auto_format_key())
+        # ── License Key label + entry + Paste button inline ──
+        tk.Label(form, text="License Key", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
 
-        tk.Label(form, text="Discord User ID", bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        self._key_var = tk.StringVar(value=prefill_key)
+        key_row = tk.Frame(form, bg=BG_DARK)
+        key_row.pack(fill="x", pady=(2, 10))
+
+        key_entry = tk.Entry(key_row, textvariable=self._key_var, bg=BG_CARD, fg=TEXT_MAIN,
+                             insertbackground=TEXT_MAIN, font=("Consolas", 11), relief="flat", bd=6)
+        key_entry.pack(side="left", fill="x", expand=True)
+        key_entry.bind("<KeyRelease>", lambda e: self._auto_format_key())
+        Tooltip(key_entry, "Your license key in XXXX-XXXX-XXXX-XXXX format")
+
+        def _paste_key():
+            try:
+                self._key_var.set(self.clipboard_get())
+                self._auto_format_key()
+            except Exception:
+                pass
+
+        paste_btn = tk.Button(key_row, text="Paste", bg=BG_CARD, fg=ACCENT, font=F_SMALL,
+                              relief="flat", bd=0, cursor="hand2", padx=8, command=_paste_key)
+        paste_btn.pack(side="left", padx=(4, 0), ipady=4)
+
+        # ── Discord User ID label + entry + help icon inline ──
+        tk.Label(form, text="Discord User ID", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+
+        discord_row = tk.Frame(form, bg=BG_DARK)
+        discord_row.pack(fill="x", pady=(2, 4))
+
         self._discord_var = tk.StringVar()
-        tk.Entry(form, textvariable=self._discord_var, bg=BG_CARD, fg=TEXT_MAIN,
-                 insertbackground=TEXT_MAIN, font=F_BODY, relief="flat", bd=6).pack(fill="x", pady=(2, 4))
+        discord_entry = tk.Entry(discord_row, textvariable=self._discord_var, bg=BG_CARD,
+                                 fg=TEXT_MAIN, insertbackground=TEXT_MAIN, font=F_BODY,
+                                 relief="flat", bd=6)
+        discord_entry.pack(side="left", fill="x", expand=True)
+        Tooltip(discord_entry, "Your 17-19 digit Discord User ID (not username)")
 
         def _open_help():
             webbrowser.open("https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID-")
-        tk.Button(form, text="How do I find my Discord User ID?", bg=BG_DARK, fg=ACCENT,
-                  font=("Segoe UI", 8), relief="flat", bd=0, cursor="hand2", command=_open_help).pack(anchor="w", pady=(0, 8))
 
-        self._status_lbl = tk.Label(self, text="", bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL, wraplength=440)
-        self._status_lbl.pack(pady=(4, 0))
+        help_btn = tk.Button(discord_row, text="?", bg=BG_CARD, fg=ACCENT, font=F_SMALL,
+                             relief="flat", bd=0, cursor="hand2", padx=6, command=_open_help)
+        help_btn.pack(side="left", padx=(4, 0), ipady=4)
+        Tooltip(help_btn, "Open Discord help page to find your User ID")
+
+        tk.Button(form, text="How do I find my Discord User ID?", bg=BG_DARK, fg=ACCENT,
+                  font=("Segoe UI", 8), relief="flat", bd=0, cursor="hand2",
+                  command=_open_help).pack(anchor="w", pady=(0, 8))
+
+        # ── Status label with colored left-border bar effect ──
+        self._status_frame = tk.Frame(self, bg=BG_DARK)
+        self._status_frame.pack(fill="x", padx=32, pady=(4, 0))
+
+        # Left border indicator (3px, hidden initially)
+        self._status_bar = tk.Frame(self._status_frame, bg=BG_DARK, width=3)
+        self._status_bar.pack(side="left", fill="y")
+
+        self._status_lbl = tk.Label(self._status_frame, text="", bg=BG_DARK, fg=TEXT_DIM,
+                                    font=F_SMALL, wraplength=420, justify="left", padx=6)
+        self._status_lbl.pack(side="left", fill="x", expand=True)
 
         if self._prefill_error:
             self._set_status(f"✗ {self._prefill_error}", RED)
 
+        # ── Activate button with hover effects ──
         self._btn = tk.Button(
             self, text="Activate", bg=ACCENT, fg="white", font=("Segoe UI", 11, "bold"),
-            relief="flat", bd=0, cursor="hand2", activebackground="#1c6cc4", command=self._on_activate)
+            relief="flat", bd=0, cursor="hand2", activebackground="#388bfd",
+            command=self._on_activate)
         self._btn.pack(fill="x", padx=32, pady=(8, 0), ipady=10)
+        Tooltip(self._btn, "Submit key and Discord ID to activate your license")
 
+        # Hover effects on Activate button
+        self._btn.bind("<Enter>", self._btn_hover_in)
+        self._btn.bind("<Leave>", self._btn_hover_out)
+
+        # ── Join Discord row ──
         join_row = tk.Frame(self, bg=BG_DARK)
         join_row.pack(pady=(10, 0))
-        tk.Label(join_row, text="Don't have a key? ", bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL).pack(side="left")
+        tk.Label(join_row, text="Don't have a key? ", bg=BG_DARK, fg=TEXT_DIM,
+                 font=F_SMALL).pack(side="left")
 
         def _open_discord():
             webbrowser.open("https://discord.gg/REPLACE_YOUR_INVITE")
-        tk.Button(join_row, text="Join our Discord", bg=BG_DARK, fg=ACCENT, font=F_SMALL,
+
+        tk.Button(join_row, text="⚙ Join our Discord", bg=BG_DARK, fg=ACCENT, font=F_SMALL,
                   relief="flat", bd=0, cursor="hand2", command=_open_discord).pack(side="left")
+
+    def _btn_hover_in(self, event=None):
+        if not self._busy:
+            self._btn.config(bg="#388bfd")
+
+    def _btn_hover_out(self, event=None):
+        if not self._busy:
+            self._btn.config(bg=ACCENT)
 
     def _auto_format_key(self):
         raw = self._key_var.get().upper().replace("-", "")
@@ -389,6 +512,17 @@ class LicenseWindow(tk.Toplevel):
         if len(raw) > 22:  raw = raw[:22] + "-" + raw[22:]
         if len(raw) > 31:  raw = raw[:31] + "-" + raw[31:39]
         self._key_var.set(raw)
+
+    def _spin(self):
+        if not self._busy:
+            return
+        dots = ["Activating .  ", "Activating .. ", "Activating ..."][self._spinner_state % 3]
+        self._spinner_state += 1
+        try:
+            self._btn.config(text=dots)
+        except Exception:
+            return
+        self._spinner_id = self.after(400, self._spin)
 
     def _on_activate(self):
         if self._busy:
@@ -407,6 +541,10 @@ class LicenseWindow(tk.Toplevel):
         self._btn.config(state="disabled", text="Activating…", bg=TEXT_DIM)
         self._set_status("Contacting license server…", TEXT_DIM)
 
+        # Start spinner animation
+        self._spinner_state = 0
+        self._spin()
+
         # Clear old queue elements if any
         while not self._queue.empty():
             try:
@@ -424,7 +562,6 @@ class LicenseWindow(tk.Toplevel):
             from auth.client import activate
             try:
                 result = activate(key, discord_id)
-                # Thread-safe queue storage
                 self._queue.put({"status": "success", "result": result, "key": key, "discord_id": discord_id})
             except Exception as e:
                 from auth.client import AuthResult
@@ -441,17 +578,32 @@ class LicenseWindow(tk.Toplevel):
             msg = self._queue.get_nowait()
             self._on_result(msg["result"], msg["key"], msg["discord_id"])
         except queue.Empty:
-            # Re-schedule polling in 50 milliseconds
             self.after(50, self._process_queue)
 
     def _reset_on_timeout(self):
         if self._busy:
+            # Cancel spinner
+            if hasattr(self, '_spinner_id') and self._spinner_id:
+                try:
+                    self.after_cancel(self._spinner_id)
+                except Exception:
+                    pass
+                self._spinner_id = None
             self._busy = False
             self._btn.config(state="normal", text="Activate", bg=ACCENT)
             self._set_status("Server did not respond in 20 seconds. Check your internet or try again.", RED)
 
     def _on_result(self, result, key: str, discord_id: str):
         self._busy = False
+
+        # Cancel spinner
+        if hasattr(self, '_spinner_id') and self._spinner_id:
+            try:
+                self.after_cancel(self._spinner_id)
+            except Exception:
+                pass
+            self._spinner_id = None
+
         if self._timeout_id is not None:
             self.after_cancel(self._timeout_id)
             self._timeout_id = None
@@ -460,7 +612,7 @@ class LicenseWindow(tk.Toplevel):
         if result.ok:
             from auth.cache import save_session
             save_session(result.session_token, result.token_expires, key, discord_id)
-            
+
             cfg = _load_config()
             cfg["license_key"]      = key
             cfg["discord_user_id"]  = discord_id
@@ -479,6 +631,11 @@ class LicenseWindow(tk.Toplevel):
 
     def _set_status(self, msg: str, color: str = TEXT_DIM):
         self._status_lbl.config(text=msg, fg=color)
+        # Show left-border bar with matching color for error/success, hide for dim
+        if color in (RED, GREEN, YELLOW):
+            self._status_bar.config(bg=color, width=3)
+        else:
+            self._status_bar.config(bg=BG_DARK, width=3)
 
     def _on_close(self):
         self.session = None
