@@ -713,7 +713,8 @@ class GameBadgePanel(tk.Frame):
     """
 
     def __init__(self, parent, **kwargs):
-        super().__init__(parent, bg=BG_CARD, **kwargs)
+        super().__init__(parent, bg=BG_DARK, height=1, **kwargs)
+        self.pack_propagate(False)
         self._labels: List[tk.Label] = []
 
     def update_game(self, appid: Optional[int], name: str = ""):
@@ -721,10 +722,12 @@ class GameBadgePanel(tk.Frame):
             lbl.destroy()
         self._labels.clear()
         if not appid:
+            self.config(height=1)
             return
-        placeholder = tk.Label(self, text="Checking eligibility…",
-                                bg=BG_CARD, fg=TEXT_DIM, font=("Segoe UI", 7))
-        placeholder.pack(side="left", padx=(0,4))
+        self.config(height=20)
+        placeholder = tk.Label(self, text="Checking…",
+                                bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7))
+        placeholder.pack(side="left", padx=(4,4))
         self._labels.append(placeholder)
         threading.Thread(target=self._fetch, args=(appid, name),
                          daemon=True).start()
@@ -740,16 +743,21 @@ class GameBadgePanel(tk.Frame):
         for lbl in self._labels:
             lbl.destroy()
         self._labels.clear()
+        badges = c.get("badges", [])
+        if not badges:
+            self.config(height=1)
+            return
+        self.config(height=20)
         COLOR = {"✅": GREEN, "❌": RED, "⚠": YELLOW, "❓": TEXT_DIM}
-        for badge in c.get("badges", []):
+        for badge in badges:
             col = TEXT_DIM
             for pfx, clr in COLOR.items():
                 if badge.startswith(pfx):
                     col = clr
                     break
-            lbl = tk.Label(self, text=badge, bg=BG_CARD, fg=col,
+            lbl = tk.Label(self, text=badge, bg=BG_DARK, fg=col,
                            font=("Segoe UI", 7, "bold"))
-            lbl.pack(side="left", padx=(0,6))
+            lbl.pack(side="left", padx=(4,6))
             self._labels.append(lbl)
 
 
