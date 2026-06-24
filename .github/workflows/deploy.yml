@@ -144,34 +144,34 @@ jobs:
           $actor     = "${{ github.actor }}"
 
           $json = @"
-          {
-            "embeds": [{
-              "title": "🛡 SteamGuard Client Updated — v$version",
-              "description": "**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your license keys.",
-              "color": 2450411,
-              "fields": [
-                {
-                  "name": "📋 What's New",
-                  "value": "$changelog",
-                  "inline": false
-                },
-                {
-                  "name": "✅ Requirements",
-                  "value": "- Member of this server\n- Subscribed to our YouTube channel\n- Run as Administrator (auto-handled by app)",
-                  "inline": false
-                },
-                {
-                  "name": "⬇️ Download",
-                  "value": "**[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)**\n*Always run the latest version — older builds may be blocked.*",
-                  "inline": false
-                }
-              ],
-              "footer": {
-                "text": "SteamGuard Security  •  Build #$buildNum  •  $sha  •  pushed by $actor"
-              },
-              "timestamp": "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
-            }]
-          }
+{
+  "embeds": [{
+    "title": "🛡 SteamGuard Client Updated — v$version",
+    "description": "**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your license keys.",
+    "color": 2450411,
+    "fields": [
+      {
+        "name": "📋 What's New",
+        "value": "$changelog",
+        "inline": false
+      },
+      {
+        "name": "✅ Requirements",
+        "value": "- Member of this server\n- Subscribed to our YouTube channel\n- Run as Administrator (auto-handled by app)",
+        "inline": false
+      },
+      {
+        "name": "⬇️ Download",
+        "value": "**[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)**\n*Always run the latest version — older builds may be blocked.*",
+        "inline": false
+      }
+    ],
+    "footer": {
+      "text": "SteamGuard Security  •  Build #$buildNum  •  $sha  •  pushed by $actor"
+    },
+    "timestamp": "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+  }]
+}
 "@
 
           Invoke-WebRequest `
