@@ -58,6 +58,11 @@ import urllib.request
 import webbrowser
 import sys
 import json as _json_mod
+from steam_features import (
+    WhyLockedDialog, SteamDeckHealthDialog, OfflineReadinessDialog,
+    FamilyCooldownDialog, DLCAdvisorDialog, PreLaunchWarning,
+    classify_game, GameBadgePanel
+)
 
 CURRENT_VERSION = "1.3.0"
 
@@ -1099,6 +1104,7 @@ class SteamGuard(tk.Tk):
         self._auto_heal.trace_add("write", lambda *_: self._save_settings())
 
         self._monitor = NetworkMonitor(self._on_cm_detected)
+        self._pre_launch = PreLaunchWarning(self._steam_dir, self._on_pre_launch_warning)
 
         # Animation state
         self._pulse_rings: list[dict] = []   # active expanding rings
@@ -1128,6 +1134,17 @@ class SteamGuard(tk.Tk):
             "autostart":    self._autostart_var.get(),
         }
         save_config(cfg)
+
+    # ── Pre-launch warning callback ───────────────────────────────────────────
+
+    def _on_pre_launch_warning(self, appid: int, game_name: str, locked_by: str):
+        """Called by PreLaunchWarning when a new game launches while library is locked."""
+        self.after(0, lambda: messagebox.showwarning(
+            "SteamGuard — Launch Warning",
+            f"⚠ {locked_by} is currently using your shared library.\n"
+            f"Launching will kick them out of {game_name}.\n\n"
+            f"Consider waiting until they finish, or start protection first."
+        ))
 
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
@@ -1218,6 +1235,7 @@ class SteamGuard(tk.Tk):
                             f"Could not create rule: {msg}", True))
 
             self._monitor.start()
+            self._pre_launch.start()
             self.after(0, lambda: self._log("Network monitor active (4 layers)."))
             # Start game detection loop
             self.after(2000, self._detect_game_loop)
@@ -1851,6 +1869,10 @@ class SteamGuard(tk.Tk):
                                     fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
         self._game_badge.pack(side="right", padx=10)
 
+        # ── Game badge panel (shareable / VAC / 3rd-party badges) ─────────────
+        self._badge_panel = GameBadgePanel(game_section)
+        self._badge_panel.pack(fill="x", pady=(2, 0))
+
         # ── Big protect button ────────────────────────────────────────────────
         self._protect_btn = tk.Button(
             self, text="🛡  START PROTECTION",
@@ -1985,6 +2007,72 @@ class SteamGuard(tk.Tk):
             command=self._export_share_card)
         sc_export_btn.pack(side="left", ipady=4, ipadx=10)
         Tooltip(sc_export_btn, "Save a PNG share card to your Desktop")
+
+
+        # TOOLS section
+        tools_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
+        tools_sep.pack(fill="x", padx=12, pady=(10, 0))
+
+        tools_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        tools_header.pack(fill="x", padx=12, pady=(6, 0))
+        tk.Label(tools_header, text="TOOLS", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
+
+        tools_row1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        tools_row1.pack(fill="x", padx=12, pady=(4, 0))
+
+        why_btn = tk.Button(tools_row1, text="\U0001f512 Why Locked?",
+                            bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
+                            relief="flat", bd=0, cursor="hand2",
+                            activebackground=BORDER,
+                            command=lambda: WhyLockedDialog(self, self._steam_dir))
+        why_btn.pack(side="left", ipady=4, ipadx=8)
+        why_btn.bind("<Enter>", lambda e: self._hover_enter(why_btn, BORDER))
+        why_btn.bind("<Leave>", lambda e: self._hover_leave(why_btn, BG_CARD))
+        Tooltip(why_btn, "See who locked your shared library and why")
+
+        dlc_btn = tk.Button(tools_row1, text="\U0001f4bf DLC Advisor",
+                            bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
+                            relief="flat", bd=0, cursor="hand2",
+                            activebackground=BORDER,
+                            command=lambda: DLCAdvisorDialog(self, self._steam_dir))
+        dlc_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
+        dlc_btn.bind("<Enter>", lambda e: self._hover_enter(dlc_btn, BORDER))
+        dlc_btn.bind("<Leave>", lambda e: self._hover_leave(dlc_btn, BG_CARD))
+        Tooltip(dlc_btn, "Check which DLC your friend can access through sharing")
+
+        deck_btn = tk.Button(tools_row1, text="\U0001f3ae Deck Health",
+                             bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
+                             relief="flat", bd=0, cursor="hand2",
+                             activebackground=BORDER,
+                             command=lambda: SteamDeckHealthDialog(self, self._steam_dir))
+        deck_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
+        deck_btn.bind("<Enter>", lambda e: self._hover_enter(deck_btn, BORDER))
+        deck_btn.bind("<Leave>", lambda e: self._hover_leave(deck_btn, BG_CARD))
+        Tooltip(deck_btn, "Verify your setup is correctly configured for Steam Deck sharing")
+
+        tools_row2 = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        tools_row2.pack(fill="x", padx=12, pady=(4, 0))
+
+        offline_btn = tk.Button(tools_row2, text="\u2708 Offline Ready",
+                                bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
+                                relief="flat", bd=0, cursor="hand2",
+                                activebackground=BORDER,
+                                command=lambda: OfflineReadinessDialog(self, self._steam_dir))
+        offline_btn.pack(side="left", ipady=4, ipadx=8)
+        offline_btn.bind("<Enter>", lambda e: self._hover_enter(offline_btn, BORDER))
+        offline_btn.bind("<Leave>", lambda e: self._hover_leave(offline_btn, BG_CARD))
+        Tooltip(offline_btn, "Check if your games are ready to play without internet")
+
+        cooldown_btn = tk.Button(tools_row2, text="\u23f0 Cooldown Sim",
+                                 bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
+                                 relief="flat", bd=0, cursor="hand2",
+                                 activebackground=BORDER,
+                                 command=lambda: FamilyCooldownDialog(self, self._steam_dir))
+        cooldown_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
+        cooldown_btn.bind("<Enter>", lambda e: self._hover_enter(cooldown_btn, BORDER))
+        cooldown_btn.bind("<Leave>", lambda e: self._hover_leave(cooldown_btn, BG_CARD))
+        Tooltip(cooldown_btn, "Simulate family sharing cooldown scenarios and unlock times")
 
         # Heartbeat status
         hb_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
@@ -2207,6 +2295,7 @@ class SteamGuard(tk.Tk):
                 fg=TEXT_DIM)
             self._game_badge.config(text="● ACTIVE", fg=GREEN)
             self._fetch_game_art(game["appid"])
+            self._badge_panel.update_game(game["appid"], game["name"])
             # Update rich presence
             if self._rpc is not None:
                 try:
@@ -2226,6 +2315,7 @@ class SteamGuard(tk.Tk):
             self._game_badge.config(text="", fg=TEXT_DIM)
             self._game_icon.config(image="", text="🎮")
             self._game_art_photo = None
+            self._badge_panel.update_game(None, "")
 
     def _anim_tick(self):
         """
