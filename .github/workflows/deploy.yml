@@ -33,8 +33,14 @@ jobs:
           gcloud run deploy steamguard \
           --source ./server \
           --region us-central1 \
-          --allow-unauthenticated \
-          --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest \
+          --set-secrets \
+            SECRET_KEY=SECRET_KEY:latest,\
+            ADMIN_KEY=ADMIN_KEY:latest,\
+            DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,\
+            DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,\
+            DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,\
+            DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,\
+            MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest \
           --quiet
 
   build-windows-client:
@@ -48,7 +54,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -88,7 +94,7 @@ jobs:
       - name: Post Embed to Discord
         shell: pwsh
         run: |
-          $json = '{"embeds":[{"title":"SteamGuard Client Updated!","description":"**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your personal license keys.","color":2450411,"fields":[{"name":"Requirements","value":"- Be a Member of this server\n- Be subscribed to our YouTube channel\n- Must launch the application as Windows Administrator (auto-handled)","inline":false},{"name":"Download Area (Latest Build)","value":"**[Click here to pass Linkvertise and Download](https://linkvertise.com/YOUR_LINK_HERE)**","inline":false}],"footer":{"text":"SteamGuard Security - Build v$env:GITHUB_RUN_NUMBER"}}]}'
+          $json = '{"embeds":[{"title":"SteamGuard Client Updated!","description":"**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes.","color":2450411,"fields":[{"name":"Requirements","value":"- Member of this server\n- Subscribed to YouTube channel\n- Run as Administrator (auto-handled)","inline":false},{"name":"Download","value":"**[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)**","inline":false}],"footer":{"text":"SteamGuard Security - Build v$env:GITHUB_RUN_NUMBER"}}]}'
           Invoke-WebRequest -Uri $env:DISCORD_WEBHOOK_URL -Method POST -ContentType "application/json" -Body $json
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

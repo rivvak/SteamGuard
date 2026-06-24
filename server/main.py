@@ -24,7 +24,6 @@ Endpoints:
   POST /badges/grant              — admin: grant a badge to a user
   GET  /badges/{discord_user_id}  — badges and XP for a user
   POST /device/reset              — self-service device reset with cooldown
-  POST /stripe/webhook            — Stripe payment webhook
   GET  /stats/server              — public aggregate server stats
   POST /leaderboard/update        — update leaderboard entry
   GET  /leaderboard               — top 10 by heals for current week
@@ -58,7 +57,6 @@ DISCORD_ROLE_ID     = os.environ["DISCORD_ROLE_ID"]      # "Member" role ID
 YOUTUBE_CHANNEL_ID  = os.environ.get("YOUTUBE_CHANNEL_ID", "")  # Your YT channel ID
 
 MIN_SUPPORTED_VERSION = os.environ.get("MIN_SUPPORTED_VERSION", "1.0.0")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATS_CHANNEL_ID      = os.environ.get("STATS_CHANNEL_ID", "")
 
@@ -293,51 +291,6 @@ def _check_and_award_badges(
             LOG.warning(f"Badge award write failed: {e}")
 
     return badges
-
-
-async def grant_premium(discord_user_id: str):
-    """Find license by discord_user_id, set tier='premium', premium_expires_at=now+30days."""
-    try:
-        docs = (db.collection(LICENSES_COL)
-                  .where("discord_user_id", "==", discord_user_id)
-                  .stream())
-        premium_expires = utcnow() + timedelta(days=30)
-        for doc in docs:
-            doc.reference.update({
-                "tier":                "premium",
-                "premium_expires_at":  premium_expires,
-            })
-            _log_event(doc.id, "premium_granted", {"discord_user_id": discord_user_id})
-
-        # Post to Discord webhook if configured
-        if DISCORD_WEBHOOK_URL:
-            try:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    await client.post(DISCORD_WEBHOOK_URL, json={
-                        "content": f"Premium granted to Discord user {discord_user_id} until {premium_expires.isoformat()}"
-                    })
-            except Exception as e:
-                LOG.warning(f"Discord webhook notify failed: {e}")
-    except Exception as e:
-        LOG.warning(f"grant_premium failed for {discord_user_id}: {e}")
-
-
-async def revoke_premium(discord_user_id: str):
-    """Find license, set tier='free', log event."""
-    try:
-        docs = (db.collection(LICENSES_COL)
-                  .where("discord_user_id", "==", discord_user_id)
-                  .stream())
-        for doc in docs:
-            doc.reference.update({
-                "tier":               "free",
-                "premium_expires_at": None,
-            })
-            _log_event(doc.id, "premium_revoked", {"discord_user_id": discord_user_id})
-    except Exception as e:
-        LOG.warning(f"revoke_premium failed for {discord_user_id}: {e}")
-
-
 def _get_iso_week() -> str:
     """Return current ISO year-week string like '2026-W25'."""
     now = utcnow()
@@ -1290,58 +1243,6 @@ async def device_reset(req: DeviceResetRequest):
         raise HTTPException(status_code=500, detail="Failed to reset device")
 
     return {"ok": True, "next_reset_allowed_at": next_allowed_at}
-
-# ── /stripe/webhook ───────────────────────────────────────────────────────────
-
-@app.post("/stripe/webhook")
-async def stripe_webhook(request: Request):
-    try:
-        payload    = await request.body()
-        sig_header = request.headers.get("stripe-signature", "")
-
-        try:
-            import stripe  # type: ignore
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, STRIPE_WEBHOOK_SECRET
-            )
-        except Exception as e:
-            LOG.warning(f"Stripe signature validation failed: {e}")
-            raise HTTPException(status_code=400, detail="Invalid stripe signature")
-
-        event_type = event.get("type", "")
-        data_obj   = event.get("data", {}).get("object", {})
-
-        if event_type == "checkout.session.completed":
-            discord_id = data_obj.get("metadata", {}).get("discord_id", "")
-            if discord_id:
-                await grant_premium(discord_id)
-            else:
-                LOG.warning("Stripe checkout.session.completed missing discord_id in metadata")
-
-        elif event_type in ("customer.subscription.deleted", "invoice.payment_failed"):
-            # Try metadata first, then customer email fallback
-            discord_id = data_obj.get("metadata", {}).get("discord_id", "")
-            if not discord_id:
-                # Try subscription metadata
-                discord_id = data_obj.get("metadata", {}).get("discord_id", "")
-            if discord_id:
-                await revoke_premium(discord_id)
-            else:
-                LOG.warning(f"Stripe {event_type} missing discord_id in metadata")
-
-        else:
-            LOG.info(f"Unhandled Stripe event type: {event_type}")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        LOG.error(f"Stripe webhook handler error: {e}")
-        # Return 200 to prevent Stripe from retrying non-signature errors
-        return {"received": True, "error": str(e)}
-
-    return {"received": True}
-
-# ── /stats/server ─────────────────────────────────────────────────────────────
 
 @app.get("/stats/server")
 async def stats_server():
