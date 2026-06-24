@@ -1866,9 +1866,8 @@ class SteamGuard(tk.Tk):
 
         self._game_icon = tk.Label(self._game_card, text="🎮", bg=BG_CARD,
                                    font=("Segoe UI Emoji", 18),
-                                   width=80, height=37,
                                    compound="center")
-        self._game_icon.pack(side="left", padx=(12, 8), pady=8)
+        self._game_icon.pack(side="left", padx=(12, 8), pady=6)
 
         game_text = tk.Frame(self._game_card, bg=BG_CARD)
         game_text.pack(side="left", fill="x", expand=True, pady=10)
