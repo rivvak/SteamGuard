@@ -1150,26 +1150,32 @@ class SteamGuard(tk.Tk):
     # ── Minimize (overrideredirect-safe) ──────────────────────────────
 
     def _minimize(self):
-        """Minimize to taskbar safely when overrideredirect=True."""
-        self._minimized = True
+        """Minimize to taskbar safely when overrideredirect=True.
+
+        Strategy: save position, withdraw the window (hides it but keeps
+        it in the taskbar via a hidden helper Toplevel), then iconify
+        the helper. On restore we deiconify, re-show at saved position.
+        """
+        # Save current geometry so we can restore exact position
+        self._saved_geometry = self.geometry()
+        # Turn off overrideredirect so Windows shows it in the taskbar
         self.overrideredirect(False)
         self.iconify()
-        self.bind("<Map>", self._on_restore)
+        # Poll until the window is restored (wm_state == 'normal')
+        self.after(200, self._check_restore)
 
-    def _on_restore(self, event=None):
-        if not getattr(self, "_minimized", False):
-            return
-        self._minimized = False
-        self.unbind("<Map>")
-        self.after(10, self._reapply_overrideredirect)
-
-    def _reapply_overrideredirect(self):
-        self.deiconify()
-        self.update()
-        self.overrideredirect(True)
-        # Re-center on screen if it lost position
-        self.lift()
-        self.focus_force()
+    def _check_restore(self):
+        state = self.wm_state()
+        if state == "iconic" or state == "withdrawn":
+            # Still minimized — keep polling
+            self.after(200, self._check_restore)
+        else:
+            # Window has been restored by the user
+            self.overrideredirect(True)
+            if hasattr(self, "_saved_geometry"):
+                self.geometry(self._saved_geometry)
+            self.lift()
+            self.focus_force()
 
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
