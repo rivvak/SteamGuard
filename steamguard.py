@@ -1942,6 +1942,66 @@ class SteamGuard(tk.Tk):
                   background=[("selected", BG_PANEL)],
                   foreground=[("selected", TEXT_MAIN)])
 
+
+        # ── Control toolbar (was Settings tab) ──────────────────────────────
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=0, pady=(6,0))
+        ctrl = tk.Frame(self, bg=BG_DARK)
+        ctrl.pack(fill="x", padx=12, pady=(4, 2))
+
+        # Row 1: checkboxes + scan + help
+        ctrl_r1 = tk.Frame(ctrl, bg=BG_DARK)
+        ctrl_r1.pack(fill="x")
+        tk.Checkbutton(ctrl_r1, text="Auto-protect", variable=self._auto_heal,
+                       bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
+                       selectcolor=BG_CARD, activebackground=BG_DARK,
+                       activeforeground=TEXT_MAIN,
+                       highlightthickness=0).pack(side="left")
+        tk.Checkbutton(ctrl_r1, text="Start with Windows", variable=self._autostart_var,
+                       bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
+                       selectcolor=BG_CARD, activebackground=BG_DARK,
+                       activeforeground=TEXT_MAIN, highlightthickness=0,
+                       command=self._on_autostart_toggle).pack(side="left", padx=(8,0))
+        _hb = tk.Button(ctrl_r1, text="? Help", bg=BG_CARD, fg=ACCENT,
+                        font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                        activebackground=BORDER, command=self._show_help)
+        _hb.pack(side="right", ipady=3, ipadx=6)
+        _hb.bind("<Enter>", lambda e: self._hover_enter(_hb, BORDER))
+        _hb.bind("<Leave>", lambda e: self._hover_leave(_hb, BG_CARD))
+        _sb = tk.Button(ctrl_r1, text="Scan", bg=BG_CARD, fg=TEXT_DIM,
+                        font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                        activebackground=BORDER, command=self._rescan_games)
+        _sb.pack(side="right", ipady=3, ipadx=6, padx=(0,4))
+        _sb.bind("<Enter>", lambda e: self._hover_enter(_sb, BORDER))
+        _sb.bind("<Leave>", lambda e: self._hover_leave(_sb, BG_CARD))
+        Tooltip(_sb, "Re-scan Steam library for installed games")
+
+        # Row 2: tools buttons
+        ctrl_r2 = tk.Frame(ctrl, bg=BG_DARK)
+        ctrl_r2.pack(fill="x", pady=(3,0))
+        for _lbl, _cmd, _tip in [
+            ("🔒 Why Locked?",  lambda: WhyLockedDialog(self, self._steam_dir),       "See who locked your shared library"),
+            ("💿 DLC Advisor",   lambda: DLCAdvisorDialog(self, self._steam_dir),      "Check DLC sharing coverage"),
+            ("🎮 Deck Health",   lambda: SteamDeckHealthDialog(self, self._steam_dir), "Verify Steam Deck sharing setup"),
+            ("✈ Offline Ready",  lambda: OfflineReadinessDialog(self, self._steam_dir),  "Check offline play readiness"),
+            ("⏰ Cooldown Sim",   lambda: FamilyCooldownDialog(self, self._steam_dir),    "Simulate cooldown scenarios"),
+            ("📤 Share Card",   self._export_share_card,                               "Export PNG share card"),
+            ("Export Log",        self._export_log,                                      "Save event log to Desktop"),
+        ]:
+            _b = tk.Button(ctrl_r2, text=_lbl, bg=BG_CARD, fg=TEXT_DIM,
+                           font=F_SMALL, relief="flat", bd=0, cursor="hand2",
+                           activebackground=BORDER, command=_cmd)
+            _b.pack(side="left", ipady=3, ipadx=6, padx=(0,3))
+            _b.bind("<Enter>", lambda e, b=_b: self._hover_enter(b, BORDER))
+            _b.bind("<Leave>", lambda e, b=_b: self._hover_leave(b, BG_CARD))
+            Tooltip(_b, _tip)
+
+        # Heartbeat status label (needed by heartbeat loop)
+        self._heartbeat_status_lbl = tk.Label(ctrl, text="● Server sync: —",
+            bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7), anchor="w")
+        self._heartbeat_status_lbl.pack(anchor="w", pady=(2,0))
+
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=0, pady=(2,0))
+
         nb = ttk.Notebook(self, style="Dark.TNotebook")
         nb.pack(fill="both", expand=True, padx=0, pady=(8, 0))
 
@@ -1957,168 +2017,6 @@ class SteamGuard(tk.Tk):
             log_outer, bg=BG_PANEL, fg=TEXT_DIM, font=F_MONO,
             relief="flat", bd=0, state="disabled", wrap="word")
         self._log_w.pack(fill="both", expand=True)
-
-        # ── Tab 3: Settings ────────────────────────────────────────────────────
-        settings_frame = tk.Frame(nb, bg=BG_DARK)
-        nb.add(settings_frame, text="SETTINGS")
-
-        # Use a frame variable for the settings tab content
-        # Plain frame — content fits without scrolling
-        settings_tab_frame = tk.Frame(settings_frame, bg=BG_DARK)
-        settings_tab_frame.pack(fill="both", expand=True)
-
-        opts1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        opts1.pack(fill="x", padx=12, pady=(10, 0))
-        tk.Checkbutton(opts1, text="Auto-protect when game launches",
-                       variable=self._auto_heal,
-                       bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
-                       selectcolor=BG_CARD, activebackground=BG_DARK,
-                       activeforeground=TEXT_MAIN,
-                       highlightthickness=0).pack(side="left")
-        scan_btn = tk.Button(opts1, text="Scan games", bg=BG_CARD, fg=TEXT_DIM,
-                             font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                             activebackground=BORDER,
-                             command=self._rescan_games)
-        scan_btn.pack(side="right", ipady=4, ipadx=8)
-        scan_btn.bind("<Enter>", lambda e: self._hover_enter(scan_btn, BORDER))
-        scan_btn.bind("<Leave>", lambda e: self._hover_leave(scan_btn, BG_CARD))
-        Tooltip(scan_btn, "Re-scan all Steam library folders for installed games")
-
-        opts2 = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        opts2.pack(fill="x", padx=12, pady=(6, 0))
-        tk.Checkbutton(opts2, text="Start with Windows",
-                       variable=self._autostart_var,
-                       bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL,
-                       selectcolor=BG_CARD, activebackground=BG_DARK,
-                       activeforeground=TEXT_MAIN, highlightthickness=0,
-                       command=self._on_autostart_toggle).pack(side="left")
-        help_btn = tk.Button(opts2, text="? Help", bg=BG_CARD, fg=ACCENT,
-                             font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                             activebackground=BORDER,
-                             command=self._show_help)
-        help_btn.pack(side="right", ipady=4, ipadx=8)
-        help_btn.bind("<Enter>", lambda e: self._hover_enter(help_btn, BORDER))
-        help_btn.bind("<Leave>", lambda e: self._hover_leave(help_btn, BG_CARD))
-
-        steam_int_btn = tk.Button(opts2, text="Steam Integration", bg=BG_CARD, fg=TEXT_DIM,
-                                  font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                                  activebackground=BORDER,
-                                  command=self._show_steam_integration)
-        steam_int_btn.pack(side="right", ipady=4, ipadx=8, padx=(0, 4))
-        steam_int_btn.bind("<Enter>", lambda e: self._hover_enter(steam_int_btn, BORDER))
-        steam_int_btn.bind("<Leave>", lambda e: self._hover_leave(steam_int_btn, BG_CARD))
-
-        opts3 = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        opts3.pack(fill="x", padx=12, pady=(6, 0))
-        export_btn = tk.Button(opts3, text="Export Log", bg=BG_CARD, fg=TEXT_DIM,
-                               font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                               activebackground=BORDER,
-                               command=self._export_log)
-        export_btn.pack(side="left", ipady=4, ipadx=8)
-        export_btn.bind("<Enter>", lambda e: self._hover_enter(export_btn, BORDER))
-        export_btn.bind("<Leave>", lambda e: self._hover_leave(export_btn, BG_CARD))
-        Tooltip(export_btn, "Save the event log to your Desktop as a .txt file")
-
-        # Share Card section in Settings tab
-        sc_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
-        sc_sep.pack(fill="x", padx=12, pady=(10, 0))
-
-        sc_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        sc_header.pack(fill="x", padx=12, pady=(6, 0))
-        tk.Label(sc_header, text="SHARE CARD", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
-
-        sc_row = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        sc_row.pack(fill="x", padx=12, pady=(4, 0))
-        sc_export_btn = tk.Button(sc_row, text="📤  Export Share Card",
-            bg=ACCENT, fg="white", font=F_SMALL,
-            relief="flat", bd=0, cursor="hand2",
-            activebackground="#1c6cc4",
-            command=self._export_share_card)
-        sc_export_btn.pack(side="left", ipady=4, ipadx=10)
-        Tooltip(sc_export_btn, "Save a PNG share card to your Desktop")
-
-
-        # TOOLS section
-        tools_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
-        tools_sep.pack(fill="x", padx=12, pady=(10, 0))
-
-        tools_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        tools_header.pack(fill="x", padx=12, pady=(6, 0))
-        tk.Label(tools_header, text="TOOLS", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
-
-        tools_row1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        tools_row1.pack(fill="x", padx=12, pady=(4, 0))
-
-        why_btn = tk.Button(tools_row1, text="\U0001f512 Why Locked?",
-                            bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
-                            relief="flat", bd=0, cursor="hand2",
-                            activebackground=BORDER,
-                            command=lambda: WhyLockedDialog(self, self._steam_dir))
-        why_btn.pack(side="left", ipady=4, ipadx=8)
-        why_btn.bind("<Enter>", lambda e: self._hover_enter(why_btn, BORDER))
-        why_btn.bind("<Leave>", lambda e: self._hover_leave(why_btn, BG_CARD))
-        Tooltip(why_btn, "See who locked your shared library and why")
-
-        dlc_btn = tk.Button(tools_row1, text="\U0001f4bf DLC Advisor",
-                            bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
-                            relief="flat", bd=0, cursor="hand2",
-                            activebackground=BORDER,
-                            command=lambda: DLCAdvisorDialog(self, self._steam_dir))
-        dlc_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
-        dlc_btn.bind("<Enter>", lambda e: self._hover_enter(dlc_btn, BORDER))
-        dlc_btn.bind("<Leave>", lambda e: self._hover_leave(dlc_btn, BG_CARD))
-        Tooltip(dlc_btn, "Check which DLC your friend can access through sharing")
-
-        deck_btn = tk.Button(tools_row1, text="\U0001f3ae Deck Health",
-                             bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
-                             relief="flat", bd=0, cursor="hand2",
-                             activebackground=BORDER,
-                             command=lambda: SteamDeckHealthDialog(self, self._steam_dir))
-        deck_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
-        deck_btn.bind("<Enter>", lambda e: self._hover_enter(deck_btn, BORDER))
-        deck_btn.bind("<Leave>", lambda e: self._hover_leave(deck_btn, BG_CARD))
-        Tooltip(deck_btn, "Verify your setup is correctly configured for Steam Deck sharing")
-
-        tools_row2 = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        tools_row2.pack(fill="x", padx=12, pady=(4, 0))
-
-        offline_btn = tk.Button(tools_row2, text="\u2708 Offline Ready",
-                                bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
-                                relief="flat", bd=0, cursor="hand2",
-                                activebackground=BORDER,
-                                command=lambda: OfflineReadinessDialog(self, self._steam_dir))
-        offline_btn.pack(side="left", ipady=4, ipadx=8)
-        offline_btn.bind("<Enter>", lambda e: self._hover_enter(offline_btn, BORDER))
-        offline_btn.bind("<Leave>", lambda e: self._hover_leave(offline_btn, BG_CARD))
-        Tooltip(offline_btn, "Check if your games are ready to play without internet")
-
-        cooldown_btn = tk.Button(tools_row2, text="\u23f0 Cooldown Sim",
-                                 bg=BG_CARD, fg=TEXT_DIM, font=F_SMALL,
-                                 relief="flat", bd=0, cursor="hand2",
-                                 activebackground=BORDER,
-                                 command=lambda: FamilyCooldownDialog(self, self._steam_dir))
-        cooldown_btn.pack(side="left", ipady=4, ipadx=8, padx=(4, 0))
-        cooldown_btn.bind("<Enter>", lambda e: self._hover_enter(cooldown_btn, BORDER))
-        cooldown_btn.bind("<Leave>", lambda e: self._hover_leave(cooldown_btn, BG_CARD))
-        Tooltip(cooldown_btn, "Simulate family sharing cooldown scenarios and unlock times")
-
-        # Heartbeat status
-        hb_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
-        hb_sep.pack(fill="x", padx=12, pady=(10, 0))
-
-        hb_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        hb_header.pack(fill="x", padx=12, pady=(6, 0))
-        tk.Label(hb_header, text="SERVER SYNC", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
-
-        hb_row = tk.Frame(settings_tab_frame, bg=BG_DARK)
-        hb_row.pack(fill="x", padx=12, pady=(4,0))
-        self._heartbeat_status_lbl = tk.Label(hb_row,
-            text="● Server sync: not yet connected",
-            bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL, anchor="w")
-        self._heartbeat_status_lbl.pack(side="left")
 
         # ── Admin warning banner ──────────────────────────────────────────────
         if not self._admin:
