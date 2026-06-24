@@ -1128,9 +1128,6 @@ class SteamGuard(tk.Tk):
         self._playing_lbl = None
         self._after_playing_id = None
         # Feature D: Family lock quick-lock
-        self._family_lock_active = False
-        self._family_lock_after_id = None
-        self._family_lock_btn = None
 
         # Trace auto-protect changes → persist
         self._auto_heal.trace_add("write", lambda *_: self._save_settings())
@@ -2050,7 +2047,7 @@ class SteamGuard(tk.Tk):
         Tooltip(_sb, "Re-scan Steam library for installed games")
 
         # Row 2: tool buttons — 2-row grid
-        def _make_tool_btn(parent, label, cmd, tip, is_family=False):
+        def _make_tool_btn(parent, label, cmd, tip):
             b = tk.Button(parent, text=label, bg=BG_CARD, fg=TEXT_DIM,
                           font=F_SMALL, relief="flat", bd=0, cursor="hand2",
                           activebackground=BG_ELEVATED, command=cmd)
@@ -2058,11 +2055,7 @@ class SteamGuard(tk.Tk):
             def _enter(e, bb=b):
                 bb.config(bg=BG_ELEVATED, fg=TEXT_MAIN)
             def _leave(e, bb=b):
-                # Family lock keeps RED when active
-                if is_family and self._family_lock_active:
-                    bb.config(bg=RED, fg="white")
-                else:
-                    bb.config(bg=BG_CARD, fg=TEXT_DIM)
+                bb.config(bg=BG_CARD, fg=TEXT_DIM)
             b.bind("<Enter>", _enter)
             b.bind("<Leave>", _leave)
             Tooltip(b, tip)
@@ -2098,14 +2091,9 @@ class SteamGuard(tk.Tk):
                        "Copy session stats to clipboard")
         tool_grid_r2.winfo_children()[-1].pack_configure(padx=0)
 
-        # Row 3: Family Lock (Feature D) + Export Log
+        # Row 3: Export Log
         tool_grid_r3 = tk.Frame(ctrl, bg=BG_DARK)
         tool_grid_r3.pack(fill="x", pady=(4, 0))
-        self._family_lock_btn = _make_tool_btn(
-            tool_grid_r3, "🔐 Family Lock",
-            self._open_family_lock,
-            "Quick-lock Steam for a set number of minutes (educational)",
-            is_family=True)
         _make_tool_btn(tool_grid_r3, "📄 Export Log",
                        self._export_log,
                        "Save event log to Desktop")
@@ -2610,105 +2598,6 @@ class SteamGuard(tk.Tk):
             self._after_playing_id = None
 
     # ── Feature D: Parental control quick-lock ─────────────────────────────────
-
-    def _open_family_lock(self):
-        """Open the Quick Lock dialog (educational / visual feature only)."""
-        if self._family_lock_active:
-            messagebox.showinfo(
-                "Family Lock",
-                "A family lock is already active. It will lift automatically.")
-            return
-
-        win = tk.Toplevel(self)
-        win.title("Quick Lock")
-        win.configure(bg=BG_BASE)
-        win.resizable(False, False)
-        win.transient(self)
-        try:
-            win.grab_set()
-        except Exception:
-            pass
-
-        tk.Label(win, text="🔐  Family Lock", bg=BG_BASE, fg=TEXT_MAIN,
-                 font=F_HEAD).pack(anchor="w", padx=18, pady=(16, 4))
-        tk.Label(win, text="Lock Steam for [X] minutes?", bg=BG_BASE, fg=TEXT_DIM,
-                 font=F_BODY).pack(anchor="w", padx=18)
-
-        spin_row = tk.Frame(win, bg=BG_BASE)
-        spin_row.pack(fill="x", padx=18, pady=(12, 4))
-        tk.Label(spin_row, text="Minutes:", bg=BG_BASE, fg=TEXT_DIM,
-                 font=F_SMALL).pack(side="left")
-        minutes_var = tk.IntVar(value=30)
-        spin = tk.Spinbox(spin_row, from_=5, to=120, increment=5,
-                          textvariable=minutes_var, width=6,
-                          bg=BG_CARD, fg=TEXT_MAIN, font=F_BODY,
-                          buttonbackground=BG_ELEVATED, relief="flat",
-                          insertbackground=TEXT_MAIN, justify="center")
-        spin.pack(side="left", padx=(8, 0))
-
-        btn_row = tk.Frame(win, bg=BG_BASE)
-        btn_row.pack(fill="x", padx=18, pady=(14, 16))
-
-        def _confirm():
-            try:
-                mins = int(minutes_var.get())
-            except Exception:
-                mins = 30
-            mins = max(5, min(120, mins))
-            self._activate_family_lock(mins)
-            try:
-                win.destroy()
-            except Exception:
-                pass
-
-        lock_btn = tk.Button(btn_row, text="🔒  Lock", bg=RED, fg="white",
-                             font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
-                             cursor="hand2", activebackground=BG_ELEVATED,
-                             command=_confirm)
-        lock_btn.pack(side="right", ipadx=10, ipady=5)
-        cancel_btn = tk.Button(btn_row, text="Cancel", bg=BG_CARD, fg=TEXT_DIM,
-                               font=F_SMALL, relief="flat", bd=0, cursor="hand2",
-                               activebackground=BG_ELEVATED,
-                               command=win.destroy)
-        cancel_btn.pack(side="right", ipadx=8, ipady=5, padx=(0, 8))
-
-        win.update_idletasks()
-        try:
-            px, py = self.winfo_x(), self.winfo_y()
-            pw, ph = self.winfo_width(), self.winfo_height()
-            ww, wh = win.winfo_width(), win.winfo_height()
-            win.geometry(f"+{px + (pw - ww)//2}+{py + (ph - wh)//2}")
-        except Exception:
-            pass
-
-    def _activate_family_lock(self, minutes: int):
-        """Engage the (educational) family lock for the given minutes."""
-        self._family_lock_active = True
-        self._log(f"Family lock: Steam restricted for {minutes} minutes",
-                  level="info")
-        if self._family_lock_btn is not None:
-            try:
-                self._family_lock_btn.config(bg=RED, fg="white")
-            except Exception:
-                pass
-        if self._family_lock_after_id is not None:
-            try:
-                self.after_cancel(self._family_lock_after_id)
-            except Exception:
-                pass
-        self._family_lock_after_id = self.after(
-            minutes * 60000, self._unlock_family_lock)
-
-    def _unlock_family_lock(self):
-        """Lift the family lock and restore the button."""
-        self._family_lock_active = False
-        self._family_lock_after_id = None
-        if self._family_lock_btn is not None:
-            try:
-                self._family_lock_btn.config(bg=BG_CARD, fg=TEXT_DIM)
-            except Exception:
-                pass
-        self._log("Family lock lifted", level="info")
 
     def _rescan_games(self):
         def worker():
