@@ -33,8 +33,8 @@ jobs:
           gcloud run deploy steamguard \
           --source ./server \
           --region us-central1 \
-            --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest \
-            --quiet
+          --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest \
+          --quiet
 
   build-windows-client:
     runs-on: windows-latest
@@ -84,10 +84,100 @@ jobs:
         run: |
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
 
+      - name: Build Changelog
+        id: changelog
+        shell: pwsh
+        run: |
+          # Read version from version.txt
+          $version = (Get-Content version.txt -Raw).Trim()
+
+          # Get last 5 commit messages (skip merge commits)
+          $commits = git log --oneline --no-merges -5 --pretty=format:"%s"
+          $lines = $commits -split "`n"
+
+          # Categorize commits into sections
+          $fixes   = @()
+          $features = @()
+          $other   = @()
+
+          foreach ($line in $lines) {
+            $clean = $line -replace '^(fix|feat|chore|refactor|docs|style|perf|ci|build|test)(\(.+?\))?:\s*', ''
+            if ($line -match '^fix') {
+              $fixes += "🔧 $clean"
+            } elseif ($line -match '^feat') {
+              $features += "✨ $clean"
+            } else {
+              $other += "• $clean"
+            }
+          }
+
+          # Build changelog string
+          $changelog = ""
+          if ($features.Count -gt 0) {
+            $changelog += "**New Features**`n" + ($features -join "`n") + "`n`n"
+          }
+          if ($fixes.Count -gt 0) {
+            $changelog += "**Bug Fixes**`n" + ($fixes -join "`n") + "`n`n"
+          }
+          if ($other.Count -gt 0) {
+            $changelog += "**Other Changes**`n" + ($other -join "`n")
+          }
+          if ($changelog -eq "") {
+            $changelog = "• Maintenance update"
+          }
+
+          # Escape for JSON (backslash-n for newlines, escape quotes)
+          $changelogJson = $changelog.Trim() -replace '\\', '\\\\' -replace '"', '\"' -replace "`r`n", '\n' -replace "`n", '\n'
+          $versionJson   = $version -replace '"', '\"'
+
+          echo "VERSION=$versionJson" >> $env:GITHUB_OUTPUT
+          echo "CHANGELOG=$changelogJson" >> $env:GITHUB_OUTPUT
+
       - name: Post Embed to Discord
         shell: pwsh
         run: |
-          $json = '{"embeds":[{"title":"SteamGuard Client Updated!","description":"**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes.","color":2450411,"fields":[{"name":"Requirements","value":"- Member of this server\n- Subscribed to YouTube channel\n- Run as Administrator (auto-handled)","inline":false},{"name":"Download","value":"**[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)**","inline":false}],"footer":{"text":"SteamGuard Security - Build v$env:GITHUB_RUN_NUMBER"}}]}'
-          Invoke-WebRequest -Uri $env:DISCORD_WEBHOOK_URL -Method POST -ContentType "application/json" -Body $json
+          $version   = "${{ steps.changelog.outputs.VERSION }}"
+          $changelog = "${{ steps.changelog.outputs.CHANGELOG }}"
+          $buildNum  = "${{ github.run_number }}"
+          $sha       = "${{ github.sha }}".Substring(0,7)
+          $repo      = "${{ github.repository }}"
+          $actor     = "${{ github.actor }}"
+
+          $json = @"
+          {
+            "embeds": [{
+              "title": "🛡 SteamGuard Client Updated — v$version",
+              "description": "**Terms of Service & EULA (v1.1) Acceptance Required.**\nThis tool is strictly for educational, research, and personal learning purposes. Do not distribute or share your license keys.",
+              "color": 2450411,
+              "fields": [
+                {
+                  "name": "📋 What's New",
+                  "value": "$changelog",
+                  "inline": false
+                },
+                {
+                  "name": "✅ Requirements",
+                  "value": "- Member of this server\n- Subscribed to our YouTube channel\n- Run as Administrator (auto-handled by app)",
+                  "inline": false
+                },
+                {
+                  "name": "⬇️ Download",
+                  "value": "**[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)**\n*Always run the latest version — older builds may be blocked.*",
+                  "inline": false
+                }
+              ],
+              "footer": {
+                "text": "SteamGuard Security  •  Build #$buildNum  •  $sha  •  pushed by $actor"
+              },
+              "timestamp": "$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+            }]
+          }
+"@
+
+          Invoke-WebRequest `
+            -Uri $env:DISCORD_WEBHOOK_URL `
+            -Method POST `
+            -ContentType "application/json" `
+            -Body $json
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
