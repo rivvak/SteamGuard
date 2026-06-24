@@ -16,6 +16,18 @@ Endpoints:
   GET  /admin/active-discord-ids  — admin: list all active Discord IDs
   POST /youtube/store-token       — store a user's YouTube OAuth token
   GET  /health                    — uptime probe
+
+  POST /heartbeat                 — client heartbeat every 5 minutes
+  POST /referral/create           — create or return referral code for a user
+  POST /referral/use              — record a referral being used
+  GET  /referral/stats/{discord_user_id} — referral stats for a user
+  POST /badges/grant              — admin: grant a badge to a user
+  GET  /badges/{discord_user_id}  — badges and XP for a user
+  POST /device/reset              — self-service device reset with cooldown
+  POST /stripe/webhook            — Stripe payment webhook
+  GET  /stats/server              — public aggregate server stats
+  POST /leaderboard/update        — update leaderboard entry
+  GET  /leaderboard               — top 10 by heals for current week
 """
 
 import os
@@ -24,8 +36,10 @@ import hashlib
 import secrets
 import json
 import logging
+import time
+import calendar
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -43,6 +57,11 @@ DISCORD_GUILD_ID    = os.environ["DISCORD_GUILD_ID"]     # Your server ID
 DISCORD_ROLE_ID     = os.environ["DISCORD_ROLE_ID"]      # "Member" role ID
 YOUTUBE_CHANNEL_ID  = os.environ.get("YOUTUBE_CHANNEL_ID", "")  # Your YT channel ID
 
+MIN_SUPPORTED_VERSION = os.environ.get("MIN_SUPPORTED_VERSION", "1.0.0")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
+STATS_CHANNEL_ID      = os.environ.get("STATS_CHANNEL_ID", "")
+
 LOG = logging.getLogger("steamguard")
 logging.basicConfig(level=logging.INFO)
 
@@ -50,10 +69,17 @@ logging.basicConfig(level=logging.INFO)
 
 db = firestore.Client()
 
-LICENSES_COL  = "licenses"       # doc id = sha256(key)
-SESSIONS_COL  = "sessions"       # doc id = sha256(key)
-EVENTS_COL    = "events"         # security audit log
-YT_TOKENS_COL = "yt_tokens"      # doc id = discord_user_id
+LICENSES_COL    = "licenses"       # doc id = sha256(key)
+SESSIONS_COL    = "sessions"       # doc id = sha256(key)
+EVENTS_COL      = "events"         # security audit log
+YT_TOKENS_COL   = "yt_tokens"      # doc id = discord_user_id
+REFERRAL_CODES_COL  = "referral_codes"   # doc id = code
+REFERRALS_COL       = "referrals"        # doc id = auto
+LEADERBOARD_COL     = "leaderboard"      # doc id = "weekly"
+
+# ── Simple in-memory stats cache ──────────────────────────────────────────────
+
+_stats_cache: dict = {"data": None, "ts": 0.0}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -214,6 +240,110 @@ def _make_session_token(key_hash: str, hwid: str) -> str:
     payload = f"{key_hash}:{hwid}:{utcnow().isoformat()}"
     return _hmac_sign(payload)
 
+def _version_tuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.strip().split(".")[:3])
+    except Exception:
+        return (0, 0, 0)
+
+def _check_and_award_badges(
+    key_hash: str,
+    current_data: dict,
+    heal_count: int,
+    client_version: str,
+) -> List[str]:
+    """
+    Check badge thresholds and return updated badge list.
+    Writes new badges to Firestore if any are newly awarded.
+    """
+    badges: List[str] = list(current_data.get("badges") or [])
+    newly_awarded: List[str] = []
+
+    def _maybe_award(badge: str):
+        if badge not in badges:
+            badges.append(badge)
+            newly_awarded.append(badge)
+
+    # heal_count thresholds
+    if heal_count >= 1:
+        _maybe_award("first_guard")
+    if heal_count >= 10:
+        _maybe_award("healer_10")
+    if heal_count >= 100:
+        _maybe_award("healer_100")
+
+    # night_watch: current UTC hour 0-6
+    current_hour = utcnow().hour
+    if 0 <= current_hour <= 6:
+        _maybe_award("night_watch")
+
+    # patch_veteran: client_version changed since last recorded
+    last_version = current_data.get("last_client_version", "")
+    if last_version and last_version != client_version:
+        _maybe_award("patch_veteran")
+
+    if newly_awarded:
+        try:
+            db.collection(LICENSES_COL).document(key_hash).update({
+                "badges": badges,
+            })
+            for badge in newly_awarded:
+                _log_event(key_hash, "badge_awarded", {"badge": badge})
+        except Exception as e:
+            LOG.warning(f"Badge award write failed: {e}")
+
+    return badges
+
+
+async def grant_premium(discord_user_id: str):
+    """Find license by discord_user_id, set tier='premium', premium_expires_at=now+30days."""
+    try:
+        docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", discord_user_id)
+                  .stream())
+        premium_expires = utcnow() + timedelta(days=30)
+        for doc in docs:
+            doc.reference.update({
+                "tier":                "premium",
+                "premium_expires_at":  premium_expires,
+            })
+            _log_event(doc.id, "premium_granted", {"discord_user_id": discord_user_id})
+
+        # Post to Discord webhook if configured
+        if DISCORD_WEBHOOK_URL:
+            try:
+                async with httpx.AsyncClient(timeout=8) as client:
+                    await client.post(DISCORD_WEBHOOK_URL, json={
+                        "content": f"Premium granted to Discord user {discord_user_id} until {premium_expires.isoformat()}"
+                    })
+            except Exception as e:
+                LOG.warning(f"Discord webhook notify failed: {e}")
+    except Exception as e:
+        LOG.warning(f"grant_premium failed for {discord_user_id}: {e}")
+
+
+async def revoke_premium(discord_user_id: str):
+    """Find license, set tier='free', log event."""
+    try:
+        docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", discord_user_id)
+                  .stream())
+        for doc in docs:
+            doc.reference.update({
+                "tier":               "free",
+                "premium_expires_at": None,
+            })
+            _log_event(doc.id, "premium_revoked", {"discord_user_id": discord_user_id})
+    except Exception as e:
+        LOG.warning(f"revoke_premium failed for {discord_user_id}: {e}")
+
+
+def _get_iso_week() -> str:
+    """Return current ISO year-week string like '2026-W25'."""
+    now = utcnow()
+    return f"{now.isocalendar()[0]}-W{now.isocalendar()[1]:02d}"
+
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SteamGuard License Server", docs_url=None, redoc_url=None)
@@ -240,6 +370,48 @@ class GenerateRequest(BaseModel):
     discord_user_id:  str
     note:             str = ""
     days_valid:       int = 36500   # ~100 years = lifetime
+
+class HeartbeatRequest(BaseModel):
+    key:              str
+    hwid:             str
+    discord_user_id:  str
+    sig:              str
+    client_version:   str
+    session_id:       str = ""
+    protected:        bool = False
+    heal_count:       int = 0
+    kill_count:       int = 0
+    game_appid:       int = 0
+    game_name:        str = ""
+
+class HeartbeatResponse(BaseModel):
+    session_id:           str
+    server_time:          int
+    next_heartbeat_seconds: int = 300
+    lease_expires_at:     int
+    license_status:       str
+    kill:                 bool = False
+    kill_reason:          str = ""
+    client_policy:        dict
+
+class ReferralCreateRequest(BaseModel):
+    discord_user_id: str
+    admin_key:       str
+
+class ReferralUseRequest(BaseModel):
+    code:                 str
+    referred_discord_id:  str
+    referred_license_key: str
+
+class BadgeGrantRequest(BaseModel):
+    discord_user_id: str
+    badge:           str
+    admin_key:       str
+
+class DeviceResetRequest(BaseModel):
+    key:              str
+    discord_user_id:  str
+    sig:              str
 
 # ── /health ───────────────────────────────────────────────────────────────────
 
@@ -696,3 +868,640 @@ async def store_youtube_token(req: YouTubeTokenRequest,
         "linked_at":       utcnow(),
     })
     return {"status": "stored"}
+
+# ── /heartbeat ────────────────────────────────────────────────────────────────
+
+@app.post("/heartbeat")
+async def heartbeat(req: HeartbeatRequest):
+    # 1. Verify HMAC sig
+    if not _verify_sig(f"{req.key}:{req.hwid}", req.sig):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    key_hash = _key_hash(req.key)
+    now      = utcnow()
+    now_ts   = int(now.timestamp())
+
+    # Build a default "kill" response helper
+    def _kill_response(reason: str) -> HeartbeatResponse:
+        return HeartbeatResponse(
+            session_id=req.session_id,
+            server_time=now_ts,
+            next_heartbeat_seconds=300,
+            lease_expires_at=now_ts,
+            license_status="invalid",
+            kill=True,
+            kill_reason=reason,
+            client_policy={
+                "min_version":      MIN_SUPPORTED_VERSION,
+                "feature_flags":    {},
+                "update_channel":   "stable",
+                "mandatory_update": False,
+            },
+        )
+
+    # 2. Load license from Firestore
+    try:
+        lic_doc = db.collection(LICENSES_COL).document(key_hash).get()
+    except Exception as e:
+        LOG.warning(f"Heartbeat Firestore read failed: {e}")
+        return _kill_response("server_error")
+
+    if not lic_doc.exists:
+        return _kill_response("license_not_found")
+
+    lic_data = lic_doc.to_dict()
+    lic_status = "active"
+    if lic_data.get("revoked"):
+        lic_status = "revoked"
+    elif lic_data.get("paused"):
+        lic_status = "suspended"
+
+    if lic_status != "active":
+        return _kill_response("license_suspended")
+
+    # 3. Check Discord role
+    has_role = await _discord_has_role(req.discord_user_id)
+    if not has_role:
+        # Pause the license
+        try:
+            db.collection(LICENSES_COL).document(key_hash).update({
+                "paused":       True,
+                "pause_reason": "Left Discord server or lost Member role",
+                "paused_at":    now,
+            })
+            _log_event(key_hash, "discord_lost_role_heartbeat", {"uid": req.discord_user_id})
+        except Exception as e:
+            LOG.warning(f"Heartbeat pause write failed: {e}")
+        return _kill_response("discord_role_lost")
+
+    # 4. Update session doc
+    try:
+        db.collection(SESSIONS_COL).document(key_hash).set({
+            "last_heartbeat_at": now,
+            "client_version":    req.client_version,
+            "protected":         req.protected,
+            "heal_count":        req.heal_count,
+            "kill_count":        req.kill_count,
+            "game_name":         req.game_name,
+            "game_appid":        req.game_appid,
+            "discord_user_id":   req.discord_user_id,
+        }, merge=True)
+    except Exception as e:
+        LOG.warning(f"Heartbeat session update failed: {e}")
+
+    # 5. Version check
+    min_ver = _version_tuple(MIN_SUPPORTED_VERSION)
+    cli_ver = _version_tuple(req.client_version)
+    mandatory_update = cli_ver < min_ver
+
+    # 6. Award XP for active protected sessions
+    if req.protected:
+        try:
+            db.collection(LICENSES_COL).document(key_hash).update({
+                "xp": firestore.Increment(1),
+            })
+        except Exception as e:
+            LOG.warning(f"XP increment failed: {e}")
+
+    # 7. Log heal events
+    prev_heal = lic_data.get("last_heal_count", 0) or 0
+    heal_delta = req.heal_count - prev_heal
+    if heal_delta > 0:
+        try:
+            _log_event(key_hash, "heal_event", {
+                "heal_delta": heal_delta,
+                "total_heals": req.heal_count,
+                "game_name": req.game_name,
+            })
+            db.collection(LICENSES_COL).document(key_hash).update({
+                "last_heal_count": req.heal_count,
+            })
+        except Exception as e:
+            LOG.warning(f"Heal event log failed: {e}")
+
+    # 8. Track client_version change and award badges
+    try:
+        # Refresh lic_data for badge computation (include xp update)
+        fresh_lic = db.collection(LICENSES_COL).document(key_hash).get()
+        fresh_data = fresh_lic.to_dict() if fresh_lic.exists else lic_data
+        updated_badges = _check_and_award_badges(
+            key_hash, fresh_data, req.heal_count, req.client_version
+        )
+        # Track last_client_version
+        last_ver = fresh_data.get("last_client_version", "")
+        if last_ver != req.client_version:
+            try:
+                db.collection(LICENSES_COL).document(key_hash).update({
+                    "last_client_version": req.client_version,
+                })
+            except Exception as e:
+                LOG.warning(f"Version tracking update failed: {e}")
+        current_xp = fresh_data.get("xp", 0) or 0
+    except Exception as e:
+        LOG.warning(f"Badge/xp check failed: {e}")
+        updated_badges = lic_data.get("badges") or []
+        current_xp = lic_data.get("xp", 0) or 0
+
+    # 9. Update leaderboard (fire-and-forget style)
+    try:
+        await _update_leaderboard_entry(
+            discord_user_id=req.discord_user_id,
+            heals=req.heal_count,
+            kills=req.kill_count,
+            xp=current_xp,
+            game=req.game_name,
+        )
+    except Exception as e:
+        LOG.warning(f"Leaderboard update from heartbeat failed: {e}")
+
+    # 10. Build response
+    lease_expires_at = int((now + timedelta(seconds=600)).timestamp())
+
+    client_policy = {
+        "min_version":      MIN_SUPPORTED_VERSION,
+        "feature_flags":    {},
+        "update_channel":   "stable",
+        "mandatory_update": mandatory_update,
+    }
+
+    resp = HeartbeatResponse(
+        session_id=req.session_id or key_hash[:16],
+        server_time=now_ts,
+        next_heartbeat_seconds=300,
+        lease_expires_at=lease_expires_at,
+        license_status="active",
+        kill=mandatory_update,
+        kill_reason="forced_update" if mandatory_update else "",
+        client_policy=client_policy,
+    )
+    return resp
+
+# ── /referral/create ──────────────────────────────────────────────────────────
+
+@app.post("/referral/create")
+async def referral_create(req: ReferralCreateRequest):
+    _require_admin(req.admin_key)
+
+    # Check if this user already has a referral code
+    try:
+        existing = (db.collection(REFERRAL_CODES_COL)
+                      .where("owner_discord_id", "==", req.discord_user_id)
+                      .limit(1)
+                      .stream())
+        for doc in existing:
+            d = doc.to_dict()
+            code = doc.id
+            return {
+                "code": code,
+                "link": f"https://steamguard.app/join?ref={code}",
+            }
+    except Exception as e:
+        LOG.warning(f"Referral code lookup failed: {e}")
+
+    # Create new referral code
+    code = secrets.token_urlsafe(8).upper()
+    try:
+        db.collection(REFERRAL_CODES_COL).document(code).set({
+            "owner_discord_id": req.discord_user_id,
+            "created_at":       utcnow(),
+            "uses_count":       0,
+            "valid_uses_count": 0,
+        })
+    except Exception as e:
+        LOG.warning(f"Referral code creation failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create referral code")
+
+    _log_event("referral", "referral_code_created", {
+        "owner_discord_id": req.discord_user_id,
+        "code": code,
+    })
+    return {
+        "code": code,
+        "link": f"https://steamguard.app/join?ref={code}",
+    }
+
+# ── /referral/use ─────────────────────────────────────────────────────────────
+
+@app.post("/referral/use")
+async def referral_use(req: ReferralUseRequest):
+    # Verify the code exists
+    try:
+        code_doc = db.collection(REFERRAL_CODES_COL).document(req.code).get()
+    except Exception as e:
+        LOG.warning(f"Referral code read failed: {e}")
+        raise HTTPException(status_code=500, detail="Server error")
+
+    if not code_doc.exists:
+        raise HTTPException(status_code=404, detail="Referral code not found")
+
+    code_data = code_doc.to_dict()
+    referrer_discord_id = code_data.get("owner_discord_id", "")
+
+    # Don't allow self-referral
+    if referrer_discord_id == req.referred_discord_id:
+        raise HTTPException(status_code=400, detail="Cannot refer yourself")
+
+    referred_key_hash = _key_hash(req.referred_license_key)
+    valid_after = utcnow() + timedelta(days=7)
+
+    referral_id = secrets.token_hex(16)
+    try:
+        db.collection(REFERRALS_COL).document(referral_id).set({
+            "referral_id":         referral_id,
+            "code":                req.code,
+            "referrer_discord_id": referrer_discord_id,
+            "referred_discord_id": req.referred_discord_id,
+            "referred_key_hash":   referred_key_hash,
+            "created_at":          utcnow(),
+            "valid_after":         valid_after,
+            "status":              "pending",
+        })
+        # Increment uses_count on the code doc
+        db.collection(REFERRAL_CODES_COL).document(req.code).update({
+            "uses_count": firestore.Increment(1),
+        })
+    except Exception as e:
+        LOG.warning(f"Referral use write failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record referral")
+
+    _log_event("referral", "referral_used", {
+        "code":                req.code,
+        "referrer_discord_id": referrer_discord_id,
+        "referred_discord_id": req.referred_discord_id,
+    })
+    return {"ok": True, "referral_id": referral_id}
+
+# ── /referral/stats/{discord_user_id} ────────────────────────────────────────
+
+@app.get("/referral/stats/{discord_user_id}")
+async def referral_stats(discord_user_id: str, x_admin_key: str = Header(None)):
+    _require_admin(x_admin_key)
+    total_referrals   = 0
+    valid_referrals   = 0
+    pending_referrals = 0
+    rewards_earned    = 0
+
+    try:
+        docs = (db.collection(REFERRALS_COL)
+                  .where("referrer_discord_id", "==", discord_user_id)
+                  .stream())
+        now = utcnow()
+        for doc in docs:
+            d = doc.to_dict()
+            total_referrals += 1
+            valid_after = d.get("valid_after")
+            if valid_after:
+                if isinstance(valid_after, datetime) and valid_after.tzinfo is None:
+                    valid_after = valid_after.replace(tzinfo=timezone.utc)
+                if now >= valid_after:
+                    valid_referrals += 1
+                    rewards_earned  += 1
+                else:
+                    pending_referrals += 1
+            else:
+                pending_referrals += 1
+    except Exception as e:
+        LOG.warning(f"Referral stats query failed: {e}")
+
+    return {
+        "discord_user_id":  discord_user_id,
+        "total_referrals":  total_referrals,
+        "valid_referrals":  valid_referrals,
+        "pending_referrals": pending_referrals,
+        "rewards_earned":   rewards_earned,
+    }
+
+# ── /badges/grant (admin) ─────────────────────────────────────────────────────
+
+@app.post("/badges/grant")
+async def badges_grant(req: BadgeGrantRequest):
+    _require_admin(req.admin_key)
+
+    # Find license by discord_user_id
+    try:
+        docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", req.discord_user_id)
+                  .limit(1)
+                  .stream())
+        target_doc = None
+        for doc in docs:
+            target_doc = doc
+            break
+    except Exception as e:
+        LOG.warning(f"Badge grant license lookup failed: {e}")
+        raise HTTPException(status_code=500, detail="Server error")
+
+    if target_doc is None:
+        raise HTTPException(status_code=404, detail="No license found for this Discord user")
+
+    d = target_doc.to_dict()
+    badges: List[str] = list(d.get("badges") or [])
+
+    if req.badge not in badges:
+        badges.append(req.badge)
+        try:
+            target_doc.reference.update({"badges": badges})
+            _log_event(target_doc.id, "badge_granted_admin", {
+                "badge": req.badge,
+                "discord_user_id": req.discord_user_id,
+            })
+        except Exception as e:
+            LOG.warning(f"Badge grant write failed: {e}")
+            raise HTTPException(status_code=500, detail="Failed to grant badge")
+
+    return {"ok": True, "badges": badges}
+
+# ── /badges/{discord_user_id} ────────────────────────────────────────────────
+
+@app.get("/badges/{discord_user_id}")
+async def get_badges(discord_user_id: str):
+    try:
+        docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", discord_user_id)
+                  .limit(1)
+                  .stream())
+        for doc in docs:
+            d = doc.to_dict()
+            xp     = d.get("xp", 0) or 0
+            badges = list(d.get("badges") or [])
+            level  = xp // 100
+            return {"badges": badges, "xp": xp, "level": level}
+    except Exception as e:
+        LOG.warning(f"Badge lookup failed for {discord_user_id}: {e}")
+
+    raise HTTPException(status_code=404, detail="No license found for this Discord user")
+
+# ── /device/reset ─────────────────────────────────────────────────────────────
+
+@app.post("/device/reset")
+async def device_reset(req: DeviceResetRequest):
+    # Verify sig
+    if not _verify_sig(f"{req.key}:{req.discord_user_id}", req.sig):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    key_hash = _key_hash(req.key)
+    try:
+        lic_doc = db.collection(LICENSES_COL).document(key_hash).get()
+    except Exception as e:
+        LOG.warning(f"Device reset license read failed: {e}")
+        raise HTTPException(status_code=500, detail="Server error")
+
+    if not lic_doc.exists:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    d = lic_doc.to_dict()
+
+    # Verify discord_user_id matches
+    if d.get("discord_user_id") != req.discord_user_id:
+        raise HTTPException(status_code=403, detail="Discord user ID does not match key owner")
+
+    # Check cooldown (30-day minimum between resets for free tier)
+    last_reset = d.get("last_device_reset_at")
+    now = utcnow()
+    cooldown_days = 30
+    if last_reset:
+        if isinstance(last_reset, datetime) and last_reset.tzinfo is None:
+            last_reset = last_reset.replace(tzinfo=timezone.utc)
+        elapsed = (now - last_reset).total_seconds()
+        cooldown_seconds = cooldown_days * 86400
+        if elapsed < cooldown_seconds:
+            next_allowed = last_reset + timedelta(days=cooldown_days)
+            raise HTTPException(status_code=429, detail={
+                "error":                "cooldown_active",
+                "message":              f"Device reset is only allowed once every {cooldown_days} days",
+                "next_reset_allowed_at": int(next_allowed.timestamp()),
+            })
+
+    # Perform the reset
+    next_allowed_at = int((now + timedelta(days=cooldown_days)).timestamp())
+    try:
+        db.collection(LICENSES_COL).document(key_hash).update({
+            "hwid":                  None,
+            "activations_count":     0,
+            "last_device_reset_at":  now,
+        })
+        # Also clear the session
+        db.collection(SESSIONS_COL).document(key_hash).delete()
+        _log_event(key_hash, "device_reset", {
+            "discord_user_id": req.discord_user_id,
+        })
+    except Exception as e:
+        LOG.warning(f"Device reset write failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset device")
+
+    return {"ok": True, "next_reset_allowed_at": next_allowed_at}
+
+# ── /stripe/webhook ───────────────────────────────────────────────────────────
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    try:
+        payload    = await request.body()
+        sig_header = request.headers.get("stripe-signature", "")
+
+        try:
+            import stripe  # type: ignore
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_WEBHOOK_SECRET
+            )
+        except Exception as e:
+            LOG.warning(f"Stripe signature validation failed: {e}")
+            raise HTTPException(status_code=400, detail="Invalid stripe signature")
+
+        event_type = event.get("type", "")
+        data_obj   = event.get("data", {}).get("object", {})
+
+        if event_type == "checkout.session.completed":
+            discord_id = data_obj.get("metadata", {}).get("discord_id", "")
+            if discord_id:
+                await grant_premium(discord_id)
+            else:
+                LOG.warning("Stripe checkout.session.completed missing discord_id in metadata")
+
+        elif event_type in ("customer.subscription.deleted", "invoice.payment_failed"):
+            # Try metadata first, then customer email fallback
+            discord_id = data_obj.get("metadata", {}).get("discord_id", "")
+            if not discord_id:
+                # Try subscription metadata
+                discord_id = data_obj.get("metadata", {}).get("discord_id", "")
+            if discord_id:
+                await revoke_premium(discord_id)
+            else:
+                LOG.warning(f"Stripe {event_type} missing discord_id in metadata")
+
+        else:
+            LOG.info(f"Unhandled Stripe event type: {event_type}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOG.error(f"Stripe webhook handler error: {e}")
+        # Return 200 to prevent Stripe from retrying non-signature errors
+        return {"received": True, "error": str(e)}
+
+    return {"received": True}
+
+# ── /stats/server ─────────────────────────────────────────────────────────────
+
+@app.get("/stats/server")
+async def stats_server():
+    global _stats_cache
+    now_ts = time.time()
+
+    # Return cached result if under 60 seconds old
+    if _stats_cache["data"] is not None and (now_ts - _stats_cache["ts"]) < 60:
+        return _stats_cache["data"]
+
+    total_keys   = 0
+    active_keys  = 0
+    total_heals  = 0
+    version_dist: dict = {}
+
+    try:
+        lic_docs = db.collection(LICENSES_COL).stream()
+        for doc in lic_docs:
+            total_keys += 1
+            d = doc.to_dict()
+            if not d.get("revoked") and not d.get("paused"):
+                active_keys += 1
+    except Exception as e:
+        LOG.warning(f"Stats license count failed: {e}")
+
+    try:
+        session_docs = db.collection(SESSIONS_COL).stream()
+        for doc in session_docs:
+            d = doc.to_dict()
+            total_heals += d.get("heal_count", 0) or 0
+            cv = d.get("client_version", "unknown") or "unknown"
+            version_dist[cv] = version_dist.get(cv, 0) + 1
+    except Exception as e:
+        LOG.warning(f"Stats session aggregation failed: {e}")
+
+    result = {
+        "total_keys":          total_keys,
+        "active_keys":         active_keys,
+        "total_heals":         total_heals,
+        "version_distribution": version_dist,
+        "cached_at":           int(now_ts),
+    }
+
+    _stats_cache["data"] = result
+    _stats_cache["ts"]   = now_ts
+
+    return result
+
+# ── /leaderboard/update ───────────────────────────────────────────────────────
+
+async def _update_leaderboard_entry(
+    discord_user_id: str,
+    heals: int,
+    kills: int,
+    xp: int,
+    game: str,
+):
+    """Internal helper to upsert a leaderboard entry and handle weekly resets."""
+    try:
+        lb_ref = db.collection(LEADERBOARD_COL).document("weekly")
+        lb_doc = lb_ref.get()
+
+        current_week = _get_iso_week()
+
+        if lb_doc.exists:
+            lb_data = lb_doc.to_dict() or {}
+            stored_week = lb_data.get("_week", "")
+            if stored_week != current_week:
+                # New week — reset the leaderboard
+                lb_ref.set({
+                    "_week": current_week,
+                    discord_user_id: {
+                        "heals": heals,
+                        "kills": kills,
+                        "xp":    xp,
+                        "game":  game,
+                    }
+                })
+            else:
+                # Update entry within the same week (take max values)
+                existing_entry = lb_data.get(discord_user_id, {})
+                lb_ref.update({
+                    discord_user_id: {
+                        "heals": max(heals, existing_entry.get("heals", 0)),
+                        "kills": max(kills, existing_entry.get("kills", 0)),
+                        "xp":    max(xp, existing_entry.get("xp", 0)),
+                        "game":  game,
+                    }
+                })
+        else:
+            lb_ref.set({
+                "_week": current_week,
+                discord_user_id: {
+                    "heals": heals,
+                    "kills": kills,
+                    "xp":    xp,
+                    "game":  game,
+                }
+            })
+    except Exception as e:
+        LOG.warning(f"Leaderboard update failed: {e}")
+
+
+class LeaderboardUpdateRequest(BaseModel):
+    discord_user_id: str
+    heals:           int = 0
+    kills:           int = 0
+    xp:              int = 0
+    game:            str = ""
+    admin_key:       str
+
+@app.post("/leaderboard/update")
+async def leaderboard_update(req: LeaderboardUpdateRequest):
+    _require_admin(req.admin_key)
+    await _update_leaderboard_entry(
+        discord_user_id=req.discord_user_id,
+        heals=req.heals,
+        kills=req.kills,
+        xp=req.xp,
+        game=req.game,
+    )
+    return {"ok": True}
+
+# ── GET /leaderboard ──────────────────────────────────────────────────────────
+
+@app.get("/leaderboard")
+async def get_leaderboard():
+    try:
+        lb_doc = db.collection(LEADERBOARD_COL).document("weekly").get()
+        if not lb_doc.exists:
+            return {"week": _get_iso_week(), "top10": []}
+
+        lb_data = lb_doc.to_dict() or {}
+        current_week = _get_iso_week()
+        stored_week  = lb_data.get("_week", "")
+
+        # If stale week, return empty
+        if stored_week != current_week:
+            return {"week": current_week, "top10": []}
+
+        entries = []
+        for uid, stats in lb_data.items():
+            if uid.startswith("_"):
+                continue
+            if not isinstance(stats, dict):
+                continue
+            entries.append({
+                "discord_user_id": uid,
+                "heals":           stats.get("heals", 0),
+                "kills":           stats.get("kills", 0),
+                "xp":              stats.get("xp", 0),
+                "game":            stats.get("game", ""),
+            })
+
+        # Sort by heals descending, take top 10
+        entries.sort(key=lambda x: x["heals"], reverse=True)
+        top10 = entries[:10]
+
+        return {"week": current_week, "top10": top10}
+
+    except Exception as e:
+        LOG.warning(f"Leaderboard read failed: {e}")
+        return {"week": _get_iso_week(), "top10": [], "error": str(e)}

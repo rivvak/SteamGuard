@@ -194,6 +194,42 @@ def _tos_accepted() -> bool:
     return _load_config().get("tos_version") == TOS_VERSION
 
 
+# ── DPAPI helpers ─────────────────────────────────────────────────────────────
+
+def _dpapi_protect(data: bytes) -> bytes:
+    """Encrypt bytes with Windows DPAPI (current-user scope). Falls back to plaintext on failure."""
+    try:
+        import win32crypt
+        protected = win32crypt.CryptProtectData(
+            data, "SteamGuard-Session", None, None, None, 0)
+        return protected
+    except Exception:
+        return data  # graceful fallback for dev mode / missing pywin32
+
+def _dpapi_unprotect(blob: bytes) -> bytes:
+    """Decrypt DPAPI-protected bytes. Falls back to returning blob as-is on failure."""
+    try:
+        import win32crypt
+        _, decrypted = win32crypt.CryptUnprotectData(
+            blob, None, None, None, 0)
+        return decrypted
+    except Exception:
+        return blob  # graceful fallback
+
+def _load_dpapi_token() -> str:
+    """Try to load the DPAPI-protected session token. Returns empty string on failure."""
+    try:
+        import base64 as _b64
+        cfg = _load_config()
+        blob_b64 = cfg.get("session_token_dpapi", "")
+        if not blob_b64:
+            return ""
+        blob = _b64.b64decode(blob_b64)
+        return _dpapi_unprotect(blob).decode("utf-8")
+    except Exception:
+        return ""
+
+
 # ── Tooltip ───────────────────────────────────────────────────────────────────
 
 class Tooltip:
@@ -617,6 +653,18 @@ class LicenseWindow(tk.Toplevel):
             cfg["license_key"]      = key
             cfg["discord_user_id"]  = discord_id
             _save_config(cfg)
+
+            # DPAPI-protect the session token before storing in config
+            try:
+                token_bytes = result.session_token.encode("utf-8")
+                protected = _dpapi_protect(token_bytes)
+                # Store the DPAPI blob as base64 in config
+                import base64 as _b64
+                cfg2 = _load_config()
+                cfg2["session_token_dpapi"] = _b64.b64encode(protected).decode("ascii")
+                _save_config(cfg2)
+            except Exception:
+                pass  # non-critical — session token is already saved by save_session()
 
             self._set_status("✓ Activated successfully!", GREEN)
             self.session = {

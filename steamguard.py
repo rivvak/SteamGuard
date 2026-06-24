@@ -59,23 +59,35 @@ import webbrowser
 import sys
 import json as _json_mod
 
-CURRENT_VERSION = "1.2.0"
+CURRENT_VERSION = "1.3.0"
 
 def check_for_updates():
-    """Checks GitHub on startup and forces user to get the update via Linkvertise if outdated."""
+    """Check GitHub for updates. Verifies SHA-256 of manifest if available."""
     try:
         url = "https://raw.githubusercontent.com/rivvak/SteamGuard/main/version.txt"
         with urllib.request.urlopen(url, timeout=4) as resp:
             latest_version = resp.read().decode("utf-8").strip()
-            
+        
         if latest_version != CURRENT_VERSION:
-            messagebox.showwarning(
-                "Update Required",
-                f"A new version of SteamGuard (v{latest_version}) is available!\n\n"
-                "We are redirecting you to get the latest update now."
-            )
-            # Redirect them to your linkvertise link to download the update
-            webbrowser.open("https://linkvertise.com/YOUR_LINK_HERE")
+            # Try to fetch update manifest for integrity info
+            manifest_url = "https://raw.githubusercontent.com/rivvak/SteamGuard/main/update_manifest.json"
+            manifest = {}
+            try:
+                with urllib.request.urlopen(manifest_url, timeout=4) as r:
+                    manifest = json.loads(r.read())
+            except Exception:
+                pass
+            
+            msg = (f"SteamGuard v{latest_version} is available!\n\n"
+                   f"Current version: {CURRENT_VERSION}\n"
+                   f"Latest version: {latest_version}\n\n"
+                   f"Click OK to download the update.")
+            if manifest.get("mandatory"):
+                msg += "\n\n⚠ This is a mandatory security update."
+            
+            from tkinter import messagebox
+            messagebox.showwarning("Update Required", msg)
+            webbrowser.open(manifest.get("url", "https://github.com/rivvak/SteamGuard/releases/latest"))
             sys.exit(0)
     except SystemExit:
         sys.exit(0)
@@ -340,6 +352,26 @@ F_HEAD  = ("Segoe UI", 13, "bold")
 F_BODY  = ("Segoe UI", 10)
 F_SMALL = ("Segoe UI", 9)
 F_MONO  = ("Consolas", 9)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DPAPI helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _dpapi_protect(data: bytes) -> bytes:
+    """Encrypt bytes using Windows DPAPI (user-scope). Falls back to plaintext."""
+    try:
+        import win32crypt
+        return win32crypt.CryptProtectData(data, "SteamGuard", None, None, None, 0)
+    except Exception:
+        return data  # graceful fallback — dev mode / missing pywin32
+
+def _dpapi_unprotect(blob: bytes) -> bytes:
+    """Decrypt bytes using Windows DPAPI. Falls back to plaintext."""
+    try:
+        import win32crypt
+        return win32crypt.CryptUnprotectData(blob, None, None, None, 0)[1]
+    except Exception:
+        return blob
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -1056,6 +1088,13 @@ class SteamGuard(tk.Tk):
         self._session_history_file = _APPDATA_DIR / "session_history.json"
         self._spark_ids = []
 
+        # Heartbeat system vars
+        self._heartbeat_session_id = ""
+        self._last_heartbeat_ok = True
+
+        # Badge/achievement system
+        self._badges: list = []
+
         # Trace auto-protect changes → persist
         self._auto_heal.trace_add("write", lambda *_: self._save_settings())
 
@@ -1188,6 +1227,9 @@ class SteamGuard(tk.Tk):
             # connections that form while protection is active
             threading.Thread(target=self._connection_kill_loop, daemon=True).start()
 
+            # Start heartbeat loop
+            threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+
             # Discord rich presence (best-effort)
             def _start_rich_presence():
                 try:
@@ -1208,6 +1250,279 @@ class SteamGuard(tk.Tk):
             threading.Thread(target=_start_rich_presence, daemon=True).start()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ── Heartbeat System ──────────────────────────────────────────────────────
+
+    def _heartbeat_loop(self):
+        import time as _time
+        _time.sleep(30)  # initial delay
+        while self._app_running:
+            try:
+                self._do_heartbeat()
+            except Exception:
+                pass
+            _time.sleep(300)  # every 5 minutes
+
+    def _do_heartbeat(self):
+        # Load key and discord_user_id from config
+        cfg_path = _APPDATA_DIR / "config.json"
+        if not cfg_path.exists():
+            return
+        cfg = json.loads(cfg_path.read_text("utf-8"))
+        key = cfg.get("license_key", "")
+        discord_id = cfg.get("discord_user_id", "")
+        if not key or not discord_id:
+            return
+
+        # Build heartbeat payload
+        import hashlib, hmac as _hmac
+        HMAC_SECRET = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
+        try:
+            from auth.hwid import get_hwid
+            hwid = get_hwid()
+        except Exception:
+            hwid = "unknown"
+
+        sig = _hmac.new(HMAC_SECRET.encode(), f"{key}:{hwid}".encode(), hashlib.sha256).hexdigest()
+
+        payload = json.dumps({
+            "key": key,
+            "hwid": hwid,
+            "discord_user_id": discord_id,
+            "sig": sig,
+            "client_version": CURRENT_VERSION,
+            "session_id": self._heartbeat_session_id,
+            "protected": self._protected,
+            "heal_count": self._heal_count + self._rule_heal_cnt,
+            "kill_count": self._kill_counter,
+            "game_appid": self._running_appid or 0,
+            "game_name": self._running_game["name"] if self._running_game else "",
+        }).encode()
+
+        SERVER_URL = "https://steamguard-775181381055.us-central1.run.app"
+        req = urllib.request.Request(
+            SERVER_URL + "/heartbeat",
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": f"SteamGuard/{CURRENT_VERSION}"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                resp = json.loads(r.read())
+        except Exception:
+            self._last_heartbeat_ok = False
+            # Update heartbeat status label
+            status_text = "● Server sync: offline"
+            status_color = YELLOW
+            self.after(0, lambda t=status_text, c=status_color:
+                self._heartbeat_status_lbl.config(text=t, fg=c))
+            return
+
+        self._last_heartbeat_ok = True
+        if resp.get("session_id"):
+            self._heartbeat_session_id = resp["session_id"]
+
+        # Update heartbeat status label
+        status_text = "● Server sync: OK"
+        status_color = GREEN
+        self.after(0, lambda t=status_text, c=status_color:
+            self._heartbeat_status_lbl.config(text=t, fg=c))
+
+        # Handle kill signal
+        if resp.get("kill"):
+            reason = resp.get("kill_reason", "License revoked")
+            self.after(0, lambda r=reason: self._on_remote_kill(r))
+            return
+
+        # Handle badge awards
+        new_badges = resp.get("new_badges", [])
+        if new_badges:
+            self.after(0, lambda b=new_badges: self._on_new_badges(b))
+
+        # Update feature flags
+        policy = resp.get("client_policy", {})
+        if policy.get("mandatory_update"):
+            self.after(0, lambda: self._log("A mandatory update is available. Please update SteamGuard.", level="warn"))
+
+    def _on_remote_kill(self, reason: str):
+        # Stop protection
+        if self._protected:
+            self._stop_protection()
+        # Show message
+        from tkinter import messagebox
+        self._log(f"Remote kill received: {reason}", error=True)
+        messagebox.showerror("SteamGuard — Access Revoked",
+            f"Your license has been deactivated:\n\n{reason}\n\nContact support in Discord.")
+
+    # ── Badge / Achievement System ────────────────────────────────────────────
+
+    def _on_new_badges(self, badges: list):
+        for badge in badges:
+            if badge not in self._badges:
+                self._badges.append(badge)
+                self._log(f"🏆 Achievement unlocked: {badge}!", level="success", color=YELLOW)
+        self._redraw_badges()
+
+    def _redraw_badges(self):
+        for w in self._badge_frame_inner.winfo_children():
+            w.destroy()
+
+        BADGE_DEFS = {
+            "first_guard":    ("🛡", "First Guard",    "First protection session"),
+            "first_heal":     ("⚡", "First Heal",     "First auto-heal fired"),
+            "healer_10":      ("🔥", "Healer",         "10 heals fired"),
+            "healer_100":     ("💎", "Guardian",       "100 heals fired"),
+            "night_watch":    ("🌙", "Night Watch",    "Protected midnight–6am"),
+            "patch_veteran":  ("🔧", "Patch Veteran",  "Used 5 app versions"),
+            "bug_slayer":     ("🐛", "Bug Slayer",     "Confirmed bug report"),
+            "founder":        ("⭐", "Founder",        "Early supporter"),
+        }
+
+        # Show earned badges bright, unearned badges dim
+        all_badges = list(BADGE_DEFS.keys())
+
+        row = tk.Frame(self._badge_frame_inner, bg=BG_DARK)
+        row.pack(fill="x")
+
+        for i, badge_key in enumerate(all_badges):
+            icon, name, desc = BADGE_DEFS.get(badge_key, ("?", badge_key, ""))
+            earned = badge_key in self._badges
+
+            cell = tk.Frame(row, bg=BG_CARD if earned else BG_PANEL, width=70, height=70)
+            cell.pack(side="left", padx=3, pady=2)
+            cell.pack_propagate(False)
+
+            tk.Label(cell, text=icon, bg=BG_CARD if earned else BG_PANEL,
+                     font=("Segoe UI Emoji", 18),
+                     fg=TEXT_MAIN if earned else TEXT_DIM).pack(pady=(8,0))
+            tk.Label(cell, text=name, bg=BG_CARD if earned else BG_PANEL,
+                     font=("Segoe UI", 6, "bold"),
+                     fg=TEXT_MAIN if earned else TEXT_DIM,
+                     wraplength=65).pack()
+
+            if i == 7:  # wrap to next row
+                row = tk.Frame(self._badge_frame_inner, bg=BG_DARK)
+                row.pack(fill="x")
+
+        Tooltip(self._badge_frame_inner, "Badges earned through SteamGuard usage")
+
+    # ── Share Card Export ─────────────────────────────────────────────────────
+
+    def _export_share_card(self):
+        """Generate and save a share card PNG using Pillow."""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            import io, os
+
+            W, H = 600, 280
+            img = Image.new("RGB", (W, H), color=(13, 17, 23))  # BG_DARK
+            d = ImageDraw.Draw(img)
+
+            # Background gradient effect (simple horizontal bands)
+            for y in range(H):
+                alpha = y / H
+                r = int(13 + alpha * 15)
+                g = int(17 + alpha * 20)
+                b = int(23 + alpha * 30)
+                d.line([(0, y), (W, y)], fill=(r, g, b))
+
+            # Shield icon area (left panel)
+            d.rectangle([0, 0, 160, H], fill=(28, 33, 40))  # BG_PANEL
+
+            # Shield polygon
+            cx, cy = 80, 100
+            pts = [cx, cy-40, cx+34, cy-24, cx+34, cy+10, cx, cy+46, cx-34, cy+10, cx-34, cy-24]
+            filled = self._protected
+            d.polygon(pts, fill=(26, 58, 92) if not filled else (13, 42, 13),
+                     outline=(88, 166, 255) if not filled else (63, 185, 80), width=2)
+
+            # Try to load a font, fall back to default
+            try:
+                font_big   = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 22)
+                font_med   = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 14)
+                font_small = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 11)
+                font_bold  = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf", 16)
+            except Exception:
+                font_big = font_med = font_small = font_bold = ImageFont.load_default()
+
+            # "SteamGuard" title in shield panel
+            d.text((80, 158), "SteamGuard", fill=(88, 166, 255), font=font_med, anchor="mm")
+            d.text((80, 175), f"v{CURRENT_VERSION}", fill=(139, 148, 158), font=font_small, anchor="mm")
+
+            # Status
+            status_text = "PROTECTED" if self._protected else "STANDBY"
+            status_color = (63, 185, 80) if self._protected else (139, 148, 158)
+            d.text((80, 195), status_text, fill=status_color, font=font_small, anchor="mm")
+
+            # Stats panel (right)
+            elapsed_secs = int((datetime.now() - self._session_start).total_seconds())
+            def fmt(s):
+                if s < 60: return f"{s}s"
+                if s < 3600: return f"{s//60}m"
+                return f"{s//3600}h {(s%3600)//60}m"
+
+            total_heals = self._heal_count + self._rule_heal_cnt
+            game_name = self._running_game["name"] if self._running_game else "No game"
+
+            stats = [
+                ("Session Time",   fmt(elapsed_secs)),
+                ("Heals Fired",    str(total_heals)),
+                ("Connections Cut",str(self._kill_counter)),
+                ("Current Game",   game_name[:20] + "…" if len(game_name) > 20 else game_name),
+            ]
+
+            d.text((330, 30), "Session Stats", fill=(230, 237, 243), font=font_bold, anchor="mm")
+
+            for i, (label, value) in enumerate(stats):
+                y = 65 + i * 52
+                d.rectangle([175, y-4, 585, y+44], fill=(33, 38, 45))  # BG_CARD
+                d.text((195, y+4), label, fill=(139, 148, 158), font=font_small)
+                d.text((195, y+22), value, fill=(230, 237, 243), font=font_bold)
+
+            # Badges row
+            if self._badges:
+                badge_icons = {"first_guard":"🛡","first_heal":"⚡","healer_10":"🔥",
+                              "healer_100":"💎","night_watch":"🌙","founder":"⭐"}
+                badge_str = " ".join(badge_icons.get(b, "?") for b in self._badges[:5])
+                d.text((380, 248), badge_str, fill=(230, 237, 243), font=font_med, anchor="mm")
+
+            # Watermark
+            d.text((580, 265), "SteamGuard", fill=(48, 54, 61), font=font_small, anchor="rs")
+
+            # Save to Desktop
+            desktop = Path(os.path.expanduser("~")) / "Desktop"
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = desktop / f"SteamGuard_card_{ts}.png"
+            img.save(str(out_path), "PNG")
+            self._log(f"Share card saved: {out_path.name}", level="success", color=GREEN)
+
+            # Open it
+            import subprocess
+            subprocess.Popen(["explorer", str(out_path)], creationflags=subprocess.CREATE_NO_WINDOW)
+
+        except ImportError:
+            self._log("Pillow required for share card (pip install Pillow)", level="warn", color=YELLOW)
+        except Exception as e:
+            self._log(f"Share card failed: {e}", error=True)
+
+    # ── Copy Stats to Clipboard ───────────────────────────────────────────────
+
+    def _copy_stats_text(self):
+        elapsed = int((datetime.now() - self._session_start).total_seconds())
+        def fmt(s):
+            if s < 60: return f"{s}s"
+            if s < 3600: return f"{s//60}m {s%60}s"
+            return f"{s//3600}h {(s%3600)//60}m"
+        total_heals = self._heal_count + self._rule_heal_cnt
+        game = self._running_game["name"] if self._running_game else "None"
+        text = (f"🛡 SteamGuard v{CURRENT_VERSION}\n"
+                f"Session: {fmt(elapsed)} | Heals: {total_heals} | "
+                f"Connections cut: {self._kill_counter}\n"
+                f"Game: {game}\n"
+                f"Badges: {', '.join(self._badges) if self._badges else 'None yet'}")
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._log("Stats copied to clipboard.", level="success", color=GREEN)
 
     # ── Game detection loop ───────────────────────────────────────────────────
 
@@ -1428,7 +1743,7 @@ class SteamGuard(tk.Tk):
                              font=("Segoe UI", 13, "bold"))
         title_lbl.place(x=48, y=10)
 
-        ver_lbl = tk.Label(hdr, text="v1.2.0", bg=BG_PANEL, fg=TEXT_DIM, font=F_SMALL)
+        ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_PANEL, fg=TEXT_DIM, font=F_SMALL)
         ver_lbl.place(x=155, y=14)
 
         # Admin pill canvas (70x20)
@@ -1631,20 +1946,24 @@ class SteamGuard(tk.Tk):
         self._log_w.pack(fill="both", expand=True)
 
         # ── Tab 2: Stats ───────────────────────────────────────────────────────
-        stats_frame = tk.Frame(nb, bg=BG_DARK)
-        nb.add(stats_frame, text="STATS")
+        stats_tab_outer = tk.Frame(nb, bg=BG_DARK)
+        nb.add(stats_tab_outer, text="STATS")
+
+        # Scrollable container for stats tab
+        stats_tab_frame = tk.Frame(stats_tab_outer, bg=BG_DARK)
+        stats_tab_frame.pack(fill="both", expand=True)
 
         # Chart canvas
-        chart_lbl = tk.Label(stats_frame, text="HEALS LAST 7 HOURS",
+        chart_lbl = tk.Label(stats_tab_frame, text="HEALS LAST 7 HOURS",
                              bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
         chart_lbl.pack(pady=(8, 2))
-        self._chart_cv = tk.Canvas(stats_frame, width=490, height=140,
+        self._chart_cv = tk.Canvas(stats_tab_frame, width=490, height=140,
                                    bg=BG_PANEL, highlightthickness=0)
         self._chart_cv.pack(padx=12, pady=(0, 8))
         self._redraw_chart()
 
         # Stat cells 2x2
-        stat_grid = tk.Frame(stats_frame, bg=BG_DARK)
+        stat_grid = tk.Frame(stats_tab_frame, bg=BG_DARK)
         stat_grid.pack(fill="x", padx=12)
 
         def _make_stat_cell(parent, row, col, name):
@@ -1664,11 +1983,44 @@ class SteamGuard(tk.Tk):
         self._stat_heals_lbl     = _make_stat_cell(stat_grid, 1, 0, "Total Heals")
         self._stat_lastheal_lbl  = _make_stat_cell(stat_grid, 1, 1, "Last Heal")
 
+        # Badge section
+        badge_frame = tk.Frame(stats_tab_frame, bg=BG_DARK)
+        badge_frame.pack(fill="x", padx=12, pady=(8,0))
+        tk.Label(badge_frame, text="ACHIEVEMENTS", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0,4))
+        self._badge_frame_inner = tk.Frame(badge_frame, bg=BG_DARK)
+        self._badge_frame_inner.pack(fill="x")
+
+        # Initial draw of badges (all unearned)
+        self._redraw_badges()
+
+        # Share/export row
+        share_row = tk.Frame(stats_tab_frame, bg=BG_DARK)
+        share_row.pack(fill="x", padx=12, pady=(8,4))
+        share_btn = tk.Button(share_row, text="📤  Export Share Card",
+            bg=ACCENT, fg="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, cursor="hand2",
+            activebackground="#1c6cc4",
+            command=self._export_share_card)
+        share_btn.pack(side="left", ipady=5, ipadx=12)
+        Tooltip(share_btn, "Save a shareable stats card PNG to your Desktop")
+
+        copy_btn2 = tk.Button(share_row, text="📋  Copy Stats to Clipboard",
+            bg=BG_CARD, fg=TEXT_MAIN, font=F_SMALL,
+            relief="flat", bd=0, cursor="hand2",
+            activebackground=BORDER,
+            command=self._copy_stats_text)
+        copy_btn2.pack(side="left", ipady=5, ipadx=10, padx=(6,0))
+        Tooltip(copy_btn2, "Copy a text summary of your stats to the clipboard")
+
         # ── Tab 3: Settings ────────────────────────────────────────────────────
         settings_frame = tk.Frame(nb, bg=BG_DARK)
         nb.add(settings_frame, text="SETTINGS")
 
-        opts1 = tk.Frame(settings_frame, bg=BG_DARK)
+        # Use a frame variable for the settings tab content
+        settings_tab_frame = settings_frame
+
+        opts1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
         opts1.pack(fill="x", padx=12, pady=(10, 0))
         tk.Checkbutton(opts1, text="Auto-protect when game launches",
                        variable=self._auto_heal,
@@ -1685,7 +2037,7 @@ class SteamGuard(tk.Tk):
         scan_btn.bind("<Leave>", lambda e: self._hover_leave(scan_btn, BG_CARD))
         Tooltip(scan_btn, "Re-scan all Steam library folders for installed games")
 
-        opts2 = tk.Frame(settings_frame, bg=BG_DARK)
+        opts2 = tk.Frame(settings_tab_frame, bg=BG_DARK)
         opts2.pack(fill="x", padx=12, pady=(6, 0))
         tk.Checkbutton(opts2, text="Start with Windows",
                        variable=self._autostart_var,
@@ -1709,7 +2061,7 @@ class SteamGuard(tk.Tk):
         steam_int_btn.bind("<Enter>", lambda e: self._hover_enter(steam_int_btn, BORDER))
         steam_int_btn.bind("<Leave>", lambda e: self._hover_leave(steam_int_btn, BG_CARD))
 
-        opts3 = tk.Frame(settings_frame, bg=BG_DARK)
+        opts3 = tk.Frame(settings_tab_frame, bg=BG_DARK)
         opts3.pack(fill="x", padx=12, pady=(6, 0))
         export_btn = tk.Button(opts3, text="Export Log", bg=BG_CARD, fg=TEXT_DIM,
                                font=F_SMALL, relief="flat", bd=0, cursor="hand2",
@@ -1719,6 +2071,41 @@ class SteamGuard(tk.Tk):
         export_btn.bind("<Enter>", lambda e: self._hover_enter(export_btn, BORDER))
         export_btn.bind("<Leave>", lambda e: self._hover_leave(export_btn, BG_CARD))
         Tooltip(export_btn, "Save the event log to your Desktop as a .txt file")
+
+        # Share Card section in Settings tab
+        sc_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
+        sc_sep.pack(fill="x", padx=12, pady=(10, 0))
+
+        sc_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        sc_header.pack(fill="x", padx=12, pady=(6, 0))
+        tk.Label(sc_header, text="SHARE CARD", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
+
+        sc_row = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        sc_row.pack(fill="x", padx=12, pady=(4, 0))
+        sc_export_btn = tk.Button(sc_row, text="📤  Export Share Card",
+            bg=ACCENT, fg="white", font=F_SMALL,
+            relief="flat", bd=0, cursor="hand2",
+            activebackground="#1c6cc4",
+            command=self._export_share_card)
+        sc_export_btn.pack(side="left", ipady=4, ipadx=10)
+        Tooltip(sc_export_btn, "Save a PNG share card to your Desktop")
+
+        # Heartbeat status
+        hb_sep = tk.Frame(settings_tab_frame, bg=BORDER, height=1)
+        hb_sep.pack(fill="x", padx=12, pady=(10, 0))
+
+        hb_header = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        hb_header.pack(fill="x", padx=12, pady=(6, 0))
+        tk.Label(hb_header, text="SERVER SYNC", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 7, "bold")).pack(anchor="w")
+
+        hb_row = tk.Frame(settings_tab_frame, bg=BG_DARK)
+        hb_row.pack(fill="x", padx=12, pady=(4,0))
+        self._heartbeat_status_lbl = tk.Label(hb_row,
+            text="● Server sync: not yet connected",
+            bg=BG_DARK, fg=TEXT_DIM, font=F_SMALL, anchor="w")
+        self._heartbeat_status_lbl.pack(side="left")
 
         # ── Admin warning banner ──────────────────────────────────────────────
         if not self._admin:
@@ -1857,7 +2244,7 @@ class SteamGuard(tk.Tk):
             return
         try:
             content = self._log_w.get("1.0", "end")
-            header = f"SteamGuard v1.2.0 — Event Log\nExported: {datetime.now()}\n{'='*60}\n"
+            header = f"SteamGuard v{CURRENT_VERSION} — Event Log\nExported: {datetime.now()}\n{'='*60}\n"
             Path(path).write_text(header + content, encoding="utf-8")
             self._log(f"Log exported to {path}", level="success")
         except Exception as e:

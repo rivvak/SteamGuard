@@ -1,6 +1,6 @@
 """
-SteamGuard Discord Bot — Full Version
-──────────────────────────────────────
+SteamGuard Discord Bot — Full Version v2
+──────────────────────────────────────────
 Channel rules:
   • All commands ONLY work in #get-key channel (GETKEY_CHANNEL_ID env var)
   • DMs get a friendly redirect message with server invite link
@@ -16,10 +16,22 @@ Admin commands (in any channel, admin only):
   !pausekey @user [reason]               — suspend a user's key immediately
   !unpausekey @user                      — resume a suspended key
   !revokekey @user [reason]              — permanently revoke
-  !sgstatus                              — bot + server health check
+  !sgstatus                              — bot + server health check (with server stats)
+
+Slash commands:
+  /status       — Check your SteamGuard license and account status (ephemeral)
+  /refer        — Get your personal referral link (ephemeral)
+  /stats        — View your SteamGuard protection statistics (public)
+  /leaderboard  — View the weekly leaderboard (public)
+  /reset-device — Self-service HWID reset with confirmation (ephemeral)
+  /download     — Get the latest installer link (ephemeral)
+  /vote         — Vote on upcoming features (public)
+  /support      — Submit a support request via modal (ephemeral)
+  /checkbadges  — Check for newly earned badges and announce them
 
 Auto-tasks:
-  Every 24 h: membership sweep — pauses keys for anyone who lost the role
+  Every 24 h : membership sweep — pauses keys for anyone who lost the role
+  Every 10 m : stat channel name updates (Members / Active / Heals)
 
 Required env vars:
   DISCORD_BOT_TOKEN   — bot token
@@ -32,19 +44,32 @@ Required env vars:
   DISCORD_INVITE      — your server invite link (e.g. discord.gg/xxxx)
   YOUTUBE_CLIENT_ID   — (optional) Google OAuth client ID for YT linking
   YOUTUBE_CLIENT_SECRET — (optional) Google OAuth client secret
+
+New optional env vars:
+  MEMBERS_CHANNEL_ID  — voice channel to rename with member count
+  ACTIVE_CHANNEL_ID   — voice channel to rename with active key count
+  HEALS_CHANNEL_ID    — voice channel to rename with total heals count
+  SUPPORT_CHANNEL_ID  — channel to post support requests
+  UPDATE_DOWNLOAD_URL — override download URL (default: GitHub releases)
+  VOTE_TOPICS         — JSON array string of vote topics (optional)
+  BADGE_ANNOUNCE_CHANNEL_ID — channel to announce badge unlocks
 """
 
 import os
+import json
 import asyncio
 import logging
 import time
 import httpx
 import discord
+import discord.app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timezone
 
 LOG = logging.getLogger("sg-bot")
 logging.basicConfig(level=logging.INFO)
+
+# ── Env vars (original) ───────────────────────────────────────────────────────
 
 GUILD_ID           = int(os.environ["DISCORD_GUILD_ID"])
 ROLE_ID            = int(os.environ["DISCORD_ROLE_ID"])
@@ -61,7 +86,31 @@ ADMIN_USER_IDS: set[int] = set(
 YT_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID", "")
 YT_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 
-# Colours
+# ── Env vars (new) ────────────────────────────────────────────────────────────
+
+MEMBERS_CHANNEL_ID          = int(os.environ.get("MEMBERS_CHANNEL_ID", "0") or "0")
+ACTIVE_CHANNEL_ID           = int(os.environ.get("ACTIVE_CHANNEL_ID", "0") or "0")
+HEALS_CHANNEL_ID            = int(os.environ.get("HEALS_CHANNEL_ID", "0") or "0")
+SUPPORT_CHANNEL_ID          = int(os.environ.get("SUPPORT_CHANNEL_ID", "0") or "0")
+BADGE_ANNOUNCE_CHANNEL_ID   = int(os.environ.get("BADGE_ANNOUNCE_CHANNEL_ID", "0") or "0")
+UPDATE_DOWNLOAD_URL         = os.environ.get(
+    "UPDATE_DOWNLOAD_URL", "https://github.com/rivvak/SteamGuard/releases/latest"
+)
+_VOTE_TOPICS_RAW = os.environ.get("VOTE_TOPICS", "")
+DEFAULT_VOTE_TOPICS = [
+    "Cloud settings backup",
+    "Multi-device support (2 PCs)",
+    "Monthly recap card",
+    "Custom themes",
+    "Playtime tracker",
+]
+try:
+    VOTE_TOPICS: list[str] = json.loads(_VOTE_TOPICS_RAW) if _VOTE_TOPICS_RAW else DEFAULT_VOTE_TOPICS
+except Exception:
+    VOTE_TOPICS = DEFAULT_VOTE_TOPICS
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+
 C_BLUE   = 0x2563eb
 C_GREEN  = 0x22c55e
 C_RED    = 0xef4444
@@ -173,6 +222,14 @@ async def on_ready():
     LOG.info(f"Bot ready: {bot.user} (ID {bot.user.id})")
     await _post_welcome_embed()
     daily_membership_sweep.start()
+    update_stat_channels.start()
+    # Sync slash commands to the guild
+    try:
+        guild_obj = discord.Object(id=GUILD_ID)
+        synced = await bot.tree.sync(guild=guild_obj)
+        LOG.info(f"Synced {len(synced)} slash command(s) to guild {GUILD_ID}")
+    except Exception as e:
+        LOG.error(f"Failed to sync slash commands: {e}")
 
 @bot.event
 async def on_member_remove(member: discord.Member):
@@ -191,12 +248,44 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     role = after.guild.get_role(ROLE_ID)
     if role is None:
         return
+
+    # Lost Member role → pause key
     if role in before.roles and role not in after.roles:
         LOG.info(f"{after} lost Member role — pausing key")
         await _api("post", "/pause-by-discord", json={
             "discord_user_id": str(after.id),
             "reason": "Lost Member role",
         })
+
+    # Gained Member role (e.g. Verified role granted) → send onboarding DM
+    if role not in before.roles and role in after.roles:
+        LOG.info(f"{after} gained Member role — sending onboarding DM")
+        await _send_onboarding_dm(after)
+
+# ── Onboarding DM helper ──────────────────────────────────────────────────────
+
+async def _send_onboarding_dm(member: discord.Member):
+    """Send a welcome / getting-started DM when a member receives the Member role."""
+    embed = discord.Embed(
+        title="🛡  Welcome to SteamGuard!",
+        description=(
+            "Here's how to get started:\n\n"
+            "1. ✅  Complete verification in **#verify**\n"
+            "2. ⬇️  Download the app: `/download`\n"
+            "3. 🔑  Activate your license in the app\n"
+            "4. 📊  Run `/stats` to see your first card\n"
+            "5. 🔗  Use `/refer` to earn rewards\n\n"
+            "Need help? Use `/support` anytime."
+        ),
+        color=C_BLUE,
+    )
+    embed.set_footer(text="SteamGuard • Your protection starts now")
+    try:
+        await member.send(embed=embed)
+    except discord.Forbidden:
+        LOG.info(f"Could not DM onboarding to {member} (DMs disabled)")
+    except Exception as e:
+        LOG.warning(f"Onboarding DM error for {member}: {e}")
 
 # ── Welcome embed in #get-key ─────────────────────────────────────────────────
 
@@ -236,7 +325,6 @@ async def _post_welcome_embed():
         inline=False)
     embed.set_footer(text="Your key is locked to your machine. Do not share it.")
 
-    # Try to send (don't error if we can't)
     try:
         await channel.send(embed=embed)
     except Exception as e:
@@ -531,7 +619,7 @@ async def revoke_key(ctx: commands.Context, member: discord.Member, *, reason: s
 @bot.command(name="sgstatus")
 @is_admin()
 async def sg_status(ctx: commands.Context):
-    """Admin: bot + server health."""
+    """Admin: bot + server health with aggregate stats."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(f"{LICENSE_SERVER_URL}/health")
@@ -541,14 +629,29 @@ async def sg_status(ctx: commands.Context):
         server_ok = False
         server_ts = "—"
 
+    # Fetch aggregate stats
+    stats_data = {}
+    try:
+        stats_data = await _api_get("/stats/server")
+    except Exception:
+        pass
+
+    total_keys  = stats_data.get("total_keys", "N/A")
+    active_keys = stats_data.get("active_keys", "N/A")
+    total_heals = stats_data.get("total_heals", "N/A")
+
     embed = discord.Embed(
         title="SteamGuard System Status",
         color=C_GREEN if server_ok else C_RED)
-    embed.add_field(name="Bot",    value="🟢 Online",                                  inline=True)
-    embed.add_field(name="Server", value=f"{'🟢 Online' if server_ok else '🔴 Down'}",  inline=True)
-    embed.add_field(name="Server time", value=server_ts, inline=True)
-    embed.add_field(name="Guild",  value=str(GUILD_ID),  inline=True)
-    embed.add_field(name="Channel", value=f"<#{GETKEY_CHANNEL_ID}>" if GETKEY_CHANNEL_ID else "any", inline=True)
+    embed.add_field(name="Bot",         value="🟢 Online",                                   inline=True)
+    embed.add_field(name="Server",      value=f"{'🟢 Online' if server_ok else '🔴 Down'}",   inline=True)
+    embed.add_field(name="Server time", value=server_ts,                                      inline=True)
+    embed.add_field(name="Guild",       value=str(GUILD_ID),                                  inline=True)
+    embed.add_field(name="Channel",     value=f"<#{GETKEY_CHANNEL_ID}>" if GETKEY_CHANNEL_ID else "any", inline=True)
+    embed.add_field(name="​",           value="​",                                             inline=True)  # spacer
+    embed.add_field(name="Total Keys",  value=f"{total_keys:,}" if isinstance(total_keys, int) else str(total_keys),  inline=True)
+    embed.add_field(name="Active Keys", value=f"{active_keys:,}" if isinstance(active_keys, int) else str(active_keys), inline=True)
+    embed.add_field(name="Total Heals", value=f"{total_heals:,}" if isinstance(total_heals, int) else str(total_heals), inline=True)
     embed.set_footer(text=f"Bot: {bot.user}")
     await ctx.send(embed=embed)
 
@@ -603,6 +706,596 @@ async def daily_membership_sweep():
 @daily_membership_sweep.before_loop
 async def before_sweep():
     await bot.wait_until_ready()
+
+# ── Auto-updating stat channels ───────────────────────────────────────────────
+
+@tasks.loop(minutes=10)
+async def update_stat_channels():
+    """Rename voice channels with live stats from /stats/server."""
+    try:
+        stats = await _api_get("/stats/server")
+    except Exception:
+        return
+
+    if "error" in stats:
+        return
+
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+
+    total_keys  = stats.get("total_keys", 0)
+    active_keys = stats.get("active_keys", 0)
+    total_heals = stats.get("total_heals", 0)
+
+    channel_updates = [
+        (MEMBERS_CHANNEL_ID, f"👥 Members: {total_keys:,}"),
+        (ACTIVE_CHANNEL_ID,  f"✅ Active: {active_keys:,}"),
+        (HEALS_CHANNEL_ID,   f"🛡 Heals: {total_heals:,}"),
+    ]
+
+    for ch_id, new_name in channel_updates:
+        if ch_id == 0:
+            continue
+        channel = guild.get_channel(ch_id)
+        if channel is None:
+            continue
+        try:
+            if channel.name != new_name:
+                await channel.edit(name=new_name)
+                LOG.info(f"Stat channel updated: {new_name}")
+        except Exception as e:
+            LOG.warning(f"Could not update stat channel {ch_id}: {e}")
+
+@update_stat_channels.before_loop
+async def before_stat_channels():
+    await bot.wait_until_ready()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── UI Views & Modals ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Device reset confirmation view ───────────────────────────────────────────
+
+class DeviceResetView(discord.ui.View):
+    """Confirmation buttons for /reset-device."""
+
+    def __init__(self, discord_user_id: str, license_key: str):
+        super().__init__(timeout=30)
+        self.discord_user_id = discord_user_id
+        self.license_key     = license_key
+
+    @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            data = await _api("post", "/device/reset", json={
+                "discord_user_id": self.discord_user_id,
+                "key": self.license_key,
+            })
+            if "error" in data:
+                err = data["error"]
+                cooldown = data.get("cooldown_remaining", "")
+                msg = f"❌ Reset failed: {err}"
+                if cooldown:
+                    msg += f"\nCooldown remaining: **{cooldown}**"
+                await interaction.edit_original_response(content=msg, view=None)
+            else:
+                next_reset = data.get("next_reset_date", "30 days from now")
+                await interaction.edit_original_response(
+                    content=f"✅ Device binding reset successfully.\nNext reset available: **{next_reset}**",
+                    view=None,
+                )
+        except Exception as e:
+            LOG.error(f"Device reset error: {e}")
+            await interaction.edit_original_response(
+                content="❌ An error occurred while resetting your device. Please try again later.",
+                view=None,
+            )
+        # Disable buttons after action
+        for child in self.children:
+            child.disabled = True
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Device reset cancelled.", view=None)
+
+    async def on_timeout(self):
+        # View expired — disable all buttons silently
+        for child in self.children:
+            child.disabled = True
+
+# ── Support modal ─────────────────────────────────────────────────────────────
+
+class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
+    category = discord.ui.TextInput(
+        label="Issue Category",
+        placeholder="Activation / License / Bug / Discord Sync / Other",
+        max_length=50,
+    )
+    app_version = discord.ui.TextInput(
+        label="App Version",
+        placeholder="e.g. 1.2.0",
+        max_length=20,
+    )
+    description = discord.ui.TextInput(
+        label="Describe your issue",
+        style=discord.TextStyle.paragraph,
+        max_length=500,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Post embed to SUPPORT_CHANNEL_ID if configured
+        embed = discord.Embed(
+            title="🎫  New Support Request",
+            color=C_BLUE,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="User",        value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        embed.add_field(name="Category",    value=self.category.value,    inline=True)
+        embed.add_field(name="App Version", value=self.app_version.value, inline=True)
+        embed.add_field(name="Description", value=self.description.value, inline=False)
+        embed.set_footer(text=f"User ID: {interaction.user.id}")
+
+        if SUPPORT_CHANNEL_ID:
+            guild = bot.get_guild(GUILD_ID)
+            if guild:
+                support_channel = guild.get_channel(SUPPORT_CHANNEL_ID)
+                if support_channel:
+                    try:
+                        await support_channel.send(embed=embed)
+                    except Exception as e:
+                        LOG.warning(f"Could not post support request to channel: {e}")
+
+        await interaction.response.send_message(
+            "✅ Your support request has been submitted. Our team will get back to you soon!",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        LOG.error(f"SupportModal error: {error}")
+        await interaction.response.send_message(
+            "❌ Failed to submit your request. Please try again later.",
+            ephemeral=True,
+        )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── Slash Commands ────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── /status ───────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="status",
+    description="Check your SteamGuard license and account status",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_status(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        data = await _api_get(f"/admin/key-info/{interaction.user.id}")
+    except Exception as e:
+        LOG.error(f"/status API error: {e}")
+        await interaction.followup.send("❌ Could not reach the license server. Try again later.", ephemeral=True)
+        return
+
+    if "error" in data and not data.get("keys"):
+        await interaction.followup.send(
+            "❌ Could not fetch your status. You may not have a key yet — use `!getkey` to get one.",
+            ephemeral=True,
+        )
+        return
+
+    keys = data.get("keys", [])
+    if not keys:
+        embed = discord.Embed(
+            title="🔑  No License Found",
+            description="You don't have a SteamGuard license yet. Use `!getkey` to get one.",
+            color=C_GREY,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    # Use the first (most recent) key for the summary card
+    k = keys[0]
+    status_str = k.get("status", "unknown")
+    color = {"active": C_GREEN, "paused": C_YELLOW, "revoked": C_RED}.get(status_str, C_GREY)
+    status_icon = {"active": "🟢", "paused": "🟡", "revoked": "🔴"}.get(status_str, "⚪")
+
+    embed = discord.Embed(
+        title=f"{status_icon}  Your SteamGuard Status",
+        color=color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="License Tier", value=data.get("tier", k.get("tier", "Standard")), inline=True)
+    embed.add_field(name="Status",       value=status_str.upper(),                            inline=True)
+    embed.add_field(name="Heal Count",   value=str(data.get("heal_count", k.get("heal_count", 0))), inline=True)
+    embed.add_field(name="XP",           value=str(data.get("xp", k.get("xp", 0))),           inline=True)
+    embed.add_field(name="Level",        value=str(data.get("level", k.get("level", 1))),      inline=True)
+    embed.add_field(name="Badges",       value=str(len(data.get("badges", k.get("badges", [])))), inline=True)
+
+    last_hb = data.get("last_heartbeat", k.get("last_heartbeat", k.get("last_verified", "—")))
+    embed.add_field(name="Last Heartbeat", value=str(last_hb), inline=False)
+
+    if k.get("pause_reason"):
+        embed.add_field(name="Pause Reason", value=k["pause_reason"], inline=False)
+
+    embed.set_footer(text="SteamGuard • Only visible to you")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ── /refer ────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="refer",
+    description="Get your personal SteamGuard referral link",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_refer(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        data = await _api("post", "/referral/create", json={
+            "discord_user_id": str(interaction.user.id),
+        })
+    except Exception as e:
+        LOG.error(f"/refer API error: {e}")
+        await interaction.followup.send("❌ Could not create referral link. Try again later.", ephemeral=True)
+        return
+
+    if "error" in data:
+        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        return
+
+    referral_link   = data.get("referral_link", "N/A")
+    valid_referrals = data.get("valid_referrals", 0)
+
+    embed = discord.Embed(
+        title="🔗  Your SteamGuard Referral Link",
+        color=C_BLUE,
+    )
+    embed.add_field(name="Your Link",         value=referral_link,           inline=False)
+    embed.add_field(name="Valid Referrals",   value=str(valid_referrals),     inline=True)
+    embed.add_field(name="​",                 value="​",                       inline=True)
+    embed.add_field(
+        name="Reward Tiers",
+        value=(
+            "**1 valid** → Badge unlock\n"
+            "**3 valid** → Theme pack\n"
+            "**5 valid** → Founder entry\n"
+            "**10 valid** → 1 month premium"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="SteamGuard • Only visible to you")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ── /stats ────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="stats",
+    description="View your SteamGuard protection statistics",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_stats(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
+    try:
+        key_data   = await _api_get(f"/admin/key-info/{interaction.user.id}")
+        badge_data = await _api_get(f"/badges/{interaction.user.id}")
+    except Exception as e:
+        LOG.error(f"/stats API error: {e}")
+        await interaction.followup.send("❌ Could not fetch your stats. Try again later.", ephemeral=True)
+        return
+
+    if "error" in key_data and not key_data.get("keys"):
+        await interaction.followup.send(
+            "❌ No license found. Use `!getkey` to get started.",
+            ephemeral=True,
+        )
+        return
+
+    xp          = key_data.get("xp", 0)
+    level       = key_data.get("level", 1)
+    total_heals = key_data.get("heal_count", 0)
+    total_kills = key_data.get("kill_count", 0)
+    badges      = badge_data.get("badges", key_data.get("badges", []))
+    last_active = key_data.get("last_heartbeat", key_data.get("last_verified", "—"))
+
+    # Try to get streak from badge data
+    streak = badge_data.get("current_streak", key_data.get("current_streak", "—"))
+
+    embed = discord.Embed(
+        title=f"📊  {interaction.user.display_name}'s SteamGuard Stats",
+        color=C_BLUE,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.add_field(name="⭐ XP",           value=f"{xp:,}",         inline=True)
+    embed.add_field(name="🏆 Level",        value=str(level),         inline=True)
+    embed.add_field(name="​",               value="​",                 inline=True)
+    embed.add_field(name="🛡 Total Heals",  value=f"{total_heals:,}", inline=True)
+    embed.add_field(name="💀 Total Kills",  value=f"{total_kills:,}", inline=True)
+    embed.add_field(name="🔥 Streak",       value=str(streak),        inline=True)
+    embed.add_field(
+        name=f"🎖 Badges ({len(badges)})",
+        value=", ".join(badges) if badges else "None yet",
+        inline=False,
+    )
+    embed.add_field(name="🕒 Last Active",  value=str(last_active), inline=False)
+    embed.set_footer(text="Use /refer to earn rewards • SteamGuard")
+    await interaction.followup.send(embed=embed)
+
+# ── /leaderboard ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="leaderboard",
+    description="View the weekly SteamGuard leaderboard",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
+    try:
+        data = await _api_get("/leaderboard")
+    except Exception as e:
+        LOG.error(f"/leaderboard API error: {e}")
+        await interaction.followup.send("❌ Could not fetch leaderboard. Try again later.", ephemeral=True)
+        return
+
+    if "error" in data:
+        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        return
+
+    entries = data.get("entries", data.get("leaderboard", []))[:10]
+
+    embed = discord.Embed(
+        title="🏆  Weekly SteamGuard Leaderboard",
+        color=C_YELLOW,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if not entries:
+        embed.description = "No leaderboard data available yet. Keep using SteamGuard!"
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        lines = []
+        for i, entry in enumerate(entries):
+            rank     = medals[i] if i < 3 else f"**#{i+1}**"
+            user_id  = entry.get("discord_user_id")
+            username = entry.get("username", entry.get("display_name", "Anonymous"))
+            heals    = entry.get("heal_count", entry.get("heals", 0))
+            kills    = entry.get("kill_count", entry.get("kills", 0))
+            xp       = entry.get("xp", 0)
+
+            if user_id:
+                user_str = f"<@{user_id}>"
+            else:
+                user_str = f"`{username}`"
+
+            lines.append(f"{rank} {user_str} — 🛡 {heals:,} heals  💀 {kills:,} kills  ⭐ {xp:,} XP")
+
+        embed.description = "\n".join(lines)
+
+    embed.set_footer(text="Resets every Monday at midnight UTC • SteamGuard")
+    await interaction.followup.send(embed=embed)
+
+# ── /reset-device ─────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="reset-device",
+    description="Reset your hardware binding (30-day cooldown)",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_reset_device(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    # Fetch the user's key first
+    try:
+        data = await _api_get(f"/admin/key-info/{interaction.user.id}")
+    except Exception as e:
+        LOG.error(f"/reset-device key fetch error: {e}")
+        await interaction.followup.send("❌ Could not reach the license server. Try again later.", ephemeral=True)
+        return
+
+    keys = data.get("keys", [])
+    active_keys = [k for k in keys if k.get("status") == "active"]
+
+    if not active_keys:
+        await interaction.followup.send(
+            "❌ You don't have an active license key to reset.",
+            ephemeral=True,
+        )
+        return
+
+    license_key = active_keys[0].get("key_hash", "")
+
+    embed = discord.Embed(
+        title="⚠️  Confirm Device Reset",
+        description=(
+            "This will **clear your hardware binding**, allowing you to activate on a new device.\n\n"
+            "**Note:** You can only reset once every **30 days**.\n\n"
+            "Are you sure you want to proceed?"
+        ),
+        color=C_YELLOW,
+    )
+    embed.set_footer(text="This confirmation expires in 30 seconds")
+
+    view = DeviceResetView(
+        discord_user_id=str(interaction.user.id),
+        license_key=license_key,
+    )
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+# ── /download ─────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="download",
+    description="Get the latest SteamGuard installer",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_download(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    version = "latest"
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(
+                "https://raw.githubusercontent.com/rivvak/SteamGuard/main/version.txt"
+            )
+            if r.status_code == 200:
+                version = r.text.strip()
+    except Exception as e:
+        LOG.warning(f"/download version fetch error: {e}")
+
+    embed = discord.Embed(
+        title="⬇️  SteamGuard Download",
+        description=(
+            f"**Version:** `{version}`\n\n"
+            f"📥  **[Download SteamGuard]({UPDATE_DOWNLOAD_URL})**\n\n"
+            "🔐  Always verify the **SHA-256 signature** before running any executable.\n"
+            "The official hash is posted in the `#announcements` channel after each release."
+        ),
+        color=C_BLUE,
+    )
+    embed.add_field(
+        name="⚠️  Safety reminder",
+        value=(
+            "• Only download from the official link above\n"
+            "• Never run files sent to you in DMs\n"
+            "• Check the hash before executing"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"SteamGuard v{version} • Only visible to you")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ── /vote ─────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="vote",
+    description="Vote on upcoming SteamGuard features",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_vote(interaction: discord.Interaction):
+    number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    embed = discord.Embed(
+        title="🗳️  SteamGuard Feature Vote",
+        description=(
+            "React to this message with the number of the feature you want most!\n"
+            "You can vote for multiple features.\n\n"
+        ),
+        color=C_BLUE,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    topic_lines = []
+    for i, topic in enumerate(VOTE_TOPICS[:10]):
+        emoji = number_emojis[i] if i < len(number_emojis) else f"{i+1}."
+        topic_lines.append(f"{emoji}  {topic}")
+
+    embed.description += "\n".join(topic_lines)
+    embed.set_footer(text="SteamGuard • Your feedback shapes the roadmap")
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+    # Add reaction prompts to the sent message
+    sent_message = await interaction.original_response()
+    for i in range(min(len(VOTE_TOPICS), 10)):
+        try:
+            await sent_message.add_reaction(number_emojis[i])
+        except Exception:
+            pass
+
+# ── /support ──────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="support",
+    description="Submit a support request",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_support(interaction: discord.Interaction):
+    await interaction.response.send_modal(SupportModal())
+
+# ── /checkbadges ──────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="checkbadges",
+    description="Check if you earned any new badges and announce them",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
+)
+async def slash_checkbadges(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        data = await _api_get(f"/badges/{interaction.user.id}")
+    except Exception as e:
+        LOG.error(f"/checkbadges API error: {e}")
+        await interaction.followup.send("❌ Could not fetch badge data. Try again later.", ephemeral=True)
+        return
+
+    if "error" in data:
+        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        return
+
+    new_badges = data.get("new_badges", [])
+    all_badges = data.get("badges", [])
+
+    if not new_badges:
+        embed = discord.Embed(
+            title="🎖  Badge Check",
+            description=(
+                f"No new badges since last check.\n\n"
+                f"You have **{len(all_badges)}** badge(s) total: "
+                + (", ".join(all_badges) if all_badges else "none yet")
+            ),
+            color=C_GREY,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
+
+    # Announce new badges in badge channel if configured
+    guild = bot.get_guild(GUILD_ID)
+    if guild and BADGE_ANNOUNCE_CHANNEL_ID:
+        announce_channel = guild.get_channel(BADGE_ANNOUNCE_CHANNEL_ID)
+        if announce_channel:
+            announce_embed = discord.Embed(
+                title="🎖  New Badge Unlocked!",
+                description=(
+                    f"{interaction.user.mention} just earned "
+                    + (", ".join(f"**{b}**" for b in new_badges))
+                    + "!"
+                ),
+                color=C_GREEN,
+                timestamp=datetime.now(timezone.utc),
+            )
+            announce_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            announce_embed.set_footer(text="SteamGuard • Keep protecting to earn more")
+            try:
+                await announce_channel.send(embed=announce_embed)
+            except Exception as e:
+                LOG.warning(f"Could not post badge announcement: {e}")
+
+    confirm_embed = discord.Embed(
+        title="🎖  New Badge(s) Earned!",
+        description=(
+            "You unlocked: " + ", ".join(f"**{b}**" for b in new_badges) + "\n\n"
+            "An announcement has been posted in the server. Congrats!"
+        ),
+        color=C_GREEN,
+    )
+    await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+
+# ── Slash command error handler ───────────────────────────────────────────────
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    LOG.error(f"Slash command error: {error}")
+    msg = "❌ An unexpected error occurred. Please try again later."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 

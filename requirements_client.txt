@@ -2,12 +2,18 @@
 # Core (required)
 psutil
 pywin32
+
+# Optional — install wmi for faster network detection (Layer 2)
 wmi
 
-# UI enhancements (optional but recommended)
-Pillow       # game art thumbnails in the game card
-pypresence   # Discord rich presence (shows game in Discord status)
-pystray      # system tray icon (minimize to tray)
+# UI enhancements (optional but strongly recommended)
+Pillow       # game art thumbnails + share card PNG export
+
+# Discord integration (optional)
+pypresence   # Discord Rich Presence (shows game in Discord status)
+
+# System tray (optional)
+pystray      # minimize SteamGuard to tray icon
 
 # Build tool
 nuitka
