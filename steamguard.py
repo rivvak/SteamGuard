@@ -1157,13 +1157,19 @@ class SteamGuard(tk.Tk):
         self.bind("<Map>", self._on_restore)
 
     def _on_restore(self, event=None):
-        # Only act when we triggered the minimize ourselves
         if not getattr(self, "_minimized", False):
             return
         self._minimized = False
         self.unbind("<Map>")
-        # Small delay so wm_state settles before we re-apply overrideredirect
-        self.after(50, lambda: (self.overrideredirect(True), self.focus_force()))
+        self.after(10, self._reapply_overrideredirect)
+
+    def _reapply_overrideredirect(self):
+        self.deiconify()
+        self.update()
+        self.overrideredirect(True)
+        # Re-center on screen if it lost position
+        self.lift()
+        self.focus_force()
 
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
