@@ -2,10 +2,6 @@ name: Deploy to Cloud Run
 on:
   push:
     branches: [main]
-    paths:
-      - "server/**"
-      - "steamguard.py"
-      - "requirements.txt"
   workflow_dispatch:
 
 jobs:
