@@ -49,15 +49,18 @@ import struct
 import winsound
 import io
 import base64
+import queue as _queue_mod
 from datetime import datetime, timedelta
 from ipaddress import ip_address, ip_network
 from pathlib import Path
-import tkinter as tk
 from tkinter import messagebox
-import urllib.request
 import webbrowser
-import sys
 import json as _json_mod
+
+# Thread-safe UI dispatch queue — Python 3.14 forbids calling self.after()
+# from non-main threads. All background threads post callables here instead;
+# the main loop drains it every 50ms via _drain_ui_queue().
+_UI_QUEUE: _queue_mod.Queue = _queue_mod.Queue()
 from steam_features import (
     WhyLockedDialog, SteamDeckHealthDialog, OfflineReadinessDialog,
     FamilyCooldownDialog, DLCAdvisorDialog, PreLaunchWarning,
@@ -1238,6 +1241,28 @@ class SteamGuard(tk.Tk):
         self.after(3600000, self._rotate_hourly_heals)
         # Keep window on top even when a game is running
         self.after(5000, self._keepalive_topmost)
+        # Drain the thread-safe UI queue every 50ms
+        self.after(50, self._drain_ui_queue)
+
+    def _drain_ui_queue(self):
+        """Drain _UI_QUEUE on the main thread. Called every 50ms.
+        Background threads post callables here instead of calling self.after()."""
+        try:
+            while True:
+                fn = _UI_QUEUE.get_nowait()
+                try:
+                    fn()
+                except Exception as e:
+                    debug_log(f"_drain_ui_queue: error in queued fn: {e}", level="ERROR")
+        except _queue_mod.Empty:
+            pass
+        if self._app_running:
+            self.after(50, self._drain_ui_queue)
+
+    def _ui(self, fn):
+        """Thread-safe: post fn to be called on the main thread.
+        Use instead of self._ui(fn) from background threads."""
+        _UI_QUEUE.put(fn)
 
     def _save_settings(self):
         cfg = {
@@ -1250,7 +1275,7 @@ class SteamGuard(tk.Tk):
 
     def _on_pre_launch_warning(self, appid: int, game_name: str, locked_by: str):
         """Called by PreLaunchWarning when a new game launches while library is locked."""
-        self.after(0, lambda: messagebox.showwarning(
+        self._ui(lambda: messagebox.showwarning(
             "SteamGuard — Launch Warning",
             f"⚠ {locked_by} is currently using your shared library.\n"
             f"Launching will kick them out of {game_name}.\n\n"
@@ -1314,7 +1339,7 @@ class SteamGuard(tk.Tk):
     def _initial_load(self):
         def worker():
             # ── Refresh CM server list from Valve's live API ───────────────
-            self.after(0, lambda: self._log(
+            self._ui(lambda: self._log(
                 "Fetching live CM server list from Valve API…"))
             new_ips, total = refresh_cm_cidrs()
             base = len(VALVE_CIDRS)
@@ -1322,17 +1347,17 @@ class SteamGuard(tk.Tk):
                 extra = f", +{new_ips} new IPs discovered" if new_ips else ""
                 msg = (f"CM list: {total} live servers fetched"
                        f" ({base} static CIDRs{extra}).")
-                self.after(0, lambda m=msg: self._log(m))
+                self._ui(lambda m=msg: self._log(m))
             else:
-                self.after(0, lambda: self._log(
+                self._ui(lambda: self._log(
                     f"CM API unreachable — using {base} built-in CIDRs."))
 
             # ── Scan installed games ───────────────────────────────────────
             if self._steam_dir:
-                self.after(0, lambda: self._log("Scanning Steam library…"))
+                self._ui(lambda: self._log("Scanning Steam library…"))
                 self._catalog = build_game_catalog(self._steam_dir)
                 count = len(self._catalog)
-                self.after(0, lambda: self._log(f"Found {count} installed games."))
+                self._ui(lambda: self._log(f"Found {count} installed games."))
 
             # ── Firewall rule setup ────────────────────────────────────────
             # Always recreate — ensures we have a clean rule with no stale
@@ -1341,46 +1366,46 @@ class SteamGuard(tk.Tk):
             if state is True:
                 # Rule was enabled from a previous/crashed session — sync UI
                 # so user sees the correct state without having to re-click.
-                self.after(0, lambda: self._log(
+                self._ui(lambda: self._log(
                     "Firewall rule was already ACTIVE (previous session). "
                     "Resuming protection — Steam CM traffic is blocked."))
-                self.after(0, lambda: self._sync_fw_state(True))
+                self._ui(lambda: self._sync_fw_state(True))
                 self._protected = True
                 self._protect_start = datetime.now()
-                self.after(0, self._update_protect_btn)
-                self.after(0, self._update_status_banner)
+                self._ui(self._update_protect_btn)
+                self._ui(self._update_status_banner)
             elif state is not None:
                 fw_remove()
-                self.after(0, lambda: self._log(
+                self._ui(lambda: self._log(
                     "Existing rule removed — recreating fresh (full block)."))
                 state = None
-                self.after(0, lambda: self._sync_fw_state(state))
+                self._ui(lambda: self._sync_fw_state(state))
                 if self._steam_exe:
                     ok, msg = fw_create(self._steam_exe)
                     if ok:
-                        self.after(0, lambda: self._log(
+                        self._ui(lambda: self._log(
                             "Firewall rule created (inactive). Ready — launch your "
                             "game, click START PROTECTION, then friend joins."))
-                        self.after(0, lambda: self._sync_fw_state(False))
+                        self._ui(lambda: self._sync_fw_state(False))
                     else:
-                        self.after(0, lambda: self._log(
+                        self._ui(lambda: self._log(
                             f"Could not create rule: {msg}", True))
             else:
-                self.after(0, lambda: self._sync_fw_state(state))
+                self._ui(lambda: self._sync_fw_state(state))
                 if self._steam_exe:
                     ok, msg = fw_create(self._steam_exe)
                     if ok:
-                        self.after(0, lambda: self._log(
+                        self._ui(lambda: self._log(
                             "Firewall rule created (inactive). Ready — launch your "
                             "game, click START PROTECTION, then friend joins."))
-                        self.after(0, lambda: self._sync_fw_state(False))
+                        self._ui(lambda: self._sync_fw_state(False))
                     else:
-                        self.after(0, lambda: self._log(
+                        self._ui(lambda: self._log(
                             f"Could not create rule: {msg}", True))
 
             self._monitor.start()
             self._pre_launch.start()
-            self.after(0, lambda: self._log("Network monitor active (4 layers)."))
+            self._ui(lambda: self._log("Network monitor active (4 layers)."))
             # Start game detection loop
             self.after(2000, self._detect_game_loop)
             # Start rule self-heal monitor
@@ -1476,7 +1501,7 @@ class SteamGuard(tk.Tk):
             # Update heartbeat status label
             status_text = "● Server sync: offline"
             status_color = YELLOW
-            self.after(0, lambda t=status_text, c=status_color:
+            self._ui(lambda t=status_text, c=status_color:
                 self._heartbeat_status_lbl.config(text=t, fg=c))
             return
 
@@ -1487,24 +1512,24 @@ class SteamGuard(tk.Tk):
         # Update heartbeat status label
         status_text = "● Server sync: OK"
         status_color = GREEN
-        self.after(0, lambda t=status_text, c=status_color:
+        self._ui(lambda t=status_text, c=status_color:
             self._heartbeat_status_lbl.config(text=t, fg=c))
 
         # Handle kill signal
         if resp.get("kill"):
             reason = resp.get("kill_reason", "License revoked")
-            self.after(0, lambda r=reason: self._on_remote_kill(r))
+            self._ui(lambda r=reason: self._on_remote_kill(r))
             return
 
         # Handle badge awards
         new_badges = resp.get("new_badges", [])
         if new_badges:
-            self.after(0, lambda b=new_badges: self._on_new_badges(b))
+            self._ui(lambda b=new_badges: self._on_new_badges(b))
 
         # Update feature flags
         policy = resp.get("client_policy", {})
         if policy.get("mandatory_update"):
-            self.after(0, lambda: self._log("A mandatory update is available. Please update SteamGuard.", level="warn"))
+            self._ui(lambda: self._log("A mandatory update is available. Please update SteamGuard.", level="warn"))
 
     def _on_remote_kill(self, reason: str):
         # Stop protection
@@ -1660,16 +1685,16 @@ class SteamGuard(tk.Tk):
             if new_id != prev_id:
                 if game:
                     g = game  # capture for lambdas
-                    self.after(0, lambda: self._update_game_card(g))
-                    self.after(0, lambda: self._log(
+                    self._ui(lambda: self._update_game_card(g))
+                    self._ui(lambda: self._log(
                         f"Detected: {g['name']} (AppID {g['appid']})"))
                     # Auto-enable protection when game launches
                     if self._auto_heal.get() and not self._protected:
-                        self.after(0, self._start_protection)
+                        self._ui(self._start_protection)
                 else:
-                    self.after(0, lambda: self._update_game_card(None))
+                    self._ui(lambda: self._update_game_card(None))
                     if self._protected:
-                        self.after(0, self._stop_protection)
+                        self._ui(self._stop_protection)
 
         threading.Thread(target=detect, daemon=True).start()
         # Poll every 3s while no game, 5s while game running
@@ -1695,12 +1720,12 @@ class SteamGuard(tk.Tk):
         if not ok:
             ok = fw_rule_state() is True
             if not ok:
-                self.after(0, lambda: self._log(
+                self._ui(lambda: self._log(
                     f"AUTO-HEAL FAILED [{source}]: {detail}", error=True))
                 return
         # Kill any connection that slipped through before the block fired
         killed = _kill_valve_connections()
-        self.after(0, lambda: self._auto_heal_done(source, detail, killed))
+        self._ui(lambda: self._auto_heal_done(source, detail, killed))
 
     def _auto_heal_done(self, source: str, detail: str, killed: int):
         """Main-thread callback after auto-heal completes."""
@@ -1721,7 +1746,7 @@ class SteamGuard(tk.Tk):
 
         # Kill counter
         if killed:
-            self.after(0, lambda n=killed: self._increment_kill_counter(n))
+            self._ui(lambda n=killed: self._increment_kill_counter(n))
 
         # Session history
         self._append_heal_event(source, detail, killed)
@@ -1756,12 +1781,12 @@ class SteamGuard(tk.Tk):
                 if self._steam_exe:
                     ok, msg = fw_create(self._steam_exe)
                     if not ok:
-                        self.after(0, lambda m=msg: (
+                        self._ui(lambda m=msg: (
                             self._log(f"Rule creation failed: {m}", True),
                             self._finish_protection_busy()))
                         return
                 else:
-                    self.after(0, lambda: (
+                    self._ui(lambda: (
                         self._log("Steam.exe not found — can't create rule.", True),
                         self._finish_protection_busy()))
                     return
@@ -1777,11 +1802,11 @@ class SteamGuard(tk.Tk):
                 # now-active block and goes offline.
                 killed = _kill_valve_connections()
                 if killed:
-                    self.after(0, lambda n=killed: self._log(
+                    self._ui(lambda n=killed: self._log(
                         f"Severed {n} live Valve CM connection(s) — Steam now offline.",
                         color=YELLOW))
-                    self.after(0, lambda n=killed: self._increment_kill_counter(n))
-            self.after(0, lambda: self._on_protection_started(ok))
+                    self._ui(lambda n=killed: self._increment_kill_counter(n))
+            self._ui(lambda: self._on_protection_started(ok))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1829,7 +1854,7 @@ class SteamGuard(tk.Tk):
 
         def worker():
             ok = fw_disable_fast()
-            self.after(0, lambda: self._on_protection_stopped(ok))
+            self._ui(lambda: self._on_protection_stopped(ok))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2370,16 +2395,16 @@ class SteamGuard(tk.Tk):
                         import io as _io
                         img = Image.open(_io.BytesIO(data)).resize((116, 44), Image.LANCZOS)
                         photo = ImageTk.PhotoImage(img)
-                        self.after(0, lambda p=photo: self._set_game_art(p))
+                        self._ui(lambda p=photo: self._set_game_art(p))
                         return
                     except ImportError:
                         # Pillow not installed — show emoji fallback
-                        self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
+                        self._ui(lambda: self._game_icon.config(image="", text="🎮"))
                         return
                 except Exception:
                     continue
             # Both URLs failed
-            self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
+            self._ui(lambda: self._game_icon.config(image="", text="🎮"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _set_game_art(self, photo):
@@ -2676,7 +2701,7 @@ class SteamGuard(tk.Tk):
             online = has_internet()
             color = GREEN if online else TEXT_DIM
             text  = "Online" if online else "Offline"
-            self.after(0, lambda: (
+            self._ui(lambda: (
                 self._net_dot_cv.itemconfig(self._net_dot, fill=color),
                 self._net_lbl.config(text=text, fg=color)
             ))
@@ -2784,13 +2809,13 @@ class SteamGuard(tk.Tk):
 
     def _rescan_games(self):
         def worker():
-            self.after(0, lambda: self._log("Re-scanning Steam library…"))
+            self._ui(lambda: self._log("Re-scanning Steam library…"))
             if self._steam_dir:
                 self._catalog = build_game_catalog(self._steam_dir)
                 count = len(self._catalog)
-                self.after(0, lambda: self._log(f"Scan complete — {count} games found."))
+                self._ui(lambda: self._log(f"Scan complete — {count} games found."))
             else:
-                self.after(0, lambda: self._log("Steam not found.", True))
+                self._ui(lambda: self._log("Steam not found.", True))
         threading.Thread(target=worker, daemon=True).start()
 
     # ── Rule self-heal monitor ────────────────────────────────────────────────
@@ -2818,15 +2843,15 @@ class SteamGuard(tk.Tk):
                         if self._protected:
                             fw_enable_fast()
                             action = "recreated & re-enabled"  # local var, not late-bound
-                            self.after(0, lambda a=action: self._rule_healed(a))
+                            self._ui(lambda a=action: self._rule_healed(a))
                         else:
-                            self.after(0, lambda: self._sync_fw_state(False))
-                            self.after(0, lambda: self._log(
+                            self._ui(lambda: self._sync_fw_state(False))
+                            self._ui(lambda: self._log(
                                 "Rule self-heal: rule was deleted — recreated (inactive)."))
                 elif state is False and self._protected:
                     # Rule unexpectedly disabled while protecting
                     fw_enable_fast()
-                    self.after(0, lambda: self._rule_healed("re-enabled"))
+                    self._ui(lambda: self._rule_healed("re-enabled"))
             except Exception:
                 pass
 
@@ -2859,10 +2884,10 @@ class SteamGuard(tk.Tk):
             try:
                 killed = _kill_valve_connections(sleep_after=False)
                 if killed:
-                    self.after(0, lambda n=killed: self._log(
+                    self._ui(lambda n=killed: self._log(
                         f"Connection watchdog: severed {n} Valve connection(s).",
                         level="kill"))
-                    self.after(0, lambda n=killed: self._increment_kill_counter(n))
+                    self._ui(lambda n=killed: self._increment_kill_counter(n))
             except Exception:
                 pass
             time.sleep(0.2)
@@ -3091,12 +3116,12 @@ KEYBOARD SHORTCUTS
                 icon.stop()
                 self._tray_icon = None
                 self._minimized_to_tray = False
-                self.after(0, self.deiconify)
+                self._ui(self.deiconify)
 
             def on_quit(icon, item):
                 icon.stop()
                 self._tray_icon = None
-                self.after(0, self._on_close)
+                self._ui(self._on_close)
 
             menu = pystray.Menu(
                 pystray.MenuItem("Show SteamGuard", on_show, default=True),
@@ -3111,7 +3136,12 @@ KEYBOARD SHORTCUTS
             pass  # pystray/Pillow not installed — no tray icon, normal taskbar behaviour
 
     def _on_minimize(self, event):
-        """Hide to tray when minimized (only if tray icon is running)."""
+        """Hide to tray when minimized (only if tray icon is running).
+        Guard: only act when the event widget IS the root window, not a child
+        frame/notebook tab unmapping (switching tabs fires <Unmap> on child frames).
+        """
+        if event.widget is not self:
+            return  # ignore child widget unmaps (notebook tab switches, etc.)
         if self._tray_icon and not self._minimized_to_tray:
             self._minimized_to_tray = True
             self.withdraw()
