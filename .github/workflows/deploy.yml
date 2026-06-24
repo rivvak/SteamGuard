@@ -136,11 +136,11 @@ jobs:
       - name: Post Embed to Discord
         shell: pwsh
         run: |
-          $version   = "${{ steps.changelog.outputs.VERSION }}"
-          $changelog = "${{ steps.changelog.outputs.CHANGELOG }}"
-          $buildNum  = "${{ github.run_number }}"
-          $sha       = "${{ github.sha }}".Substring(0,7)
-          $actor     = "${{ github.actor }}"
+          $version   = '${{ steps.changelog.outputs.VERSION }}'
+          $changelog = '${{ steps.changelog.outputs.CHANGELOG }}'
+          $buildNum  = '${{ github.run_number }}'
+          $sha       = ('${{ github.sha }}').Substring(0,7)
+          $actor     = '${{ github.actor }}'
           $ts        = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
           $title       = "SteamGuard Client Updated - v$version"
