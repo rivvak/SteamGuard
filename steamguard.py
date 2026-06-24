@@ -1364,49 +1364,8 @@ class SteamGuard(tk.Tk):
         self._redraw_badges()
 
     def _redraw_badges(self):
-        for w in self._badge_frame_inner.winfo_children():
-            w.destroy()
-
-        BADGE_DEFS = {
-            "first_guard":    ("🛡", "First Guard",    "First protection session"),
-            "first_heal":     ("⚡", "First Heal",     "First auto-heal fired"),
-            "healer_10":      ("🔥", "Healer",         "10 heals fired"),
-            "healer_100":     ("💎", "Guardian",       "100 heals fired"),
-            "night_watch":    ("🌙", "Night Watch",    "Protected midnight–6am"),
-            "patch_veteran":  ("🔧", "Patch Veteran",  "Used 5 app versions"),
-            "bug_slayer":     ("🐛", "Bug Slayer",     "Confirmed bug report"),
-            "founder":        ("⭐", "Founder",        "Early supporter"),
-        }
-
-        # Show earned badges bright, unearned badges dim
-        all_badges = list(BADGE_DEFS.keys())
-
-        row = tk.Frame(self._badge_frame_inner, bg=BG_DARK)
-        row.pack(fill="x")
-
-        for i, badge_key in enumerate(all_badges):
-            icon, name, desc = BADGE_DEFS.get(badge_key, ("?", badge_key, ""))
-            earned = badge_key in self._badges
-
-            cell = tk.Frame(row, bg=BG_CARD if earned else BG_PANEL, width=56, height=56)
-            cell.pack(side="left", padx=3, pady=2)
-            cell.pack_propagate(False)
-
-            tk.Label(cell, text=icon, bg=BG_CARD if earned else BG_PANEL,
-                     font=("Segoe UI Emoji", 14),
-                     fg=TEXT_MAIN if earned else TEXT_DIM).pack(pady=(5,0))
-            tk.Label(cell, text=name, bg=BG_CARD if earned else BG_PANEL,
-                     font=("Segoe UI", 6, "bold"),
-                     fg=TEXT_MAIN if earned else TEXT_DIM,
-                     wraplength=52).pack()
-
-            if i == 3:  # wrap to next row after 4 badges
-                row = tk.Frame(self._badge_frame_inner, bg=BG_DARK)
-                row.pack(fill="x")
-
-        Tooltip(self._badge_frame_inner, "Badges earned through SteamGuard usage")
-
-    # ── Share Card Export ─────────────────────────────────────────────────────
+        """Stats tab removed — no-op."""
+        pass
 
     def _export_share_card(self):
         """Generate and save a share card PNG using Pillow."""
@@ -1874,8 +1833,10 @@ class SteamGuard(tk.Tk):
         self._game_card.pack(fill="x")
 
         self._game_icon = tk.Label(self._game_card, text="🎮", bg=BG_CARD,
-                                   font=("Segoe UI Emoji", 18))
-        self._game_icon.pack(side="left", padx=(12, 8), pady=10)
+                                   font=("Segoe UI Emoji", 18),
+                                   width=80, height=37,
+                                   compound="center")
+        self._game_icon.pack(side="left", padx=(12, 8), pady=8)
 
         game_text = tk.Frame(self._game_card, bg=BG_CARD)
         game_text.pack(side="left", fill="x", expand=True, pady=10)
@@ -1945,107 +1906,14 @@ class SteamGuard(tk.Tk):
             relief="flat", bd=0, state="disabled", wrap="word")
         self._log_w.pack(fill="both", expand=True)
 
-        # ── Tab 2: Stats ───────────────────────────────────────────────────────
-        stats_tab_outer = tk.Frame(nb, bg=BG_DARK)
-        nb.add(stats_tab_outer, text="STATS")
-
-        # Scrollable container for stats tab
-        _stats_canvas = tk.Canvas(stats_tab_outer, bg=BG_DARK, highlightthickness=0)
-        _stats_vsb    = tk.Scrollbar(stats_tab_outer, orient="vertical", command=_stats_canvas.yview)
-        _stats_canvas.configure(yscrollcommand=_stats_vsb.set)
-        _stats_vsb.pack(side="right", fill="y")
-        _stats_canvas.pack(side="left", fill="both", expand=True)
-        stats_tab_frame = tk.Frame(_stats_canvas, bg=BG_DARK)
-        _stats_win_id = _stats_canvas.create_window((0, 0), window=stats_tab_frame, anchor="nw")
-        def _on_stats_configure(event):
-            _stats_canvas.configure(scrollregion=_stats_canvas.bbox("all"))
-            _stats_canvas.itemconfig(_stats_win_id, width=_stats_canvas.winfo_width())
-        stats_tab_frame.bind("<Configure>", _on_stats_configure)
-        _stats_canvas.bind("<Configure>",
-            lambda e: _stats_canvas.itemconfig(_stats_win_id, width=e.width))
-        def _on_stats_mousewheel(event):
-            _stats_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        _stats_canvas.bind_all("<MouseWheel>", _on_stats_mousewheel)
-
-        # Chart canvas
-        chart_lbl = tk.Label(stats_tab_frame, text="HEALS LAST 7 HOURS",
-                             bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7, "bold"))
-        chart_lbl.pack(pady=(8, 2))
-        self._chart_cv = tk.Canvas(stats_tab_frame, width=470, height=110,
-                                   bg=BG_PANEL, highlightthickness=0)
-        self._chart_cv.pack(padx=12, pady=(0, 4))
-        self._redraw_chart()
-
-        # Stat cells 2x2
-        stat_grid = tk.Frame(stats_tab_frame, bg=BG_DARK)
-        stat_grid.pack(fill="x", padx=12, pady=(0,4))
-
-        def _make_stat_cell(parent, row, col, name):
-            cell = tk.Frame(parent, bg=BG_CARD, padx=10, pady=8)
-            cell.grid(row=row, column=col, padx=(0, 4) if col == 0 else 0,
-                      pady=(0, 4) if row == 0 else 0, sticky="nsew")
-            parent.columnconfigure(col, weight=1)
-            val_lbl = tk.Label(cell, text="—", bg=BG_CARD, fg=TEXT_MAIN,
-                               font=("Segoe UI", 14, "bold"))
-            val_lbl.pack()
-            tk.Label(cell, text=name, bg=BG_CARD, fg=TEXT_DIM,
-                     font=("Segoe UI", 8)).pack()
-            return val_lbl
-
-        self._stat_session_lbl   = _make_stat_cell(stat_grid, 0, 0, "Session Time")
-        self._stat_protected_lbl = _make_stat_cell(stat_grid, 0, 1, "Protected Time")
-        self._stat_heals_lbl     = _make_stat_cell(stat_grid, 1, 0, "Total Heals")
-        self._stat_lastheal_lbl  = _make_stat_cell(stat_grid, 1, 1, "Last Heal")
-
-        # Badge section
-        badge_frame = tk.Frame(stats_tab_frame, bg=BG_DARK)
-        badge_frame.pack(fill="x", padx=12, pady=(8,0))
-        tk.Label(badge_frame, text="ACHIEVEMENTS", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0,4))
-        self._badge_frame_inner = tk.Frame(badge_frame, bg=BG_DARK)
-        self._badge_frame_inner.pack(fill="x")
-
-        # Initial draw of badges (all unearned)
-        self._redraw_badges()
-
-        # Share/export row
-        share_row = tk.Frame(stats_tab_frame, bg=BG_DARK)
-        share_row.pack(fill="x", padx=12, pady=(8,4))
-        share_btn = tk.Button(share_row, text="📤  Export Share Card",
-            bg=ACCENT, fg="white", font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0, cursor="hand2",
-            activebackground="#1c6cc4",
-            command=self._export_share_card)
-        share_btn.pack(side="left", ipady=5, ipadx=12)
-        Tooltip(share_btn, "Save a shareable stats card PNG to your Desktop")
-
-        copy_btn2 = tk.Button(share_row, text="📋  Copy Stats to Clipboard",
-            bg=BG_CARD, fg=TEXT_MAIN, font=F_SMALL,
-            relief="flat", bd=0, cursor="hand2",
-            activebackground=BORDER,
-            command=self._copy_stats_text)
-        copy_btn2.pack(side="left", ipady=5, ipadx=10, padx=(6,0))
-        Tooltip(copy_btn2, "Copy a text summary of your stats to the clipboard")
-
         # ── Tab 3: Settings ────────────────────────────────────────────────────
         settings_frame = tk.Frame(nb, bg=BG_DARK)
         nb.add(settings_frame, text="SETTINGS")
 
         # Use a frame variable for the settings tab content
-        # Scrollable settings tab
-        _set_canvas = tk.Canvas(settings_frame, bg=BG_DARK, highlightthickness=0)
-        _set_vsb    = tk.Scrollbar(settings_frame, orient="vertical", command=_set_canvas.yview)
-        _set_canvas.configure(yscrollcommand=_set_vsb.set)
-        _set_vsb.pack(side="right", fill="y")
-        _set_canvas.pack(side="left", fill="both", expand=True)
-        settings_tab_frame = tk.Frame(_set_canvas, bg=BG_DARK)
-        _set_win_id = _set_canvas.create_window((0, 0), window=settings_tab_frame, anchor="nw")
-        def _on_set_configure(event):
-            _set_canvas.configure(scrollregion=_set_canvas.bbox("all"))
-            _set_canvas.itemconfig(_set_win_id, width=_set_canvas.winfo_width())
-        settings_tab_frame.bind("<Configure>", _on_set_configure)
-        _set_canvas.bind("<Configure>",
-            lambda e: _set_canvas.itemconfig(_set_win_id, width=e.width))
+        # Plain frame — content fits without scrolling
+        settings_tab_frame = tk.Frame(settings_frame, bg=BG_DARK)
+        settings_tab_frame.pack(fill="both", expand=True)
 
         opts1 = tk.Frame(settings_tab_frame, bg=BG_DARK)
         opts1.pack(fill="x", padx=12, pady=(10, 0))
@@ -2162,77 +2030,51 @@ class SteamGuard(tk.Tk):
     # ── Chart drawing ─────────────────────────────────────────────────────────
 
     def _redraw_chart(self):
-        cv = self._chart_cv
-        cv.delete("all")
-        W, H = 470, 110
-        cv.create_text(W//2, 8, text="HEALS — LAST 7 HOURS",
-                       fill=TEXT_DIM, font=("Segoe UI", 7, "bold"))
-        max_v = max(max(self._hourly_heals), 1)
-        bar_w = 40
-        gap   = (W - 7 * bar_w) // 8
-        for i, val in enumerate(self._hourly_heals):
-            x0 = gap + i * (bar_w + gap)
-            bar_h = max(2, int((val / max_v) * 80))
-            y1 = H - 20
-            y0 = y1 - bar_h
-            color = PURPLE if val > 0 else BG_CARD
-            cv.create_rectangle(x0, y0, x0+bar_w, y1, fill=color, outline="")
-            label = f"-{6-i}h" if i < 6 else "now"
-            cv.create_text(x0 + bar_w//2, H - 10, text=label,
-                           fill=TEXT_DIM, font=("Segoe UI", 7))
-            if val > 0:
-                cv.create_text(x0 + bar_w//2, y0 - 6, text=str(val),
-                               fill=PURPLE, font=("Segoe UI", 7, "bold"))
+        """Stats tab removed — no-op kept so call sites don't crash."""
+        pass
 
     # ── Stats tab updater ─────────────────────────────────────────────────────
 
     def _update_stats_tab(self):
-        def _fmt(secs: int) -> str:
-            if secs < 60:   return f"{secs}s"
-            if secs < 3600: return f"{secs//60}m {secs%60}s"
-            return f"{secs//3600}h {(secs%3600)//60}m"
-
-        try:
-            elapsed = int((datetime.now() - self._session_start).total_seconds())
-            self._stat_session_lbl.config(text=_fmt(elapsed))
-
-            total_heals = self._heal_count + self._rule_heal_cnt
-            self._stat_heals_lbl.config(text=str(total_heals))
-
-            if self._protect_start:
-                pt = int((datetime.now() - self._protect_start).total_seconds())
-                self._stat_protected_lbl.config(text=_fmt(pt))
-            else:
-                self._stat_protected_lbl.config(text="—")
-
-            if self._last_heal_time:
-                ago = int((datetime.now() - self._last_heal_time).total_seconds())
-                last = f"{ago}s ago" if ago < 3600 else self._last_heal_time.strftime("%H:%M")
-                self._stat_lastheal_lbl.config(text=last)
-            else:
-                self._stat_lastheal_lbl.config(text="—")
-        except Exception:
-            pass
+        """Stats tab removed — no-op kept so call sites don't crash."""
+        pass
 
     # ── Game art ──────────────────────────────────────────────────────────────
 
     def _fetch_game_art(self, appid: int):
         def worker():
-            try:
-                url = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
-                with urllib.request.urlopen(url, timeout=5) as r:
-                    data = r.read()
-                from PIL import Image, ImageTk
-                img = Image.open(io.BytesIO(data)).resize((80, 37), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                self.after(0, lambda p=photo: self._set_game_art(p))
-            except Exception:
-                self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
+            # Try capsule image first (smaller), fall back to header
+            for url in [
+                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/capsule_231x87.jpg",
+                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
+            ]:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "SteamGuard/1.3"})
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = r.read()
+                    try:
+                        from PIL import Image, ImageTk
+                        import io as _io
+                        img = Image.open(_io.BytesIO(data)).resize((116, 44), Image.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        self.after(0, lambda p=photo: self._set_game_art(p))
+                        return
+                    except ImportError:
+                        # Pillow not installed — show emoji fallback
+                        self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
+                        return
+                except Exception:
+                    continue
+            # Both URLs failed
+            self.after(0, lambda: self._game_icon.config(image="", text="🎮"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _set_game_art(self, photo):
         self._game_art_photo = photo  # keep reference
-        self._game_icon.config(image=photo, text="", compound="center")
+        try:
+            self._game_icon.config(image=photo, text="")
+        except Exception:
+            pass
 
     # ── Session history ───────────────────────────────────────────────────────
 
