@@ -1225,7 +1225,7 @@ class SteamGuard(tk.Tk):
         self._initial_load()
 
         self.update_idletasks()
-        w, h = 520, 800
+        w, h = 480, 720
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
@@ -1874,27 +1874,27 @@ class SteamGuard(tk.Tk):
 
     def _build_ui(self):
         # ── Custom draggable title bar ─────────────────────────────────────────
-        hdr = tk.Frame(self, bg=BG_SIDEBAR, height=56)
+        hdr = tk.Frame(self, bg=BG_SIDEBAR, height=44)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
-        # Shield canvas icon (36x36)
-        hc = tk.Canvas(hdr, width=36, height=36, bg=BG_SIDEBAR, highlightthickness=0)
-        hc.place(x=14, y=10)
-        hc.create_polygon(18, 3, 33, 9, 33, 21, 18, 33, 3, 21, 3, 9,
+        # Shield canvas icon (28x28)
+        hc = tk.Canvas(hdr, width=28, height=28, bg=BG_SIDEBAR, highlightthickness=0)
+        hc.place(x=10, y=8)
+        hc.create_polygon(14, 2, 26, 7, 26, 17, 14, 26, 2, 17, 2, 7,
                           fill=ACCENT, outline="", smooth=False)
-        hc.create_text(18, 19, text="S", fill="white", font=("Segoe UI", 12, "bold"))
+        hc.create_text(14, 15, text="S", fill="white", font=("Segoe UI", 10, "bold"))
 
         title_lbl = tk.Label(hdr, text="SteamGuard", bg=BG_SIDEBAR, fg=TEXT_MAIN,
-                             font=F_TITLE)
-        title_lbl.place(x=58, y=12)
+                             font=("Segoe UI", 13, "bold"))
+        title_lbl.place(x=46, y=10)
 
         ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_SIDEBAR, fg=TEXT_DIM, font=F_SMALL)
-        ver_lbl.place(x=178, y=18)
+        ver_lbl.place(x=158, y=14)
 
-        # Admin pill canvas (70x20)
-        pill_cv = tk.Canvas(hdr, width=70, height=20, bg=BG_SIDEBAR, highlightthickness=0)
-        pill_cv.place(relx=1.0, x=-140, y=18)
+        # Admin pill canvas (70x18)
+        pill_cv = tk.Canvas(hdr, width=70, height=18, bg=BG_SIDEBAR, highlightthickness=0)
+        pill_cv.place(relx=1.0, x=-80, y=13)
         if self._admin:
             pill_color = GREEN
             pill_text  = "✓ ADMIN"
@@ -1905,44 +1905,19 @@ class SteamGuard(tk.Tk):
         pill_cv.create_text(35, 10, text=pill_text, fill=BG_DARK,
                             font=("Segoe UI", 7, "bold"))
 
-        # Minimize button
-        min_btn = tk.Label(hdr, text="─", bg=BG_SIDEBAR, fg=TEXT_DIM,
-                           font=("Segoe UI", 12), cursor="hand2")
-        min_btn.place(relx=1.0, x=-64, y=16)
-        min_btn.bind("<Button-1>", lambda e: self._minimize())
-        min_btn.bind("<Enter>", lambda e: min_btn.config(fg=TEXT_MAIN))
-        min_btn.bind("<Leave>", lambda e: min_btn.config(fg=TEXT_DIM))
-
-        # Close button
-        close_btn = tk.Label(hdr, text="✕", bg=BG_SIDEBAR, fg=RED,
-                             font=("Segoe UI", 12), cursor="hand2")
-        close_btn.place(relx=1.0, x=-32, y=16)
-        close_btn.bind("<Button-1>", lambda e: self._on_close())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#ff6b6b"))
-        close_btn.bind("<Leave>", lambda e: close_btn.config(fg=RED))
-
-        # Drag bindings
-        def _drag_start(e):
-            self._drag_x = e.x_root - self.winfo_x()
-            self._drag_y = e.y_root - self.winfo_y()
-
-        def _drag_motion(e):
-            self.geometry(f"+{e.x_root - self._drag_x}+{e.y_root - self._drag_y}")
-
-        for widget in (hdr, title_lbl, ver_lbl):
-            widget.bind("<ButtonPress-1>", _drag_start)
-            widget.bind("<B1-Motion>", _drag_motion)
+        # No custom minimize/close — native title bar handles these now
+        # (overrideredirect is gone, so OS controls work correctly)
 
         # 1px border separator at bottom of header (title bar)
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # ── Animated shield canvas (centrepiece) ──────────────────────────────
-        SHIELD_W, SHIELD_H = 520, 150
+        SHIELD_W, SHIELD_H = 480, 110
         self._shield_cv = tk.Canvas(self, width=SHIELD_W, height=SHIELD_H,
                                     bg=BG_DARK, highlightthickness=0)
         self._shield_cv.pack(fill="x")
 
-        cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
+        cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 2
 
         # Pulse rings (drawn behind shield, updated by animation)
         ring_colors = [GREEN, ACCENT, PURPLE]
@@ -2036,10 +2011,11 @@ class SteamGuard(tk.Tk):
         game_top = tk.Frame(self._game_card, bg=BG_CARD)
         game_top.pack(fill="x")
 
+        # Game art image — wide banner, shown when a game is running
         self._game_icon = tk.Label(game_top, text="🎮", bg=BG_CARD,
-                                   font=("Segoe UI Emoji", 20),
-                                   compound="center")
-        self._game_icon.pack(side="left", padx=(14, 10), pady=10)
+                                   font=("Segoe UI Emoji", 22),
+                                   width=12, compound="center")
+        self._game_icon.pack(side="left", padx=(10, 8), pady=8)
 
         game_text = tk.Frame(game_top, bg=BG_CARD)
         game_text.pack(side="left", fill="x", expand=True, pady=12)
@@ -2095,7 +2071,7 @@ class SteamGuard(tk.Tk):
             relief="raised", bd=2, cursor="hand2",
             activebackground=BG_ELEVATED,
             command=self._on_protect_toggle)
-        self._protect_btn.pack(fill="x", padx=12, pady=(12, 0), ipady=12)
+        self._protect_btn.pack(fill="x", padx=12, pady=(8, 0), ipady=8)
         self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, BG_ELEVATED))
         self._protect_btn.bind("<Leave>", lambda e: self._update_protect_btn())
         Tooltip(self._protect_btn, "Toggle Steam CM firewall block on/off")
@@ -2379,38 +2355,61 @@ class SteamGuard(tk.Tk):
 
     # ── Game art ──────────────────────────────────────────────────────────────
 
+    # Game art dimensions: header.jpg is 460x215, capsule_231x87 is 231x87.
+    # We show header at 190x89 (keeps aspect ratio) as the primary banner.
+    _ART_W, _ART_H = 190, 89
+
     def _fetch_game_art(self, appid: int):
         def worker():
-            # Try capsule image first (smaller), fall back to header
-            for url in [
-                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/capsule_231x87.jpg",
+            # Try header first (most recognizable), fall back to capsule
+            urls = [
                 f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
-            ]:
+                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/capsule_231x87.jpg",
+            ]
+            for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "SteamGuard/1.3"})
-                    with urllib.request.urlopen(req, timeout=5) as r:
+                    req = urllib.request.Request(
+                        url, headers={"User-Agent": "SteamGuard/1.4"})
+                    with urllib.request.urlopen(req, timeout=6) as r:
                         data = r.read()
+                    if not data:
+                        continue
                     try:
                         from PIL import Image, ImageTk
                         import io as _io
-                        img = Image.open(_io.BytesIO(data)).resize((116, 44), Image.LANCZOS)
+                        img = Image.open(_io.BytesIO(data))
+                        # Resize preserving aspect ratio to fit _ART_W x _ART_H
+                        img.thumbnail(
+                            (SteamGuard._ART_W, SteamGuard._ART_H),
+                            Image.LANCZOS)
                         photo = ImageTk.PhotoImage(img)
-                        self._ui(lambda p=photo: self._set_game_art(p))
+                        # Configure label size to match the image
+                        self._ui(lambda p=photo,
+                                        w=img.width, h=img.height:
+                                    self._set_game_art(p, w, h))
                         return
                     except ImportError:
-                        # Pillow not installed — show emoji fallback
-                        self._ui(lambda: self._game_icon.config(image="", text="🎮"))
+                        # Pillow not installed — emoji fallback
+                        self._ui(lambda: self._game_icon.config(
+                            image="", text="🎮", width=12))
                         return
+                    except Exception as e:
+                        debug_log(f"_fetch_game_art decode error: {e}", level="WARN")
+                        continue
                 except Exception:
                     continue
-            # Both URLs failed
-            self._ui(lambda: self._game_icon.config(image="", text="🎮"))
+            # All URLs failed
+            self._ui(lambda: self._game_icon.config(image="", text="🎮", width=12))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _set_game_art(self, photo):
-        self._game_art_photo = photo  # keep reference
+    def _set_game_art(self, photo, w: int = 0, h: int = 0):
+        self._game_art_photo = photo  # keep reference so GC doesn't collect it
         try:
-            self._game_icon.config(image=photo, text="")
+            cfg = {"image": photo, "text": "", "compound": "center"}
+            if w and h:
+                cfg["width"] = w
+                cfg["height"] = h
+            self._game_icon.config(**cfg)
         except Exception:
             pass
 
@@ -2574,7 +2573,7 @@ class SteamGuard(tk.Tk):
             self._game_meta_lbl.config(
                 text="Launch a Steam game to begin", fg=TEXT_DIM)
             self._game_badge.config(text="", fg=TEXT_DIM)
-            self._game_icon.config(image="", text="🎮")
+            self._game_icon.config(image="", text="🎮", width=12, height=0)
             self._game_art_photo = None
             self._badge_panel.update_game(None, "")
             # Reset game card border to neutral
@@ -2606,9 +2605,9 @@ class SteamGuard(tk.Tk):
         import math
         import time as _time
 
-        SHIELD_W, SHIELD_H = 520, 150
-        cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 4
-        SW, SH = 76, 86
+        SHIELD_W, SHIELD_H = 480, 110
+        cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 2
+        SW, SH = 68, 76
 
         # ── Glow pulse: sine over ~2 s period ─────────────────────────────
         t = _time.monotonic()
