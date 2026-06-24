@@ -1146,6 +1146,20 @@ class SteamGuard(tk.Tk):
             f"Consider waiting until they finish, or start protection first."
         ))
 
+
+    # ── Minimize (overrideredirect-safe) ──────────────────────────────
+
+    def _minimize(self):
+        """Minimize to taskbar safely when overrideredirect=True."""
+        self.overrideredirect(False)
+        self.iconify()
+        self.bind("<Map>", self._on_restore)
+
+    def _on_restore(self, event=None):
+        self.unbind("<Map>")
+        self.overrideredirect(True)
+        self.focus_force()
+
     # ── Hover helpers ─────────────────────────────────────────────────────────
 
     def _hover_enter(self, btn, color_in): btn.config(bg=color_in)
@@ -1740,7 +1754,7 @@ class SteamGuard(tk.Tk):
         min_btn = tk.Label(hdr, text="─", bg=BG_PANEL, fg=TEXT_DIM,
                            font=("Segoe UI", 12), cursor="hand2")
         min_btn.place(relx=1.0, x=-64, y=12)
-        min_btn.bind("<Button-1>", lambda e: self.iconify())
+        min_btn.bind("<Button-1>", lambda e: self._minimize())
         min_btn.bind("<Enter>", lambda e: min_btn.config(fg=TEXT_MAIN))
         min_btn.bind("<Leave>", lambda e: min_btn.config(fg=TEXT_DIM))
 
@@ -2113,7 +2127,7 @@ class SteamGuard(tk.Tk):
         self.bind("<Control-e>", lambda e: self._export_log())
         self.bind("<Control-s>", lambda e: self._rescan_games())
         self.bind("<F1>",        lambda e: self._show_help())
-        self.bind("<Escape>",    lambda e: self.iconify())
+        self.bind("<Escape>",    lambda e: self._minimize())
 
     # ── Chart drawing ─────────────────────────────────────────────────────────
 
