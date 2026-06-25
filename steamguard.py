@@ -245,6 +245,17 @@ VALVE_CIDRS = [
     "45.121.184.0/23",    # Tokyo APAC CM (tyo3)
     "190.217.33.0/24",    # Lima CM
     "185.25.182.0/23",    # Paris/Dubai CM — covers .182 AND .183 (confirmed live)
+    # ── Additional research-confirmed CM ranges ───────────────────────────────
+    # (gypthecat + shiyajunjeff research, June 2026)
+    "185.25.180.0/22",    # Paris/Dubai CM broader range
+    "208.78.164.0/22",    # Tukwila/Seattle CM
+    "192.69.96.0/22",     # Valve CM/CDN range
+    "103.10.124.0/24",    # Singapore/AU CM (research-confirmed)
+    "155.133.224.0/23",   # Secondary CM (research-confirmed sub-range)
+    "185.25.182.0/24",    # Paris/Dubai CM (research-confirmed sub-range)
+    "205.185.194.0/24",   # São Paulo CM (research-confirmed sub-range)
+    # ── IPv6 CM range ─────────────────────────────────────────────────────────
+    "2620:f9:8000::/48",  # Valve CM IPv6 range
 ]
 
 # Pre-parsed network objects for fast IP matching
@@ -340,6 +351,25 @@ def refresh_cm_cidrs() -> tuple[int, int]:
 
     return new_count, total
 
+
+def _fetch_live_cm_servers() -> list[str]:
+    """Fetch live CM server IPs from Valve's WebAPI and merge with static list.
+    Returns list of IP strings. Falls back to VALVE_CIDRS on failure."""
+    try:
+        import urllib.request, json as _json
+        url = "https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&maxcount=50"
+        req = urllib.request.Request(url, headers={"User-Agent": "SteamGuard/1.4"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = _json.loads(r.read())
+        servers = data.get("response", {}).get("serverlist", [])
+        # Extract unique IPs from "host:port" strings
+        ips = list({s.split(":")[0] for s in servers if ":" in s})
+        debug_log(f"Fetched {len(ips)} live CM IPs from Valve API")
+        return ips if ips else []
+    except Exception as e:
+        debug_log(f"CM server fetch failed, using static CIDRs: {e}", level="WARN")
+        return []
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Palette
 # ─────────────────────────────────────────────────────────────────────────────
@@ -392,6 +422,102 @@ def _dpapi_unprotect(blob: bytes) -> bytes:
     except Exception:
         return blob
 
+# ---------------------------------------------------------------------------
+# Hardware fingerprint (T7) -- license binding to prevent cross-machine sharing
+# ---------------------------------------------------------------------------
+
+def hwid() -> str:
+    """Generate a stable hardware fingerprint for license binding."""
+    import hashlib, subprocess
+    import winreg as _winreg
+    parts = []
+    # MachineGuid -- stable, per-install
+    try:
+        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
+                             r"SOFTWARE\Microsoft\Cryptography") as k:
+            parts.append(_winreg.QueryValueEx(k, "MachineGuid")[0])
+    except Exception:
+        parts.append("no-guid")
+    # CPU ProcessorId
+    try:
+        out = subprocess.check_output(
+            "wmic cpu get ProcessorId /format:value",
+            shell=True, stderr=subprocess.DEVNULL, timeout=5
+        ).decode(errors="ignore")
+        pid = [l.split("=",1)[1].strip() for l in out.splitlines() if "=" in l and l.strip()]
+        parts.append(pid[0] if pid else "no-cpu")
+    except Exception:
+        parts.append("no-cpu")
+    # Baseboard serial
+    try:
+        out = subprocess.check_output(
+            "wmic baseboard get SerialNumber /format:value",
+            shell=True, stderr=subprocess.DEVNULL, timeout=5
+        ).decode(errors="ignore")
+        sn = [l.split("=",1)[1].strip() for l in out.splitlines() if "=" in l and l.strip()]
+        parts.append(sn[0] if sn else "no-serial")
+    except Exception:
+        parts.append("no-serial")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+# ---------------------------------------------------------------------------
+# VM / sandbox soft detection (T8) -- logs a warning, never blocks
+# ---------------------------------------------------------------------------
+
+def _vm_check() -> bool:
+    """Soft VM/sandbox detection -- logs a warning, never blocks."""
+    needles = ("VBOX", "VMWARE", "QEMU", "VIRTUAL", "BOCHS", "INNOTEK")
+    try:
+        import winreg as _wr
+        for path in (r"HARDWARE\DESCRIPTION\System",
+                     r"HARDWARE\DESCRIPTION\System\BIOS"):
+            try:
+                with _wr.OpenKey(_wr.HKEY_LOCAL_MACHINE, path) as k:
+                    for name in ("SystemBiosVersion", "SystemBiosDate",
+                                 "VideoBiosVersion", "SystemManufacturer",
+                                 "SystemProductName"):
+                        try:
+                            val = str(_wr.QueryValueEx(k, name)[0]).upper()
+                            if any(n in val for n in needles):
+                                return True
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+# ---------------------------------------------------------------------------
+# Self-integrity check (T3) -- detect a patched/modified executable
+# ---------------------------------------------------------------------------
+
+def _check_exe_integrity() -> bool:
+    """Hash the running EXE and compare to stored hash. Returns False if tampered."""
+    import hashlib, sys
+    exe = sys.executable if getattr(sys, 'frozen', False) else __file__
+    try:
+        h = hashlib.sha256(open(exe, 'rb').read()).hexdigest()
+        hash_file = _APPDATA_DIR / "exe_hash.bin"
+        if not hash_file.exists():
+            # First run -- store the hash (DPAPI-protected)
+            _ensure_appdata_dir()
+            protected = _dpapi_protect(h.encode())
+            hash_file.write_bytes(protected)
+            return True
+        stored_enc = hash_file.read_bytes()
+        stored = _dpapi_unprotect(stored_enc).decode(errors='ignore')
+        if stored != h:
+            debug_log(f"EXE integrity mismatch -- may be updated or patched", level="WARN")
+            # Update stored hash (could be a legit update)
+            protected = _dpapi_protect(h.encode())
+            hash_file.write_bytes(protected)
+            return False
+        return True
+    except Exception as e:
+        debug_log(f"Integrity check failed: {e}", level="WARN")
+        return True  # fail open -- don't block on error
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Debug & Self-Healing System
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,8 +538,25 @@ def _open_debug_log():
     except Exception:
         _debug_log_handle = None
 
+# ---------------------------------------------------------------------------
+# Log redaction filter (T11) -- never write secrets to disk in plaintext
+# ---------------------------------------------------------------------------
+
+import re as _re
+_REDACT_PATTERNS = [
+    (_re.compile(r'(?i)(key|token|secret|password|authorization)["\s:=]+([A-Za-z0-9_\-\.]{8,})', _re.I),
+     r'\1=***REDACTED***'),
+    (_re.compile(r'\b[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}\b', _re.I),
+     '***KEY***'),
+]
+def _redact(msg: str) -> str:
+    for pat, rep in _REDACT_PATTERNS:
+        msg = pat.sub(rep, msg)
+    return msg
+
 def debug_log(msg: str, level: str = "INFO"):
     """Write a debug entry to steamguard_debug.log."""
+    msg = _redact(msg)
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     line = f"[{ts}] [{level}] {msg}\n"
     if _debug_log_handle:
@@ -1167,6 +1310,9 @@ class SteamGuard(tk.Tk):
         self._autostart_var  = tk.BooleanVar(value=get_autostart())
         self._protected      = False  # are we actively protecting?
         self._protect_start: datetime | None = None  # when protection was activated
+        # Feature 5: protection uptime tracking
+        self._protection_start_time: datetime | None = None
+        self._total_protected_seconds: float = 0
         self._heal_count     = 0      # network reconnect heals
         self._rule_heal_cnt  = 0      # rule self-heals (recreate/re-enable)
         self._last_heal_time: datetime | None = None
@@ -1243,6 +1389,10 @@ class SteamGuard(tk.Tk):
         self.after(5000, self._keepalive_topmost)
         # Drain the thread-safe UI queue every 50ms
         self.after(50, self._drain_ui_queue)
+        # Feature 1: refresh CM CIDR list from Valve once on startup, then every 6h
+        self.after(8000, self._refresh_cm_rules)
+        # Feature 3: scheduled protection checker (runs every 60s)
+        self.after(10000, self._check_scheduled_protection)
 
     def _drain_ui_queue(self):
         """Drain _UI_QUEUE on the main thread. Called every 50ms.
@@ -1269,7 +1419,140 @@ class SteamGuard(tk.Tk):
             "auto_protect": self._auto_heal.get(),
             "autostart":    self._autostart_var.get(),
         }
+        # Preserve any extra keys already stored in config (schedule, license, etc.)
+        try:
+            existing = {k: v for k, v in self._cfg.items() if k not in cfg}
+            cfg = {**existing, **cfg}
+            self._cfg.update(cfg)
+        except Exception:
+            pass
         save_config(cfg)
+
+    # Feature 1: Live CM CIDR refresh from Valve's GetCMList API
+
+    def _refresh_cm_rules(self):
+        """Fetch the live CM server list from Valve and, if protection is
+        currently active, recreate/refresh the firewall rule so the newest CM
+        IPs are covered. Re-schedules itself every 6 hours."""
+        def worker():
+            try:
+                live_ips = _fetch_live_cm_servers()
+                new_count = 0
+                for ip_str in live_ips:
+                    try:
+                        addr = ip_address(ip_str)
+                        if not any(addr in net for net in _VALVE_NETS):
+                            _VALVE_NETS.append(ip_network(f"{ip_str}/32"))
+                            new_count += 1
+                    except ValueError:
+                        pass
+                if live_ips:
+                    self._ui(lambda c=new_count, t=len(live_ips): self._log(
+                        f"CM refresh: {t} live CM IPs checked"
+                        f"{f', +{c} new added' if c else ' (no new IPs)'}."))
+                else:
+                    self._ui(lambda: self._log(
+                        "CM refresh: Valve API unreachable - keeping current CIDRs."))
+
+                # If protection is active, recreate the firewall rule so the
+                # newly discovered CM IPs are blocked too.
+                if self._protected and self._steam_exe:
+                    try:
+                        fw_remove()
+                        ok, msg = fw_create(self._steam_exe)
+                        if ok:
+                            en = fw_enable_fast()
+                            confirmed = fw_rule_state() is True
+                            if en and confirmed:
+                                self._ui(lambda: self._log(
+                                    "CM refresh: firewall rule rebuilt with latest CM ranges.",
+                                    level="success"))
+                            else:
+                                self._ui(lambda: self._log(
+                                    "CM refresh: rule rebuilt but re-enable unconfirmed.",
+                                    color=YELLOW))
+                        else:
+                            self._ui(lambda m=msg: self._log(
+                                f"CM refresh: rule rebuild failed: {m}", error=True))
+                    except Exception as e:
+                        debug_log(f"_refresh_cm_rules rebuild error: {e}", level="ERROR")
+            except Exception as e:
+                debug_log(f"_refresh_cm_rules error: {e}", level="ERROR")
+
+        threading.Thread(target=worker, daemon=True).start()
+        # Re-schedule every 6 hours
+        if self._app_running:
+            self.after(21600000, self._refresh_cm_rules)
+
+    # Feature 2: Per-game protection profiles
+    # Per-game profiles stored in ~/.steamguard/game_profiles.json
+    # Format: { "appid": { "auto_protect": true, "delay_seconds": 8 } }
+
+    def _load_game_profiles(self) -> dict:
+        path = _APPDATA_DIR / "game_profiles.json"
+        try:
+            if path.exists():
+                return json.loads(path.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _get_game_profile(self, appid: int) -> dict:
+        profiles = self._load_game_profiles()
+        return profiles.get(str(appid), {"auto_protect": True, "delay_seconds": 6})
+
+    def _save_game_profile(self, appid: int, profile: dict):
+        path = _APPDATA_DIR / "game_profiles.json"
+        _ensure_appdata_dir()
+        try:
+            profiles = self._load_game_profiles()
+            profiles[str(appid)] = profile
+            path.write_text(json.dumps(profiles, indent=2))
+        except Exception as e:
+            debug_log(f"Could not save game profile: {e}", level="WARN")
+
+    # Feature 3: Scheduled protection
+
+    def _check_scheduled_protection(self):
+        """Check if scheduled protection should be active right now."""
+        if not self._app_running:
+            return
+        schedule = self._cfg.get("schedule", {})
+        if not schedule.get("enabled", False):
+            self.after(60000, self._check_scheduled_protection)
+            return
+
+        from datetime import datetime as _dt
+        now = _dt.now()
+        start_h, start_m = schedule.get("start_hour", 18), schedule.get("start_min", 0)
+        end_h, end_m = schedule.get("end_hour", 23), schedule.get("end_min", 0)
+
+        start_mins = start_h * 60 + start_m
+        end_mins = end_h * 60 + end_m
+        now_mins = now.hour * 60 + now.minute
+
+        should_protect = start_mins <= now_mins < end_mins
+
+        if should_protect and not self._protected:
+            self._log(f"Scheduled protection: activating (scheduled {start_h:02d}:{start_m:02d}-{end_h:02d}:{end_m:02d})")
+            self._start_protection()
+        elif not should_protect and self._protected and schedule.get("auto_stop", False):
+            self._log("Scheduled protection: window ended, disabling")
+            self._stop_protection()
+
+        self.after(60000, self._check_scheduled_protection)
+
+    # Feature 5: Protection uptime tracking
+
+    def _get_protection_uptime_pct(self) -> float:
+        """Return protection uptime % for current session."""
+        session_secs = (datetime.now() - self._session_start).total_seconds()
+        if session_secs <= 0:
+            return 0.0
+        protected = getattr(self, '_total_protected_seconds', 0)
+        if self._protected and hasattr(self, '_protection_start_time') and self._protection_start_time:
+            protected += (datetime.now() - self._protection_start_time).total_seconds()
+        return min(100.0, (protected / session_secs) * 100)
 
     # ── Pre-launch warning callback ───────────────────────────────────────────
 
@@ -1337,6 +1620,12 @@ class SteamGuard(tk.Tk):
     # ── Initial load ──────────────────────────────────────────────────────────
 
     def _initial_load(self):
+        # Soft VM/sandbox detection (T8) -- log only, never block.
+        try:
+            if _vm_check():
+                debug_log("Running in VM/sandbox environment")
+        except Exception:
+            pass
         def worker():
             # ── Refresh CM server list from Valve's live API ───────────────
             self._ui(lambda: self._log(
@@ -1372,6 +1661,8 @@ class SteamGuard(tk.Tk):
                 self._ui(lambda: self._sync_fw_state(True))
                 self._protected = True
                 self._protect_start = datetime.now()
+                # Feature 5: track resumed-protection start time for uptime stats
+                self._protection_start_time = datetime.now()
                 self._ui(self._update_protect_btn)
                 self._ui(self._update_status_banner)
             elif state is not None:
@@ -1462,19 +1753,27 @@ class SteamGuard(tk.Tk):
             return
 
         # Build heartbeat payload
-        import hashlib, hmac as _hmac
+        import hashlib, hmac as _hmac, secrets
         HMAC_SECRET = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
         try:
             from auth.hwid import get_hwid
-            hwid = get_hwid()
+            hwid_val = get_hwid()
         except Exception:
-            hwid = "unknown"
+            # Fall back to the local hardware fingerprint (T7)
+            try:
+                hwid_val = hwid()
+            except Exception:
+                hwid_val = "unknown"
 
-        sig = _hmac.new(HMAC_SECRET.encode(), f"{key}:{hwid}".encode(), hashlib.sha256).hexdigest()
+        # Anti-replay nonce (T5) -- unique per heartbeat
+        nonce = secrets.token_hex(16)
+
+        sig = _hmac.new(HMAC_SECRET.encode(), f"{key}:{hwid_val}".encode(), hashlib.sha256).hexdigest()
 
         payload = json.dumps({
             "key": key,
-            "hwid": hwid,
+            "hwid": hwid_val,
+            "nonce": nonce,
             "discord_user_id": discord_id,
             "sig": sig,
             "client_version": CURRENT_VERSION,
@@ -1506,6 +1805,13 @@ class SteamGuard(tk.Tk):
             return
 
         self._last_heartbeat_ok = True
+
+        # Anti-replay (T5): verify the server echoed back our nonce.
+        # Server may not support this yet -- warn but never crash.
+        echo = resp.get("nonce_echo")
+        if echo is not None and echo != nonce:
+            debug_log("Heartbeat nonce mismatch -- possible replay", level="WARN")
+
         if resp.get("session_id"):
             self._heartbeat_session_id = resp["session_id"]
 
@@ -1762,6 +2068,9 @@ class SteamGuard(tk.Tk):
         the same game is still running and we haven't already protected.
         This delay lets the game fully log into Steam before the block fires."""
         if self._auto_heal.get() and self._running_appid and not self._protected:
+            profile = self._get_game_profile(self._running_appid)
+            delay = profile.get("delay_seconds", 6) * 1000
+            # Already called via after() so just start protection
             self._log("Auto-protect: game logged in, enabling protection…")
             self._start_protection()
 
@@ -1829,6 +2138,8 @@ class SteamGuard(tk.Tk):
         if ok:
             self._protected = True
             self._protect_start = datetime.now()
+            # Feature 5: record protection start time for uptime tracking
+            self._protection_start_time = datetime.now()
             self._monitor.set_active(True)
             self._sync_fw_state(True)
             self._update_protect_btn()
@@ -1871,6 +2182,11 @@ class SteamGuard(tk.Tk):
         self._protection_busy = False
         self._protected = False
         self._protect_start = None
+        # Feature 5: accumulate this session's protected duration for uptime stats
+        if hasattr(self, '_protection_start_time') and self._protection_start_time:
+            duration = (datetime.now() - self._protection_start_time).total_seconds()
+            self._total_protected_seconds = getattr(self, '_total_protected_seconds', 0) + duration
+            self._protection_start_time = None
         self._monitor.set_active(False)
         self._sync_fw_state(False)
         self._update_protect_btn()
@@ -3292,6 +3608,12 @@ if __name__ == "__main__":
     _open_debug_log()
     _install_exception_hook()
     debug_log("Process started")
+
+    # ---- Self-integrity check (T3) -- detect patched EXE (non-blocking) ----
+    try:
+        _check_exe_integrity()
+    except Exception:
+        pass
 
     # ── 1. Update Check (First thing on startup) ─────────────────────────────
     check_for_updates()

@@ -137,6 +137,39 @@ C_RED    = 0xef4444
 C_YELLOW = 0xf59e0b
 C_GREY   = 0x64748b
 
+# ── Embed factory ─────────────────────────────────────────────────────────────
+# AuthGuard brand palette
+_C_BRAND   = 0x00C46A   # Default/neutral embeds
+_C_SUCCESS = 0x2ECC71   # Key redeemed, reward claimed
+_C_ERROR   = 0xED4245   # Failed redemption, invalid key
+_C_WARN    = 0xF1C40F   # Cooldowns, confirmations
+_C_INFO    = 0x3498DB   # Help, status, neutral info
+
+def _embed(title: str, description: str = "", color: int = _C_BRAND,
+           fields: list = None, footer: str = None) -> discord.Embed:
+    """Base embed with consistent AuthGuard branding."""
+    e = discord.Embed(title=title, description=description, color=color)
+    e.set_author(name="AuthGuard", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
+    e.set_footer(text=f"AuthGuard • Rivvak Community{(' | ' + footer) if footer else ''}")
+    e.timestamp = discord.utils.utcnow()
+    if fields:
+        for f in fields:
+            e.add_field(name=f.get("name","\u200b"), value=f.get("value","\u200b"),
+                        inline=f.get("inline", True))
+    return e
+
+def _embed_success(title: str, description: str = "", **kwargs) -> discord.Embed:
+    return _embed(f"\u2705  {title}", description, color=_C_SUCCESS, **kwargs)
+
+def _embed_error(title: str, description: str = "", **kwargs) -> discord.Embed:
+    return _embed(f"\u26d4  {title}", description, color=_C_ERROR, **kwargs)
+
+def _embed_warn(title: str, description: str = "", **kwargs) -> discord.Embed:
+    return _embed(f"\u26a0\ufe0f  {title}", description, color=_C_WARN, **kwargs)
+
+def _embed_info(title: str, description: str = "", **kwargs) -> discord.Embed:
+    return _embed(f"\u2139\ufe0f  {title}", description, color=_C_INFO, **kwargs)
+
 # ── Bot setup ─────────────────────────────────────────────────────────────────
 
 intents = discord.Intents.default()
@@ -213,15 +246,13 @@ async def on_message(message: discord.Message):
 
     # Redirect DMs to server
     if message.guild is None:
-        embed = discord.Embed(
-            title="⚠️  I don't accept DMs",
-            description=(
+        embed = _embed_warn(
+            "I don't accept DMs",
+            (
                 "All SteamGuard commands must be used in our Discord server.\n\n"
                 f"👉  **[Click here to join]({DISCORD_INVITE})**\n\n"
                 "Then use `!getkey` in the **#get-key** channel."
-            ),
-            color=C_YELLOW)
-        embed.set_footer(text="SteamGuard Bot")
+            ))
         try:
             await message.channel.send(embed=embed)
         except Exception:
@@ -277,6 +308,31 @@ async def on_ready():
     except Exception as e:
         LOG.error(f"Failed to sync slash commands: {e}")
 
+    # Fetch total license count for presence display
+    total_keys = 0
+    try:
+        _stats = await _api_get("/stats/server")
+        total_keys = _stats.get("total_keys", 0) or 0
+    except Exception:
+        total_keys = 0
+
+    # Rotate bot presence every 5 minutes
+    async def rotate_presence():
+        await bot.wait_until_ready()
+        presences = [
+            discord.Activity(type=discord.ActivityType.watching, name="!commandhelp"),
+            discord.Activity(type=discord.ActivityType.watching, name=f"{total_keys:,} licenses"),
+            discord.Activity(type=discord.ActivityType.playing, name="Protecting Steam"),
+            discord.Activity(type=discord.ActivityType.watching, name="Rivvak Community"),
+        ]
+        i = 0
+        while not bot.is_closed():
+            await bot.change_presence(activity=presences[i % len(presences)])
+            i += 1
+            await asyncio.sleep(300)  # 5 minutes
+
+    bot.loop.create_task(rotate_presence())
+
 @bot.event
 async def on_member_remove(member: discord.Member):
     if member.guild.id != GUILD_ID:
@@ -312,9 +368,9 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 async def _send_onboarding_dm(member: discord.Member):
     """Send a welcome / getting-started DM when a member receives the Member role."""
-    embed = discord.Embed(
-        title="🛡  Welcome to SteamGuard!",
-        description=(
+    embed = _embed_info(
+        "🛡  Welcome to SteamGuard!",
+        (
             "Here's how to get started:\n\n"
             "1. ✅  Complete verification in **#verify**\n"
             "2. ⬇️  Download the app: `/download`\n"
@@ -323,9 +379,8 @@ async def _send_onboarding_dm(member: discord.Member):
             "5. 🔗  Use `/refer` to earn rewards\n\n"
             "Need help? Use `/support` anytime."
         ),
-        color=C_BLUE,
+        footer="Your protection starts now",
     )
-    embed.set_footer(text="SteamGuard • Your protection starts now")
     try:
         await member.send(embed=embed)
     except discord.Forbidden:
@@ -345,9 +400,9 @@ async def _post_welcome_embed():
     if not channel:
         return
 
-    embed = discord.Embed(
-        title="🔑  SteamGuard — Get Your License Key",
-        color=C_BLUE)
+    embed = _embed(
+        "🔑  SteamGuard — Get Your License Key",
+        footer="Your key is locked to your machine. Do not share it.")
     embed.add_field(
         name="Requirements",
         value=(
@@ -369,7 +424,6 @@ async def _post_welcome_embed():
         name="Other commands",
         value="`!mykey` — check your key status\n`!linkyoutube` — link YouTube",
         inline=False)
-    embed.set_footer(text="Your key is locked to your machine. Do not share it.")
 
     try:
         await channel.send(embed=embed)
@@ -387,13 +441,12 @@ async def get_key(ctx: commands.Context):
 
     role = ctx.guild.get_role(ROLE_ID)
     if role not in ctx.author.roles:
-        embed = discord.Embed(
-            title="❌  Missing Member Role",
-            description=(
+        embed = _embed_error(
+            "Missing Member Role",
+            (
                 "You need the **Member** role to get a key.\n\n"
                 "Subscribe to our YouTube channel and make sure you're verified."
-            ),
-            color=C_RED)
+            ))
         await ctx.send(embed=embed, delete_after=20)
         return
 
@@ -414,7 +467,9 @@ async def get_key(ctx: commands.Context):
         await ctx.send(f"❌ Could not generate key: `{err}`", delete_after=15)
         return
 
-    embed = discord.Embed(title="🔑  Your SteamGuard License Key", color=C_BLUE)
+    embed = _embed_success(
+        "Your SteamGuard License Key",
+        footer="Valid while you remain a Member + YouTube subscriber")
     embed.add_field(name="Key", value=f"```{key}```", inline=False)
     embed.add_field(
         name="⚠️  Keep this private",
@@ -429,13 +484,12 @@ async def get_key(ctx: commands.Context):
             "4. Come back here and run `!linkyoutube` to link your YouTube"
         ),
         inline=False)
-    embed.set_footer(text="SteamGuard • Valid while you remain a Member + YouTube subscriber")
 
     try:
         await ctx.author.send(embed=embed)
-        confirm = discord.Embed(
-            description=f"✅ {ctx.author.mention} Key sent to your DMs!",
-            color=C_GREEN)
+        confirm = _embed_success(
+            "Key sent!",
+            f"{ctx.author.mention} Your key is in your DMs.")
         await ctx.send(embed=confirm, delete_after=10)
     except discord.Forbidden:
         await ctx.send(
@@ -458,15 +512,17 @@ async def my_key(ctx: commands.Context):
     keys = data.get("keys", [])
 
     if not keys:
-        embed = discord.Embed(
-            title="🔑  No Key Found",
-            description="You don't have a key yet. Use `!getkey` to get one.",
-            color=C_GREY)
+        embed = _embed_info(
+            "No Key Found",
+            "You don't have a key yet. Use `!getkey` to get one.")
         await ctx.author.send(embed=embed)
         await ctx.send(f"📬 {ctx.author.mention} Check your DMs.", delete_after=6)
         return
 
-    embed = discord.Embed(title=f"🔑  Your Key Status", color=C_BLUE)
+    embed = _embed_info(
+        "Your Key Status",
+        "🔒 **For security, delete this message after reading.**",
+        footer="Keys are verified every 24h")
     for k in keys:
         status_icon = {"active": "🟢", "paused": "🟡", "revoked": "🔴"}.get(k["status"], "⚪")
         embed.add_field(
@@ -481,7 +537,6 @@ async def my_key(ctx: commands.Context):
             ),
             inline=False)
 
-    embed.set_footer(text="SteamGuard • Keys are verified every 24h")
     try:
         await ctx.author.send(embed=embed)
         await ctx.send(f"📬 {ctx.author.mention} Check your DMs.", delete_after=6)
@@ -517,15 +572,14 @@ async def link_youtube(ctx: commands.Context):
         "&prompt=consent"
     )
 
-    embed = discord.Embed(
-        title="🎥  Link Your YouTube Account",
-        description=(
+    embed = _embed_info(
+        "🎥  Link Your YouTube Account",
+        (
             "Click the link below to authorize SteamGuard to verify your YouTube subscription.\n\n"
             f"**[Click here to link YouTube]({auth_url})**\n\n"
             "This only checks if you're subscribed — we cannot see, edit, or delete anything."
         ),
-        color=C_RED)
-    embed.set_footer(text="Link expires in 10 minutes")
+        footer="Link expires in 10 minutes")
 
     try:
         await ctx.author.send(embed=embed)
@@ -587,9 +641,7 @@ async def key_info(ctx: commands.Context, member: discord.Member):
     data = await _api_get(f"/admin/key-info/{member.id}")
     keys = data.get("keys", [])
 
-    embed = discord.Embed(
-        title=f"🔑  Keys for {member.display_name}",
-        color=C_BLUE)
+    embed = _embed_info(f"Keys for {member.display_name}")
 
     if not keys:
         embed.description = "No keys found."
@@ -621,10 +673,9 @@ async def pause_key(ctx: commands.Context, member: discord.Member, *, reason: st
         "reason": reason,
     })
     count = data.get("paused_count", 0)
-    embed = discord.Embed(
-        title="⏸  Key Paused",
-        description=f"Paused **{count}** key(s) for {member.mention}\nReason: `{reason}`",
-        color=C_YELLOW)
+    embed = _embed_warn(
+        "Key Paused",
+        f"Paused **{count}** key(s) for {member.mention}\nReason: `{reason}`")
     await ctx.send(embed=embed)
     LOG.info(f"Admin {ctx.author} paused key for {member} — {reason}")
 
@@ -653,10 +704,9 @@ async def revoke_key(ctx: commands.Context, member: discord.Member, *, reason: s
         "reason": reason,
     })
     count = data.get("revoked_count", 0)
-    embed = discord.Embed(
-        title="🔴  Key Revoked",
-        description=f"Permanently revoked **{count}** key(s) for {member.mention}\nReason: `{reason}`",
-        color=C_RED)
+    embed = _embed_error(
+        "Key Revoked",
+        f"Permanently revoked **{count}** key(s) for {member.mention}\nReason: `{reason}`")
     await ctx.send(embed=embed)
     LOG.info(f"Admin {ctx.author} revoked key for {member} — {reason}")
 
@@ -686,9 +736,7 @@ async def sg_status(ctx: commands.Context):
     active_keys = stats_data.get("active_keys", "N/A")
     total_heals = stats_data.get("total_heals", "N/A")
 
-    embed = discord.Embed(
-        title="SteamGuard System Status",
-        color=C_GREEN if server_ok else C_RED)
+    embed = _embed_success("SteamGuard System Status") if server_ok else _embed_error("SteamGuard System Status")
     embed.add_field(name="Bot",         value="🟢 Online",                                   inline=True)
     embed.add_field(name="Server",      value=f"{'🟢 Online' if server_ok else '🔴 Down'}",   inline=True)
     embed.add_field(name="Server time", value=server_ts,                                      inline=True)
@@ -698,21 +746,39 @@ async def sg_status(ctx: commands.Context):
     embed.add_field(name="Total Keys",  value=f"{total_keys:,}" if isinstance(total_keys, int) else str(total_keys),  inline=True)
     embed.add_field(name="Active Keys", value=f"{active_keys:,}" if isinstance(active_keys, int) else str(active_keys), inline=True)
     embed.add_field(name="Total Heals", value=f"{total_heals:,}" if isinstance(total_heals, int) else str(total_heals), inline=True)
-    embed.set_footer(text=f"Bot: {bot.user}")
     await ctx.send(embed=embed)
 
 # ── Error handler ─────────────────────────────────────────────────────────────
 
 @bot.event
-async def on_command_error(ctx: commands.Context, error):
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # silently ignore unknown commands
     if isinstance(error, commands.CheckFailure):
-        if ctx.guild is None:
-            return   # DMs already handled by on_message
-        return  # channel restriction removed — bot listens everywhere
-    if isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ Member not found. Mention them with @.", delete_after=8)
+        return  # already handled by channel routing
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=_embed_error(
+            "Missing argument",
+            f"Usage: `!{ctx.command.name} {ctx.command.signature}`\n"
+            f"Run `!commandhelp` for all commands.",
+        ))
         return
-    LOG.error(f"Command error in {ctx.command}: {error}")
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send(embed=_embed_error("Member not found", "Mention them with @username."))
+        return
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(embed=_embed_warn(
+            "Slow down",
+            f"Try again in **{error.retry_after:.0f}s**. Your key and balance are safe."
+        ))
+        return
+    # Unknown error — log it, reassure user
+    LOG.error(f"Unhandled error in {ctx.command}: {error}", exc_info=True)
+    await ctx.send(embed=_embed_error(
+        "Something went wrong",
+        "An unexpected error occurred. **Your key and balance are safe** — nothing was changed.\n"
+        "If this keeps happening, run `!support`.",
+    ))
 
 
 # ── !commandhelp ──────────────────────────────────────────────────────────────
@@ -729,13 +795,13 @@ async def cmd_commandhelp(ctx: commands.Context):
     getkey_ref = getkey_ch.mention if getkey_ch else "#get-key"
     ot_ref     = ot_ch.mention if ot_ch else "#-off-topic"
 
-    embed = discord.Embed(
-        title="🛡  SteamGuard — All Commands",
-        description=(
+    embed = _embed_info(
+        "🛡  SteamGuard — All Commands",
+        (
             f"Use commands in the correct channel.\n"
             f"Key commands → {getkey_ref} | Everything else → {ot_ref}"
         ),
-        color=0x23A559,
+        footer="discord.gg/RTHM8YhpE",
     )
 
     # ── Key Commands ──
@@ -801,7 +867,6 @@ async def cmd_commandhelp(ctx: commands.Context):
             inline=False,
         )
 
-    embed.set_footer(text="Rivvak Community • SteamGuard  |  discord.gg/RTHM8YhpE")
     await ctx.send(embed=embed)
 
 # ── Daily membership sweep ────────────────────────────────────────────────────
@@ -957,11 +1022,7 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
 
     async def on_submit(self, interaction: discord.Interaction):
         # Post embed to SUPPORT_CHANNEL_ID if configured
-        embed = discord.Embed(
-            title="🎫  New Support Request",
-            color=C_BLUE,
-            timestamp=datetime.now(timezone.utc),
-        )
+        embed = _embed_info("🎫  New Support Request")
         embed.add_field(name="User",        value=f"{ctx.author.mention} (`{ctx.author.id}`)", inline=False)
         embed.add_field(name="Category",    value=self.category.value,    inline=True)
         embed.add_field(name="App Version", value=self.app_version.value, inline=True)
@@ -1009,25 +1070,21 @@ async def slash_status(ctx: commands.Context):
 
     keys = data.get("keys", [])
     if not keys:
-        embed = discord.Embed(
-            title="🔑  No License Found",
-            description="You don't have a SteamGuard license yet. Use `!getkey` to get one.",
-            color=C_GREY,
-        )
+        embed = _embed_info(
+            "No License Found",
+            "You don't have a SteamGuard license yet. Use `!getkey` to get one.")
         await ctx.send(embed=embed)
         return
 
     # Use the first (most recent) key for the summary card
     k = keys[0]
     status_str = k.get("status", "unknown")
-    color = {"active": C_GREEN, "paused": C_YELLOW, "revoked": C_RED}.get(status_str, C_GREY)
     status_icon = {"active": "🟢", "paused": "🟡", "revoked": "🔴"}.get(status_str, "⚪")
 
-    embed = discord.Embed(
-        title=f"{status_icon}  Your SteamGuard Status",
-        color=color,
-        timestamp=datetime.now(timezone.utc),
-    )
+    _factory = {"active": _embed_success, "paused": _embed_warn, "revoked": _embed_error}.get(status_str, _embed_info)
+    embed = _factory(
+        f"{status_icon}  Your SteamGuard Status",
+        footer="Only visible to you")
     embed.add_field(name="License Tier", value=data.get("tier", k.get("tier", "Standard")), inline=True)
     embed.add_field(name="Status",       value=status_str.upper(),                            inline=True)
     embed.add_field(name="Heal Count",   value=str(data.get("heal_count", k.get("heal_count", 0))), inline=True)
@@ -1041,7 +1098,6 @@ async def slash_status(ctx: commands.Context):
     if k.get("pause_reason"):
         embed.add_field(name="Pause Reason", value=k["pause_reason"], inline=False)
 
-    embed.set_footer(text="SteamGuard • Only visible to you")
     await ctx.send(embed=embed)
 
 # ── /refer ────────────────────────────────────────────────────────────────────
@@ -1065,10 +1121,9 @@ async def slash_refer(ctx: commands.Context):
     referral_link   = data.get("referral_link", "N/A")
     valid_referrals = data.get("valid_referrals", 0)
 
-    embed = discord.Embed(
-        title="🔗  Your SteamGuard Referral Link",
-        color=C_BLUE,
-    )
+    embed = _embed_info(
+        "🔗  Your SteamGuard Referral Link",
+        footer="Only visible to you")
     embed.add_field(name="Your Link",         value=referral_link,           inline=False)
     embed.add_field(name="Valid Referrals",   value=str(valid_referrals),     inline=True)
     embed.add_field(name="​",                 value="​",                       inline=True)
@@ -1082,7 +1137,6 @@ async def slash_refer(ctx: commands.Context):
         ),
         inline=False,
     )
-    embed.set_footer(text="SteamGuard • Only visible to you")
     await ctx.send(embed=embed)
 
 # ── /stats ────────────────────────────────────────────────────────────────────
@@ -1113,11 +1167,9 @@ async def slash_stats(ctx: commands.Context):
     # Try to get streak from badge data
     streak = badge_data.get("current_streak", key_data.get("current_streak", "—"))
 
-    embed = discord.Embed(
-        title=f"📊  {ctx.author.display_name}'s SteamGuard Stats",
-        color=C_BLUE,
-        timestamp=datetime.now(timezone.utc),
-    )
+    embed = _embed(
+        f"📊  {ctx.author.display_name}'s SteamGuard Stats",
+        footer="Use /refer to earn rewards")
     embed.set_thumbnail(url=ctx.author.display_avatar.url)
     embed.add_field(name="⭐ XP",           value=f"{xp:,}",         inline=True)
     embed.add_field(name="🏆 Level",        value=str(level),         inline=True)
@@ -1131,7 +1183,6 @@ async def slash_stats(ctx: commands.Context):
         inline=False,
     )
     embed.add_field(name="🕒 Last Active",  value=str(last_active), inline=False)
-    embed.set_footer(text="Use /refer to earn rewards • SteamGuard")
     await ctx.send(embed=embed)
 
 # ── /leaderboard ──────────────────────────────────────────────────────────────
@@ -1152,11 +1203,9 @@ async def slash_leaderboard(ctx: commands.Context):
 
     entries = data.get("entries", data.get("leaderboard", []))[:10]
 
-    embed = discord.Embed(
-        title="🏆  Weekly SteamGuard Leaderboard",
-        color=C_YELLOW,
-        timestamp=datetime.now(timezone.utc),
-    )
+    embed = _embed(
+        "🏆  Weekly SteamGuard Leaderboard",
+        footer="Resets every Monday at midnight UTC")
 
     if not entries:
         embed.description = "No leaderboard data available yet. Keep using SteamGuard!"
@@ -1180,7 +1229,6 @@ async def slash_leaderboard(ctx: commands.Context):
 
         embed.description = "\n".join(lines)
 
-    embed.set_footer(text="Resets every Monday at midnight UTC • SteamGuard")
     await ctx.send(embed=embed)
 
 # ── /reset-device ─────────────────────────────────────────────────────────────
@@ -1207,16 +1255,14 @@ async def slash_reset_device(ctx: commands.Context):
 
     license_key = active_keys[0].get("key_hash", "")
 
-    embed = discord.Embed(
-        title="⚠️  Confirm Device Reset",
-        description=(
+    embed = _embed_warn(
+        "Confirm Device Reset",
+        (
             "This will **clear your hardware binding**, allowing you to activate on a new device.\n\n"
             "**Note:** You can only reset once every **30 days**.\n\n"
             "Are you sure you want to proceed?"
         ),
-        color=C_YELLOW,
-    )
-    embed.set_footer(text="This confirmation expires in 30 seconds")
+        footer="This confirmation expires in 30 seconds")
 
     view = DeviceResetView(
         discord_user_id=str(ctx.author.id),
@@ -1241,16 +1287,15 @@ async def slash_download(ctx: commands.Context):
     except Exception as e:
         LOG.warning(f"/download version fetch error: {e}")
 
-    embed = discord.Embed(
-        title="⬇️  SteamGuard Download",
-        description=(
+    embed = _embed_info(
+        "⬇️  SteamGuard Download",
+        (
             f"**Version:** `{version}`\n\n"
             f"📥  **[Download SteamGuard]({UPDATE_DOWNLOAD_URL})**\n\n"
             "🔐  Always verify the **SHA-256 signature** before running any executable.\n"
             "The official hash is posted in the `#announcements` channel after each release."
         ),
-        color=C_BLUE,
-    )
+        footer=f"v{version} • Only visible to you")
     embed.add_field(
         name="⚠️  Safety reminder",
         value=(
@@ -1260,7 +1305,6 @@ async def slash_download(ctx: commands.Context):
         ),
         inline=False,
     )
-    embed.set_footer(text=f"SteamGuard v{version} • Only visible to you")
     await ctx.send(embed=embed)
 
 # ── /vote ─────────────────────────────────────────────────────────────────────
@@ -1270,15 +1314,13 @@ async def slash_download(ctx: commands.Context):
 async def slash_vote(ctx: commands.Context):
     number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
-    embed = discord.Embed(
-        title="🗳️  SteamGuard Feature Vote",
-        description=(
+    embed = _embed(
+        "🗳️  SteamGuard Feature Vote",
+        (
             "React to this message with the number of the feature you want most!\n"
             "You can vote for multiple features.\n\n"
         ),
-        color=C_BLUE,
-        timestamp=datetime.now(timezone.utc),
-    )
+        footer="Your feedback shapes the roadmap")
 
     topic_lines = []
     for i, topic in enumerate(VOTE_TOPICS[:10]):
@@ -1286,7 +1328,6 @@ async def slash_vote(ctx: commands.Context):
         topic_lines.append(f"{emoji}  {topic}")
 
     embed.description += "\n".join(topic_lines)
-    embed.set_footer(text="SteamGuard • Your feedback shapes the roadmap")
 
     await ctx.send(embed=embed, ephemeral=False)
 
@@ -1326,15 +1367,13 @@ async def slash_checkbadges(ctx: commands.Context):
     all_badges = data.get("badges", [])
 
     if not new_badges:
-        embed = discord.Embed(
-            title="🎖  Badge Check",
-            description=(
+        embed = _embed_info(
+            "🎖  Badge Check",
+            (
                 f"No new badges since last check.\n\n"
                 f"You have **{len(all_badges)}** badge(s) total: "
                 + (", ".join(all_badges) if all_badges else "none yet")
-            ),
-            color=C_GREY,
-        )
+            ))
         await ctx.send(embed=embed)
         return
 
@@ -1343,31 +1382,26 @@ async def slash_checkbadges(ctx: commands.Context):
     if guild and BADGE_ANNOUNCE_CHANNEL_ID:
         announce_channel = guild.get_channel(BADGE_ANNOUNCE_CHANNEL_ID)
         if announce_channel:
-            announce_embed = discord.Embed(
-                title="🎖  New Badge Unlocked!",
-                description=(
+            announce_embed = _embed_success(
+                "New Badge Unlocked!",
+                (
                     f"{ctx.author.mention} just earned "
                     + (", ".join(f"**{b}**" for b in new_badges))
                     + "!"
                 ),
-                color=C_GREEN,
-                timestamp=datetime.now(timezone.utc),
-            )
+                footer="Keep protecting to earn more")
             announce_embed.set_thumbnail(url=ctx.author.display_avatar.url)
-            announce_embed.set_footer(text="SteamGuard • Keep protecting to earn more")
             try:
                 await announce_channel.send(embed=announce_embed)
             except Exception as e:
                 LOG.warning(f"Could not post badge announcement: {e}")
 
-    confirm_embed = discord.Embed(
-        title="🎖  New Badge(s) Earned!",
-        description=(
+    confirm_embed = _embed_success(
+        "New Badge(s) Earned!",
+        (
             "You unlocked: " + ", ".join(f"**{b}**" for b in new_badges) + "\n\n"
             "An announcement has been posted in the server. Congrats!"
-        ),
-        color=C_GREEN,
-    )
+        ))
     await ctx.send(embed=confirm_embed)
 
 # ── /rewards ──────────────────────────────────────────────────────────────────
@@ -1385,13 +1419,12 @@ async def cmd_rewards(ctx: commands.Context):
     is_owner  = status.get("is_owner", False)
     total_hrs = status.get("total_reward_hours", 0.0)
     triggers  = status.get("triggers", {})
-    embed = discord.Embed(
-        title="\u23f0  SteamGuard Rewards",
-        description=("Earn free hours by completing these actions."
-                     if not is_owner else
-                     "\u267e\ufe0f  You have unlimited access as an owner."),
-        color=0x23A559,
-    )
+    embed = _embed_info(
+        "\u23f0  SteamGuard Rewards",
+        ("Earn free hours by completing these actions."
+         if not is_owner else
+         "\u267e\ufe0f  You have unlimited access as an owner."),
+        footer="Use !invitefriends to share your referral link")
     if not is_owner:
         embed.add_field(name="\U0001f381  Total Earned",
                         value=f"**{total_hrs:.1f}h** bonus time", inline=False)
@@ -1405,7 +1438,6 @@ async def cmd_rewards(ctx: commands.Context):
         else:             avail = "\u2705 Available"
         embed.add_field(name=f"{reward_str}  \u2014  {label}",
                         value=f"{description}\n*{avail}* (claimed {count}x)", inline=False)
-    embed.set_footer(text="Use /invite-friends to share your referral link")
     await ctx.send(embed=embed)
 
 # ── /invite-friends ───────────────────────────────────────────────────────────
@@ -1437,22 +1469,20 @@ async def cmd_invite_friends(ctx: commands.Context):
         f"\U0001f511 Use my referral code to get started: **{referral_link}**\n\n"
         f"It's free, takes 2 minutes to set up, and actually works."
     )
-    embed = discord.Embed(
-        title="\U0001f517  Invite Friends \u2014 Earn +3h Each",
-        description=(
+    embed = _embed(
+        "\U0001f517  Invite Friends \u2014 Earn +3h Each",
+        (
             f"For every friend who joins **and activates SteamGuard**, "
             f"you earn **+3 free hours** of access.\n\n"
             f"Share your link or copy the pre-written message below."
         ),
-        color=0x5865F2,
-    )
+        footer="Credits apply after your friend activates their key")
     embed.add_field(name="\U0001f517  Your Referral Link",  value=f"`{referral_link}`",   inline=False)
     embed.add_field(name="\u2705  Valid Referrals",         value=str(valid_referrals),   inline=True)
     embed.add_field(name="\u23f3  Pending",                 value=str(pending),           inline=True)
     embed.add_field(name="\u23f0  Total Earned",            value=f"{earned_hours:.0f}h", inline=True)
     embed.add_field(name="\U0001f4cb  Copy this message to DM friends:",
                     value=f"```\n{invite_msg}\n```", inline=False)
-    embed.set_footer(text="Credits apply after your friend activates their key")
     await ctx.send(embed=embed)
 
 # ── /daily ────────────────────────────────────────────────────────────────────
@@ -1476,14 +1506,12 @@ async def cmd_daily(ctx: commands.Context):
         await ctx.send(f"\u274c Error: {e}")
         return
     if result.get("granted"):
-        embed = discord.Embed(title="\u2705  Daily Reward Claimed!",
-                              description="\U0001f552 **+30 minutes** added to your SteamGuard access.",
-                              color=0x23A559)
-        embed.set_footer(text="Come back tomorrow for another reward")
+        embed = _embed_success("Daily Reward Claimed!",
+                               "\U0001f552 **+30 minutes** added to your SteamGuard access.",
+                               footer="Come back tomorrow for another reward")
     else:
-        embed = discord.Embed(title="\u23f3  Already Claimed",
-                              description=result.get("reason", "Try again later."),
-                              color=0xF0B232)
+        embed = _embed_warn("Already Claimed",
+                            result.get("reason", "Try again later."))
     await ctx.send(embed=embed)
 
 # ── /grant-reward (admin) ─────────────────────────────────────────────────────
@@ -1507,19 +1535,18 @@ async def cmd_grant_reward(ctx: commands.Context, user: discord.Member, trigger:
         await ctx.send(f"\u274c Error: {e}")
         return
     if result.get("granted"):
-        embed = discord.Embed(
-            title="\U0001f381  Reward Granted",
-            description=(f"Gave **{user.display_name}** {result['reason']}\n"
-                         f"Total hours now: **{result.get('new_total_hours', 0):.1f}h**"),
-            color=0x23A559)
+        embed = _embed_success(
+            "Reward Granted",
+            (f"Gave **{user.display_name}** {result['reason']}\n"
+             f"Total hours now: **{result.get('new_total_hours', 0):.1f}h**"))
         try:
             await user.send(f"\U0001f381 You received a SteamGuard reward from an admin!\n"
                             f"{result['reason']}\nYour total: {result.get('new_total_hours', 0):.1f}h")
         except Exception:
             pass
     else:
-        embed = discord.Embed(title="\u274c Not Granted",
-                              description=result.get("reason", "Unknown"), color=0xF23F43)
+        embed = _embed_error("Not Granted",
+                             result.get("reason", "Unknown"))
     await ctx.send(embed=embed)
 
 # ── Slash command error handler ───────────────────────────────────────────────
