@@ -1499,7 +1499,7 @@ class SteamGuard(tk.Tk):
         except Exception:
             self._last_heartbeat_ok = False
             # Update heartbeat status label
-            status_text = "● Server sync: offline"
+            status_text = "Server sync: offline"
             status_color = YELLOW
             self._ui(lambda t=status_text, c=status_color:
                 self._heartbeat_status_lbl.config(text=t, fg=c))
@@ -1510,7 +1510,7 @@ class SteamGuard(tk.Tk):
             self._heartbeat_session_id = resp["session_id"]
 
         # Update heartbeat status label
-        status_text = "● Server sync: OK"
+        status_text = "Server sync: OK"
         status_color = GREEN
         self._ui(lambda t=status_text, c=status_color:
             self._heartbeat_status_lbl.config(text=t, fg=c))
@@ -1688,9 +1688,10 @@ class SteamGuard(tk.Tk):
                     self._ui(lambda: self._update_game_card(g))
                     self._ui(lambda: self._log(
                         f"Detected: {g['name']} (AppID {g['appid']})"))
-                    # Auto-enable protection when game launches
+                    # Auto-enable protection after a delay so the game
+                    # can fully log into Steam servers before the block fires.
                     if self._auto_heal.get() and not self._protected:
-                        self._ui(self._start_protection)
+                        self.after(6000, self._auto_protect_if_still_running)
                 else:
                     self._ui(lambda: self._update_game_card(None))
                     if self._protected:
@@ -1755,6 +1756,14 @@ class SteamGuard(tk.Tk):
         self._update_stats_tab()
 
     # ── Protection on/off ────────────────────────────────────────────────────
+
+    def _auto_protect_if_still_running(self):
+        """Called 6s after a game is detected. Only starts protection if
+        the same game is still running and we haven't already protected.
+        This delay lets the game fully log into Steam before the block fires."""
+        if self._auto_heal.get() and self._running_appid and not self._protected:
+            self._log("Auto-protect: game logged in, enabling protection…")
+            self._start_protection()
 
     def _start_protection(self):
         if not self._admin:
@@ -1873,6 +1882,18 @@ class SteamGuard(tk.Tk):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
+        # ── App icon (RC logo, background removed) ────────────────────────────
+        _icon_path = Path(__file__).parent / "icon.ico"
+        _icon_png  = Path(__file__).parent / "icon.png"
+        try:
+            if _icon_path.exists():
+                self.iconbitmap(str(_icon_path))
+            elif _icon_png.exists():
+                _ico_img = tk.PhotoImage(file=str(_icon_png))
+                self.iconphoto(True, _ico_img)
+        except Exception:
+            pass
+
         # ── Custom draggable title bar ─────────────────────────────────────────
         hdr = tk.Frame(self, bg=BG_SIDEBAR, height=36)
         hdr.pack(fill="x")
@@ -2185,7 +2206,7 @@ class SteamGuard(tk.Tk):
         tool_grid_r3.winfo_children()[-1].pack_configure(padx=0)
 
         # Heartbeat status label (needed by heartbeat loop)
-        self._heartbeat_status_lbl = tk.Label(ctrl, text="● Server sync: —",
+        self._heartbeat_status_lbl = tk.Label(ctrl, text="Server sync: —",
             bg=BG_DARK, fg=TEXT_DIM, font=("Segoe UI", 7), anchor="w")
         self._heartbeat_status_lbl.pack(anchor="w", pady=(2,0))
 
@@ -2211,7 +2232,7 @@ class SteamGuard(tk.Tk):
         self._kill_lbl.pack(side="right")
 
         self._log_w = scrolledtext.ScrolledText(
-            log_outer, bg=BG_BASE, fg=TEXT_MAIN, font=F_MONO, height=11,
+            log_outer, bg=BG_BASE, fg=TEXT_MAIN, font=F_MONO, height=8,
             relief="flat", bd=0, state="disabled", wrap="word")
         self._log_w.pack(fill="both", expand=True)
 
@@ -2251,8 +2272,8 @@ class SteamGuard(tk.Tk):
                   command=_open_debug_file).pack(side="left")
 
         self._dbg_w = scrolledtext.ScrolledText(
-            dbg_outer, bg=BG_BASE, fg=TEXT_MAIN, font=F_MONO, height=11,
-            relief="flat", bd=0, state="disabled", wrap="word")
+            dbg_outer, bg=BG_BASE, fg=TEXT_MAIN, font=("Consolas", 8),
+            relief="flat", bd=0, state="disabled", wrap="word", height=8)
         self._dbg_w.pack(fill="both", expand=True)
 
         # Color tags for debug log
@@ -2956,6 +2977,10 @@ class SteamGuard(tk.Tk):
         win.title("How to Use SteamGuard")
         win.configure(bg=BG_DARK)
         win.resizable(False, False)
+        win.transient(self)
+        win.wm_attributes("-topmost", True)
+        win.lift()
+        win.focus_force()
         win.grab_set()
 
         # Center relative to parent
@@ -3070,6 +3095,10 @@ KEYBOARD SHORTCUTS
         win.title("Steam Game Integration")
         win.configure(bg=BG_DARK)
         win.resizable(False, False)
+        win.transient(self)
+        win.wm_attributes("-topmost", True)
+        win.lift()
+        win.focus_force()
         win.grab_set()
 
         self.update_idletasks()
