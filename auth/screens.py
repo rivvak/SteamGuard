@@ -532,16 +532,36 @@ class LicenseWindow(tk.Toplevel):
         self._btn.bind("<Leave>", self._btn_hover_out)
 
         # ── Social links row (Discord + YouTube) ────────────────────────────
-        tk.Label(self, text="Don't have a key?", bg=BG_DARK, fg=TEXT_DIM,
-                 font=("Segoe UI", 8)).pack(pady=(12, 4))
-
-        social_row = tk.Frame(self, bg=BG_DARK)
-        social_row.pack(pady=(0, 8))
+        # Icons embedded as base64 PNG (20x20, white fill on transparent bg)
+        _DISCORD_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAABdklEQVR4nM2UP0tcQRTFf7PEP0mjroIYm6hVCrENFtoEYSH4EdIlVoKktFC7FCEk+A38EFaSIlEEWwOCWKxdlKxJQFwRN/4s3hTPYVxBG08199x7zlzu3PfgsSOkhNoBTAHTwHoIYSfJvwJqwHdgM4RwmTVUu4CPwFugP9J7wC4wEOMGMAG8jPEJsAYshhAu0s5WvD+WUrNhtfkAwzN1CKASPT8AT9uPuy2eRQ+C2g38AnofYAjwB3heAWYyZi1gC/idETZirpXwVeA16mpmJrMAalWtl/hDtRpzbzK6L6jbCXlcvlb9fENwM3eUaH9UgLGk9R61rxSPlM4vSmZ9mVGNobYyrX9Ta+qyelXiryz2taZuZHTnQTUz+PvifwVoJuRfik/qLjSAfwnXfAK8B1Ypnh2KdfgK1IFJYBwYjLlj4CewDYwCC8kF8wCo/fE1T+Ms9tXO21pTO9WDWHuqfjKuU1rYq85Z/KLaQp1U36k9d9U+LlwDVADD06LIUmQAAAAASUVORK5CYII="
+        _YOUTUBE_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAA+klEQVR4nOXSzSqFYRiF4ev9mCj/P1MpmZqaKOUcnIADoQydFAZImZkSMpEQysBPexmwS7H39+0YKPfoHazn7mk9L3+d0n4kmcMsxjGIIfR3mGvhHo+4xkkp5bgtGk6yk5+zlWRIko1fkLVZr7D4ixUuVpiuCR32IJypMFkTWsAqLhsIJyR56VZKO5n3420meeoSf5Kk1UT4Sbyc5LlDvNXLhgNJ1pI81m14VydMspLkrFvug9t+3GCkU8tJtrHU4CBwW+GiJtRUBucVdnsYqGNPkrEkBw36qWM/yWiBJAXzmMEURtGHsW+2CO7wigdc4RRHpZQv3+wf8AbPBCBqSpXODwAAAABJRU5ErkJggg=="
 
         DISCORD_COLOR = "#5865F2"
         YOUTUBE_COLOR = "#FF0000"
         DISCORD_URL   = "https://discord.gg/RTHM8YhpE"
         YOUTUBE_URL   = "https://www.youtube.com/@Rivvak"
+
+        # Load PNG icons via PIL if available, else fall back to text-only
+        def _load_icon(b64: str):
+            try:
+                from PIL import Image, ImageTk
+                import io as _io, base64 as _b64
+                data = _b64.b64decode(b64)
+                img  = Image.open(_io.BytesIO(data)).convert("RGBA")
+                return ImageTk.PhotoImage(img)
+            except Exception:
+                return None
+
+        _discord_photo = _load_icon(_DISCORD_PNG_B64)
+        _youtube_photo = _load_icon(_YOUTUBE_PNG_B64)
+        # Keep references so GC doesn't collect them
+        self._social_photos = [_discord_photo, _youtube_photo]
+
+        tk.Label(self, text="Don't have a key?", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 8)).pack(pady=(12, 4))
+
+        social_row = tk.Frame(self, bg=BG_DARK)
+        social_row.pack(pady=(0, 8))
 
         def _darken(hex_color):
             r = max(0, int(hex_color[1:3], 16) - 20)
@@ -549,47 +569,35 @@ class LicenseWindow(tk.Toplevel):
             b = max(0, int(hex_color[5:7], 16) - 20)
             return f"#{r:02x}{g:02x}{b:02x}"
 
-        def _make_social_btn(parent, color, label, url, draw_fn):
+        def _make_social_btn(parent, color, label, url, photo):
             frame = tk.Frame(parent, bg=color, cursor="hand2")
             frame.pack(side="left", padx=6)
-            cv = tk.Canvas(frame, width=18, height=18, bg=color,
-                           highlightthickness=0, cursor="hand2")
-            cv.pack(side="left", padx=(8, 4), pady=6)
-            draw_fn(cv, color)
-            lbl = tk.Label(frame, text=label, bg=color, fg="white",
-                           font=("Segoe UI", 9, "bold"), cursor="hand2")
-            lbl.pack(side="left", padx=(0, 10), pady=6)
+            widgets = []
+            if photo:
+                icon_lbl = tk.Label(frame, image=photo, bg=color,
+                                    cursor="hand2", bd=0)
+                icon_lbl.pack(side="left", padx=(8, 4), pady=7)
+                widgets.append(icon_lbl)
+            text_lbl = tk.Label(frame, text=label, bg=color, fg="white",
+                                font=("Segoe UI", 9, "bold"), cursor="hand2")
+            text_lbl.pack(side="left", padx=(0 if photo else 10, 10), pady=7)
+            widgets.append(text_lbl)
+            widgets.append(frame)
             def _click(e=None): webbrowser.open(url)
             def _hi(e):
                 d = _darken(color)
-                frame.config(bg=d); cv.config(bg=d); lbl.config(bg=d)
+                for w in widgets: w.config(bg=d)
             def _lo(e):
-                frame.config(bg=color); cv.config(bg=color); lbl.config(bg=color)
-            for w in (frame, cv, lbl):
+                for w in widgets: w.config(bg=color)
+            for w in widgets:
                 w.bind("<Button-1>", _click)
-                w.bind("<Enter>", _hi)
-                w.bind("<Leave>", _lo)
-
-        def _draw_discord(cv, bg):
-            cv.create_oval(0, 0, 14, 12, fill="white", outline="")
-            cv.create_rectangle(3, 6, 14, 12, fill="white", outline="")
-            cv.create_rectangle(0, 3, 11, 12, fill="white", outline="")
-            cv.create_polygon(2, 11, 0, 16, 7, 12, fill="white", outline="")
-            cv.create_oval(3, 4, 6, 7, fill=bg, outline="")
-            cv.create_oval(8, 4, 11, 7, fill=bg, outline="")
-
-        def _draw_youtube(cv, bg):
-            cv.create_rectangle(1, 4, 17, 14, fill="white", outline="")
-            cv.create_oval(1, 4, 5, 8, fill="white", outline="")
-            cv.create_oval(13, 4, 17, 8, fill="white", outline="")
-            cv.create_oval(1, 10, 5, 14, fill="white", outline="")
-            cv.create_oval(13, 10, 17, 14, fill="white", outline="")
-            cv.create_polygon(7, 6, 7, 12, 13, 9, fill=bg, outline="")
+                w.bind("<Enter>",    _hi)
+                w.bind("<Leave>",    _lo)
 
         _make_social_btn(social_row, DISCORD_COLOR, "Join our Discord",
-                         DISCORD_URL, _draw_discord)
+                         DISCORD_URL, _discord_photo)
         _make_social_btn(social_row, YOUTUBE_COLOR, "Rivvak on YouTube",
-                         YOUTUBE_URL, _draw_youtube)
+                         YOUTUBE_URL, _youtube_photo)
 
     def _btn_hover_in(self, event=None):
         if not self._busy:
