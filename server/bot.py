@@ -717,7 +717,7 @@ async def on_command_error(ctx: commands.Context, error):
 
 # ── !commandhelp ──────────────────────────────────────────────────────────────
 
-@bot.command(name="commandhelp", aliases=["help", "commands", "cmds"])
+@bot.command(name="commandhelp", aliases=["commands", "cmds"])
 @in_off_topic()
 async def cmd_commandhelp(ctx: commands.Context):
     """Lists all available SteamGuard bot commands."""
