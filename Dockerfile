@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r bot_requirements.txt
 
 COPY server/ ./server/
 COPY server/bot.py .
+COPY dashboard/ ./dashboard/
 
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1

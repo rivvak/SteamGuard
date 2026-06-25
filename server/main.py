@@ -42,7 +42,8 @@ from typing import Optional, List
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, Depends, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.cloud import firestore
@@ -332,6 +333,21 @@ def _get_iso_week() -> str:
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SteamGuard License Server", docs_url=None, redoc_url=None)
+
+# ── Dashboard static files ─────────────────────────────────────────────────
+import os as _os
+_dashboard_path = _os.path.abspath(
+    _os.path.join(_os.path.dirname(__file__), "..", "dashboard"))
+try:
+    app.mount("/dashboard", StaticFiles(directory=_dashboard_path, html=True),
+              name="dashboard")
+except Exception as _e:
+    pass  # dashboard folder not present (dev environment)
+
+@app.get("/", response_class=RedirectResponse, status_code=302)
+async def root_redirect():
+    """Redirect root URL to the dashboard login page."""
+    return "/dashboard/index.html"
 
 # ── CORS (web dashboard) ──────────────────────────────────────────────────────
 # The static dashboard is hosted off Cloud Run (Cloudflare Pages) and is a
