@@ -349,6 +349,17 @@ async def root_redirect():
     """Redirect root URL to the dashboard login page."""
     return "/dashboard/index.html"
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Serve RC logo as favicon — overrides FastAPI default leaf icon."""
+    from fastapi.responses import FileResponse
+    import os as _os
+    ico = _os.path.abspath(_os.path.join(
+        _os.path.dirname(__file__), "..", "dashboard", "favicon.ico"))
+    if _os.path.exists(ico):
+        return FileResponse(ico, media_type="image/x-icon")
+    return RedirectResponse("/dashboard/favicon.ico")
+
 # ── CORS (web dashboard) ──────────────────────────────────────────────────────
 # The static dashboard is hosted off Cloud Run (Cloudflare Pages) and is a
 # different origin from this API, so the browser requires permissive CORS
