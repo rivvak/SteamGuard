@@ -410,11 +410,21 @@ class LicenseWindow(tk.Toplevel):
 
         self._build(prefill_key)
         self.update_idletasks()
-        w, h = 500, 440
+        w, h = 500, 500
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        try:
+            _ico = Path(__file__).parent.parent / "icon.ico"
+            _png = Path(__file__).parent.parent / "icon.png"
+            if _ico.exists():
+                self.iconbitmap(str(_ico))
+            elif _png.exists():
+                _img = tk.PhotoImage(file=str(_png))
+                self.iconphoto(True, _img)
+        except Exception:
+            pass
 
     def _build(self, prefill_key: str):
         # ── Improved header: 56px with shield icon ──
@@ -521,17 +531,65 @@ class LicenseWindow(tk.Toplevel):
         self._btn.bind("<Enter>", self._btn_hover_in)
         self._btn.bind("<Leave>", self._btn_hover_out)
 
-        # ── Join Discord row ──
-        join_row = tk.Frame(self, bg=BG_DARK)
-        join_row.pack(pady=(10, 0))
-        tk.Label(join_row, text="Don't have a key? ", bg=BG_DARK, fg=TEXT_DIM,
-                 font=F_SMALL).pack(side="left")
+        # ── Social links row (Discord + YouTube) ────────────────────────────
+        tk.Label(self, text="Don't have a key?", bg=BG_DARK, fg=TEXT_DIM,
+                 font=("Segoe UI", 8)).pack(pady=(12, 4))
 
-        def _open_discord():
-            webbrowser.open("https://discord.gg/RTHM8YhpE")
+        social_row = tk.Frame(self, bg=BG_DARK)
+        social_row.pack(pady=(0, 8))
 
-        tk.Button(join_row, text="Join our Discord", bg=BG_DARK, fg=ACCENT, font=F_SMALL,
-                  relief="flat", bd=0, cursor="hand2", command=_open_discord).pack(side="left")
+        DISCORD_COLOR = "#5865F2"
+        YOUTUBE_COLOR = "#FF0000"
+        DISCORD_URL   = "https://discord.gg/RTHM8YhpE"
+        YOUTUBE_URL   = "https://www.youtube.com/@Rivvak"
+
+        def _darken(hex_color):
+            r = max(0, int(hex_color[1:3], 16) - 20)
+            g = max(0, int(hex_color[3:5], 16) - 20)
+            b = max(0, int(hex_color[5:7], 16) - 20)
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+        def _make_social_btn(parent, color, label, url, draw_fn):
+            frame = tk.Frame(parent, bg=color, cursor="hand2")
+            frame.pack(side="left", padx=6)
+            cv = tk.Canvas(frame, width=18, height=18, bg=color,
+                           highlightthickness=0, cursor="hand2")
+            cv.pack(side="left", padx=(8, 4), pady=6)
+            draw_fn(cv, color)
+            lbl = tk.Label(frame, text=label, bg=color, fg="white",
+                           font=("Segoe UI", 9, "bold"), cursor="hand2")
+            lbl.pack(side="left", padx=(0, 10), pady=6)
+            def _click(e=None): webbrowser.open(url)
+            def _hi(e):
+                d = _darken(color)
+                frame.config(bg=d); cv.config(bg=d); lbl.config(bg=d)
+            def _lo(e):
+                frame.config(bg=color); cv.config(bg=color); lbl.config(bg=color)
+            for w in (frame, cv, lbl):
+                w.bind("<Button-1>", _click)
+                w.bind("<Enter>", _hi)
+                w.bind("<Leave>", _lo)
+
+        def _draw_discord(cv, bg):
+            cv.create_oval(0, 0, 14, 12, fill="white", outline="")
+            cv.create_rectangle(3, 6, 14, 12, fill="white", outline="")
+            cv.create_rectangle(0, 3, 11, 12, fill="white", outline="")
+            cv.create_polygon(2, 11, 0, 16, 7, 12, fill="white", outline="")
+            cv.create_oval(3, 4, 6, 7, fill=bg, outline="")
+            cv.create_oval(8, 4, 11, 7, fill=bg, outline="")
+
+        def _draw_youtube(cv, bg):
+            cv.create_rectangle(1, 4, 17, 14, fill="white", outline="")
+            cv.create_oval(1, 4, 5, 8, fill="white", outline="")
+            cv.create_oval(13, 4, 17, 8, fill="white", outline="")
+            cv.create_oval(1, 10, 5, 14, fill="white", outline="")
+            cv.create_oval(13, 10, 17, 14, fill="white", outline="")
+            cv.create_polygon(7, 6, 7, 12, 13, 9, fill=bg, outline="")
+
+        _make_social_btn(social_row, DISCORD_COLOR, "Join our Discord",
+                         DISCORD_URL, _draw_discord)
+        _make_social_btn(social_row, YOUTUBE_COLOR, "Rivvak on YouTube",
+                         YOUTUBE_URL, _draw_youtube)
 
     def _btn_hover_in(self, event=None):
         if not self._busy:
