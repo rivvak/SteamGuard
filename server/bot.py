@@ -714,6 +714,96 @@ async def on_command_error(ctx: commands.Context, error):
         return
     LOG.error(f"Command error in {ctx.command}: {error}")
 
+
+# ── !commandhelp ──────────────────────────────────────────────────────────────
+
+@bot.command(name="commandhelp", aliases=["help", "commands", "cmds"])
+@in_off_topic()
+async def cmd_commandhelp(ctx: commands.Context):
+    """Lists all available SteamGuard bot commands."""
+    is_adm = (ctx.author.id in ADMIN_USER_IDS
+              or (ctx.guild and ctx.author.guild_permissions.administrator))
+
+    getkey_ch = ctx.guild.get_channel(GETKEY_CHANNEL_ID) if ctx.guild and GETKEY_CHANNEL_ID else None
+    ot_ch     = ctx.guild.get_channel(OFF_TOPIC_CHANNEL_ID) if ctx.guild and OFF_TOPIC_CHANNEL_ID else None
+    getkey_ref = getkey_ch.mention if getkey_ch else "#get-key"
+    ot_ref     = ot_ch.mention if ot_ch else "#-off-topic"
+
+    embed = discord.Embed(
+        title="🛡  SteamGuard — All Commands",
+        description=(
+            f"Use commands in the correct channel.\n"
+            f"Key commands → {getkey_ref} | Everything else → {ot_ref}"
+        ),
+        color=0x23A559,
+    )
+
+    # ── Key Commands ──
+    embed.add_field(
+        name=f"🔑  Key Commands ({getkey_ref} only)",
+        value=(
+            "`!getkey` — Get a SteamGuard license key\n"
+            "`!mykey` — Check your key status & expiry\n"
+            "`!linkyoutube` — Link your YouTube account for verification"
+        ),
+        inline=False,
+    )
+
+    # ── Account Commands ──
+    embed.add_field(
+        name=f"👤  Account Commands ({ot_ref})",
+        value=(
+            "`!status` — View your license, XP, badges & tier\n"
+            "`!stats` — Show your public protection stats card\n"
+            "`!refer` — Get your personal referral link\n"
+            "`!resetdevice` — Reset your HWID (30-day cooldown)"
+        ),
+        inline=False,
+    )
+
+    # ── Rewards ──
+    embed.add_field(
+        name="🎁  Reward Commands",
+        value=(
+            "`!rewards` — See all ways to earn free time\n"
+            "`!daily` — Claim your daily +30 min bonus (once per ~20h)\n"
+            "`!invitefriends` — Get your referral link + invite message (+3h per friend)"
+        ),
+        inline=False,
+    )
+
+    # ── Community ──
+    embed.add_field(
+        name="🌐  Community Commands",
+        value=(
+            "`!leaderboard` — Weekly top-10 heals leaderboard\n"
+            "`!vote` — Vote on upcoming features\n"
+            "`!download` — Get the latest SteamGuard installer\n"
+            "`!support` — Submit a support ticket\n"
+            "`!checkbadges` — Check for any new badge unlocks"
+        ),
+        inline=False,
+    )
+
+    # ── Admin Commands (only shown to admins) ──
+    if is_adm:
+        embed.add_field(
+            name="⚙️  Admin Commands",
+            value=(
+                "`!listkeys` — List all license keys\n"
+                "`!keyinfo @user` — Detailed info on a user's key\n"
+                "`!pausekey <key>` — Suspend a key\n"
+                "`!unpausekey <key>` — Unsuspend a key\n"
+                "`!revokekey <key>` — Permanently revoke a key\n"
+                "`!grantreward @user <trigger>` — Manually grant a reward\n"
+                "`!sgstatus` — Live server & bot health stats"
+            ),
+            inline=False,
+        )
+
+    embed.set_footer(text="Rivvak Community • SteamGuard  |  discord.gg/RTHM8YhpE")
+    await ctx.send(embed=embed)
+
 # ── Daily membership sweep ────────────────────────────────────────────────────
 
 @tasks.loop(hours=24)
