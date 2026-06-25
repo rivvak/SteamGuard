@@ -15,6 +15,7 @@ python -m nuitka ^
     --onefile ^
     --windows-console-mode=disable ^
     --windows-uac-admin ^
+    --windows-icon-from-ico=icon.ico ^
     --enable-plugin=tk-inter ^
     --output-filename=SteamGuard.exe ^
     --output-dir=%DIST% ^
