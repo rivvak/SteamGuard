@@ -127,7 +127,7 @@
     // Discord OAuth — backend starts the authorization-code flow.
     document.getElementById('discord-btn').addEventListener('click', () => {
       // The FastAPI service exposes /auth/discord to begin the OAuth handshake.
-      window.location.href = `${API_BASE}/auth/discord`;
+      window.location.href = `${API_BASE}/auth/discord/start`;
     });
 
     form.addEventListener('submit', async (e) => {
