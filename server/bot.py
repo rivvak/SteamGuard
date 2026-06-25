@@ -2,7 +2,7 @@
 SteamGuard Discord Bot — Full Version v2
 ──────────────────────────────────────────
 Channel rules:
-  • All commands ONLY work in #get-key channel (GETKEY_CHANNEL_ID env var)
+  • All commands work in any channel (slash commands) or anywhere in the server
   • DMs get a friendly redirect message with server invite link
 
 User commands (in #get-key only):
@@ -211,27 +211,6 @@ async def on_message(message: discord.Message):
             pass
         return
 
-    # Block commands in wrong channel (non-admin users)
-    if (GETKEY_CHANNEL_ID != 0
-            and message.content.startswith("!")
-            and message.channel.id != GETKEY_CHANNEL_ID
-            and message.author.id not in ADMIN_USER_IDS
-            and not message.author.guild_permissions.administrator):
-        # Only tell them if it starts with a known command
-        known = {"!getkey", "!mykey", "!linkyoutube"}
-        cmd   = message.content.split()[0].lower()
-        if cmd in known:
-            channel = message.guild.get_channel(GETKEY_CHANNEL_ID)
-            ref     = channel.mention if channel else "#get-key"
-            await message.reply(
-                f"❌ That command only works in {ref}.",
-                delete_after=8)
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-
     await bot.process_commands(message)
 
 # ── Events ────────────────────────────────────────────────────────────────────
@@ -352,7 +331,6 @@ async def _post_welcome_embed():
 # ── !getkey ───────────────────────────────────────────────────────────────────
 
 @bot.command(name="getkey")
-@in_getkey_channel()
 async def get_key(ctx: commands.Context):
     """Issue a license key — only in #get-key, only with Member role."""
     if ctx.guild.id != GUILD_ID:
@@ -419,7 +397,6 @@ async def get_key(ctx: commands.Context):
 # ── !mykey ────────────────────────────────────────────────────────────────────
 
 @bot.command(name="mykey")
-@in_getkey_channel()
 async def my_key(ctx: commands.Context):
     """Show the user their own key status."""
     try:
@@ -464,7 +441,6 @@ async def my_key(ctx: commands.Context):
 # ── !linkyoutube ──────────────────────────────────────────────────────────────
 
 @bot.command(name="linkyoutube")
-@in_getkey_channel()
 async def link_youtube(ctx: commands.Context):
     """Start YouTube OAuth flow so we can verify subscription."""
     try:
@@ -666,7 +642,7 @@ async def sg_status(ctx: commands.Context):
     embed.add_field(name="Server",      value=f"{'🟢 Online' if server_ok else '🔴 Down'}",   inline=True)
     embed.add_field(name="Server time", value=server_ts,                                      inline=True)
     embed.add_field(name="Guild",       value=str(GUILD_ID),                                  inline=True)
-    embed.add_field(name="Channel",     value=f"<#{GETKEY_CHANNEL_ID}>" if GETKEY_CHANNEL_ID else "any", inline=True)
+    embed.add_field(name="Channel",     value="All channels", inline=True)
     embed.add_field(name="​",           value="​",                                             inline=True)  # spacer
     embed.add_field(name="Total Keys",  value=f"{total_keys:,}" if isinstance(total_keys, int) else str(total_keys),  inline=True)
     embed.add_field(name="Active Keys", value=f"{active_keys:,}" if isinstance(active_keys, int) else str(active_keys), inline=True)
@@ -681,11 +657,7 @@ async def on_command_error(ctx: commands.Context, error):
     if isinstance(error, commands.CheckFailure):
         if ctx.guild is None:
             return   # DMs already handled by on_message
-        if GETKEY_CHANNEL_ID != 0 and ctx.channel.id != GETKEY_CHANNEL_ID:
-            channel = ctx.guild.get_channel(GETKEY_CHANNEL_ID)
-            ref     = channel.mention if channel else "#get-key"
-            await ctx.send(f"❌ Use that command in {ref}.", delete_after=6)
-        return
+        return  # channel restriction removed — bot listens everywhere
     if isinstance(error, commands.MemberNotFound):
         await ctx.send("❌ Member not found. Mention them with @.", delete_after=8)
         return
