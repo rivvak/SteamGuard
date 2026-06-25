@@ -46,9 +46,6 @@ Required env vars:
   YOUTUBE_CLIENT_SECRET — (optional) Google OAuth client secret
 
 New optional env vars:
-  MEMBERS_CHANNEL_ID  — voice channel to rename with member count
-  ACTIVE_CHANNEL_ID   — voice channel to rename with active key count
-  HEALS_CHANNEL_ID    — voice channel to rename with total heals count
   SUPPORT_CHANNEL_ID  — channel to post support requests
   UPDATE_DOWNLOAD_URL — override download URL (default: GitHub releases)
   VOTE_TOPICS         — JSON array string of vote topics (optional)
@@ -108,9 +105,6 @@ YT_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 
 # ── Env vars (new) ────────────────────────────────────────────────────────────
 
-MEMBERS_CHANNEL_ID          = int(os.environ.get("MEMBERS_CHANNEL_ID", "0") or "0")
-ACTIVE_CHANNEL_ID           = int(os.environ.get("ACTIVE_CHANNEL_ID", "0") or "0")
-HEALS_CHANNEL_ID            = int(os.environ.get("HEALS_CHANNEL_ID", "0") or "0")
 SUPPORT_CHANNEL_ID          = int(os.environ.get("SUPPORT_CHANNEL_ID", "0") or "0")
 BADGE_ANNOUNCE_CHANNEL_ID   = int(os.environ.get("BADGE_ANNOUNCE_CHANNEL_ID", "0") or "0")
 UPDATE_DOWNLOAD_URL         = os.environ.get(
@@ -299,7 +293,6 @@ async def on_ready():
     LOG.info(f"Bot ready: {bot.user} (ID {bot.user.id})")
     await _post_welcome_embed()
     daily_membership_sweep.start()
-    update_stat_channels.start()
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
@@ -902,50 +895,6 @@ async def daily_membership_sweep():
 
 @daily_membership_sweep.before_loop
 async def before_sweep():
-    await bot.wait_until_ready()
-
-# ── Auto-updating stat channels ───────────────────────────────────────────────
-
-@tasks.loop(minutes=10)
-async def update_stat_channels():
-    """Rename voice channels with live stats from /stats/server."""
-    try:
-        stats = await _api_get("/stats/server")
-    except Exception:
-        return
-
-    if "error" in stats:
-        return
-
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-
-    total_keys  = stats.get("total_keys", 0)
-    active_keys = stats.get("active_keys", 0)
-    total_heals = stats.get("total_heals", 0)
-
-    channel_updates = [
-        (MEMBERS_CHANNEL_ID, f"👥 Members: {total_keys:,}"),
-        (ACTIVE_CHANNEL_ID,  f"✅ Active: {active_keys:,}"),
-        (HEALS_CHANNEL_ID,   f"🛡 Heals: {total_heals:,}"),
-    ]
-
-    for ch_id, new_name in channel_updates:
-        if ch_id == 0:
-            continue
-        channel = guild.get_channel(ch_id)
-        if channel is None:
-            continue
-        try:
-            if channel.name != new_name:
-                await channel.edit(name=new_name)
-                LOG.info(f"Stat channel updated: {new_name}")
-        except Exception as e:
-            LOG.warning(f"Could not update stat channel {ch_id}: {e}")
-
-@update_stat_channels.before_loop
-async def before_stat_channels():
     await bot.wait_until_ready()
 
 # ═══════════════════════════════════════════════════════════════════════════════
