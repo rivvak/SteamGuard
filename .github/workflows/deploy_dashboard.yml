@@ -1,17 +1,25 @@
 name: Deploy Dashboard to Cloudflare Pages
+
 on:
   push:
     branches: [main]
-    paths: ['dashboard/**']
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dashboard --project-name=steamguard-dashboard --commit-dirty=true
+          projectName: steamguarddashboard
+          directory: dashboard
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
