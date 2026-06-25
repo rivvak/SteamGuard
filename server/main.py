@@ -1213,6 +1213,17 @@ async def heartbeat(req: HeartbeatRequest):
         "mandatory_update": mandatory_update,
     }
 
+    # Calculate remaining hours for time-limit enforcement in the client
+    expires_at = lic_data.get("expires_at")
+    remaining_hours = None
+    if expires_at:
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        remaining_hours = max(0.0, (expires_at - now).total_seconds() / 3600.0)
+    is_owner_hb = str(req.discord_user_id) in {str(x) for x in ADMIN_USER_IDS if x}
+    if is_owner_hb:
+        remaining_hours = 999999.0
+
     resp = HeartbeatResponse(
         session_id=req.session_id or key_hash[:16],
         server_time=now_ts,
@@ -1223,7 +1234,9 @@ async def heartbeat(req: HeartbeatRequest):
         kill_reason="forced_update" if mandatory_update else "",
         client_policy=client_policy,
     )
-    return resp
+    resp_dict = resp.dict()
+    resp_dict["remaining_hours"] = remaining_hours
+    return resp_dict
 
 # ── /referral/create ──────────────────────────────────────────────────────────
 
@@ -1835,6 +1848,45 @@ async def discord_oauth_callback(code: str = None, error: str = None):
 <p>Signing you in...</p>
 </body></html>"""
     return _HTMLResponse(content=html)
+
+
+@app.post("/me/referral/create")
+async def me_create_referral(user=Depends(_get_current_user)):
+    """Create or return a referral code for the logged-in user (JWT auth, no admin key needed)."""
+    discord_id = user["sub"]
+    # Check if code already exists
+    existing = list(
+        db.collection(REFERRAL_CODES_COL)
+          .where("owner_discord_id", "==", discord_id)
+          .limit(1).stream()
+    )
+    if existing:
+        data = existing[0].to_dict() or {}
+        code = data.get("code", existing[0].id)
+        return {
+            "code": code,
+            "referral_link": f"https://discord.gg/RTHM8YhpE?ref={code}",
+            "valid_referrals": data.get("valid_referrals", 0),
+            "pending_referrals": data.get("pending_referrals", 0),
+            "earned_hours": data.get("valid_referrals", 0) * 3.0,
+        }
+    # Create new code
+    import secrets as _sec
+    code = _sec.token_urlsafe(8)
+    db.collection(REFERRAL_CODES_COL).document(code).set({
+        "code": code,
+        "owner_discord_id": discord_id,
+        "valid_referrals": 0,
+        "pending_referrals": 0,
+        "created_at": utcnow(),
+    })
+    return {
+        "code": code,
+        "referral_link": f"https://discord.gg/RTHM8YhpE?ref={code}",
+        "valid_referrals": 0,
+        "pending_referrals": 0,
+        "earned_hours": 0.0,
+    }
 
 @app.get("/me/overview")
 async def me_overview(user=Depends(_get_current_user)):

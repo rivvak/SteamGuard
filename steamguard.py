@@ -1827,6 +1827,25 @@ class SteamGuard(tk.Tk):
             self._ui(lambda r=reason: self._on_remote_kill(r))
             return
 
+        # Time limit enforcement — check remaining hours from heartbeat response
+        remaining = resp.get("remaining_hours")
+        if remaining is not None:
+            try:
+                remaining = float(remaining)
+            except (TypeError, ValueError):
+                remaining = None
+        if remaining is not None and remaining <= 0:
+            # Time expired — stop protection and notify user
+            self._ui(lambda: self._on_time_expired())
+            return
+        if remaining is not None and remaining < 2:
+            # Under 2 hours — show low time warning in log
+            mins = int(remaining * 60)
+            self._ui(lambda m=mins: self._log(
+                f"⏰ Low time warning: {m}m of protection time remaining. "
+                f"Earn more via rewards at rivvak.app",
+                level="warn"))
+
         # Handle badge awards
         new_badges = resp.get("new_badges", [])
         if new_badges:
@@ -1838,14 +1857,32 @@ class SteamGuard(tk.Tk):
             self._ui(lambda: self._log("A mandatory update is available. Please update SteamGuard.", level="warn"))
 
     def _on_remote_kill(self, reason: str):
-        # Stop protection
         if self._protected:
             self._stop_protection()
-        # Show message
         from tkinter import messagebox
         self._log(f"Remote kill received: {reason}", error=True)
         messagebox.showerror("SteamGuard — Access Revoked",
             f"Your license has been deactivated:\n\n{reason}\n\nContact support in Discord.")
+
+    def _on_time_expired(self):
+        """Called when the user's protection time runs out."""
+        if self._protected:
+            self._stop_protection()
+        self._log(
+            "⏰ Your protection time has run out. Earn more time via rewards at rivvak.app",
+            level="warn")
+        from tkinter import messagebox
+        import webbrowser
+        if messagebox.askyesno(
+            "SteamGuard — Time Expired",
+            "Your SteamGuard protection time has run out.\n\n"
+            "Earn free time via the rewards system:\n"
+            "  • Daily check-in (+30 min)\n"
+            "  • Invite a friend (+3h)\n"
+            "  • YouTube sub (+2h)\n\n"
+            "Open rivvak.app to claim rewards?"
+        ):
+            webbrowser.open("https://rivvak.app/dashboard/index.html")
 
     # ── Badge / Achievement System ────────────────────────────────────────────
 

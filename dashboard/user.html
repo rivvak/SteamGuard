@@ -326,6 +326,18 @@
       document.getElementById('set-tier').textContent = isPremium ? 'Premium' : 'Free';
     }
 
+    // Which triggers users can self-claim from the dashboard
+    const SELF_CLAIM_TRIGGERS = {
+      daily_check_in:  'Claim +30m',
+      invite_friend:   null, // auto-granted via referral
+      weekly_streak:   null, // auto-granted server-side
+      first_heal:      null, // auto-granted on first heal
+      youtube_sub:     'Verify Sub',
+      share_card_post: 'Claim +1h',
+      bug_report:      null, // admin grants only
+      server_boost:    null, // admin grants only
+    };
+
     function renderRewards(r) {
       if (!r) return;
       const total = r.total_reward_hours ?? 0;
@@ -335,37 +347,101 @@
       Object.entries(r.triggers || {}).forEach(([key, t]) => {
         const icon = REWARD_ICONS[key] || 'fa-star';
         const name = REWARD_NAMES[key] || key;
+        // Fix [object Object] — ensure description is a plain string
+        const desc = typeof t.description === 'string' ? t.description : String(t.description || '');
         const cd = t.minutes_until_available;
         const onCooldown = cd !== null && cd !== undefined;
-        const statusHTML = onCooldown
-          ? `<span class="badge badge-paused"><i class="fa-solid fa-clock"></i> ${cd}m cooldown</span>`
-          : `<span class="badge badge-active"><i class="fa-solid fa-circle-check"></i> Available</span>`;
+        const maxed = t.max_per_user > 0 && t.times_claimed >= t.max_per_user;
+        const hoursLabel = t.hours_per_use >= 1 ? `+${t.hours_per_use}h` : `+${Math.round(t.hours_per_use * 60)}m`;
+        const claimLabel = SELF_CLAIM_TRIGGERS[key];
+        const canClaim = claimLabel && !onCooldown && !maxed;
+
+        let actionHTML;
+        if (maxed) {
+          actionHTML = `<span class="badge badge-active" style="background:rgba(168,85,247,.18);color:#a855f7"><i class="fa-solid fa-trophy"></i> Maxed</span>`;
+        } else if (onCooldown) {
+          const hrs = Math.floor(cd / 60), mins = cd % 60;
+          const cdText = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+          actionHTML = `<span class="badge badge-paused"><i class="fa-solid fa-clock"></i> ${cdText}</span>`;
+        } else if (claimLabel) {
+          actionHTML = `<button class="btn btn-primary" style="padding:4px 12px;font-size:12px" data-claim="${key}"><i class="fa-solid fa-circle-check"></i> ${claimLabel}</button>`;
+        } else {
+          actionHTML = `<span class="badge badge-active"><i class="fa-solid fa-circle-check"></i> Available</span>`;
+        }
+
         const card = document.createElement('div');
         card.className = 'card card-hover p-5 flex flex-col';
         card.innerHTML = `
           <div class="flex items-center justify-between mb-3">
-            <div class="rc-logo" style="background:rgba(61,169,252,0.14);color:var(--accent)"><i class="fa-solid ${icon}"></i></div>
-            <span class="badge badge-time">+${t.hours_per_use}h</span>
+            <div class="rc-logo" style="background:rgba(61,169,252,.14);color:var(--accent)"><i class="fa-solid ${icon}"></i></div>
+            <span class="badge badge-time">${hoursLabel}</span>
           </div>
           <div class="font-bold">${name}</div>
-          <p class="text-muted text-xs mt-1 flex-1">${t.description}</p>
+          <p class="text-muted text-xs mt-1 flex-1">${desc}</p>
           <div class="flex items-center justify-between mt-3 pt-3" style="border-top:1px solid var(--border)">
             <span class="text-muted text-xs">Claimed ${t.times_claimed}×</span>
-            ${statusHTML}
+            ${actionHTML}
           </div>`;
         grid.appendChild(card);
       });
+
+      // Wire claim buttons
+      grid.querySelectorAll('[data-claim]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const trigger = btn.dataset.claim;
+          btn.disabled = true;
+          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+          try {
+            let res;
+            if (trigger === 'daily_check_in') {
+              const user = getUser();
+              const key  = localStorage.getItem('sg_key') || '';
+              res = await apiFetch('/rewards/check-in', {
+                method: 'POST',
+                body: JSON.stringify({ discord_user_id: user.discord_user_id, key, sig: '' }),
+              });
+            } else {
+              res = await apiFetch('/rewards/grant', {
+                method: 'POST',
+                body: JSON.stringify({ discord_user_id: getUser().discord_user_id, trigger }),
+              });
+            }
+            if (res && res.granted) {
+              showToast(`✅ ${res.reason || 'Reward claimed!'}`, 'success');
+              // Reload rewards after a short delay
+              setTimeout(async () => {
+                const rw = await apiFetch('/me/rewards');
+                if (rw) renderRewards(rw);
+              }, 800);
+            } else {
+              showToast(res?.reason || 'Could not claim — try later.', 'error');
+              btn.disabled = false;
+              btn.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${SELF_CLAIM_TRIGGERS[trigger]}`;
+            }
+          } catch (e) {
+            showToast('Network error.', 'error');
+            btn.disabled = false;
+          }
+        });
+      });
     }
 
-    function renderReferrals(r) {
+    async function renderReferrals(r) {
       if (!r) return;
-      document.getElementById('ref-link').value = r.referral_link || 'No referral code yet';
-      document.getElementById('ref-valid').textContent = r.valid_referrals ?? 0;
-      document.getElementById('ref-pending').textContent = r.pending_referrals ?? 0;
-      document.getElementById('ref-earned').textContent = `${r.earned_hours ?? 0}h`;
-      const link = r.referral_link || 'https://discord.gg/RTHM8YhpE';
+      // Auto-create referral code if user doesn't have one yet
+      let ref = r;
+      if (!ref.code || !ref.referral_link) {
+        const user = getUser();
+        const created = await apiFetch('/me/referral/create', { method: 'POST', body: '{}' });
+        if (created && created.code) ref = { ...ref, ...created };
+      }
+      const link = ref.referral_link || `https://discord.gg/RTHM8YhpE`;
+      document.getElementById('ref-link').value = link;
+      document.getElementById('ref-valid').textContent = ref.valid_referrals ?? 0;
+      document.getElementById('ref-pending').textContent = ref.pending_referrals ?? 0;
+      document.getElementById('ref-earned').textContent = `${ref.earned_hours ?? 0}h`;
       document.getElementById('invite-msg').textContent =
-        `🛡️ I'm using SteamGuard to keep my games protected — it's free! Join with my link and we both get bonus protection time: ${link}`;
+        `🛡️ Hey! I've been using SteamGuard from Rivvak Community — it keeps you in Steam games when family sharing kicks you out. It's free! Join here: https://discord.gg/RTHM8YhpE and use my referral link to get started: ${link}`;
     }
 
     function renderStats(s) {
