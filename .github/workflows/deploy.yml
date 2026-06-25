@@ -27,7 +27,7 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy steamguard \
-          --source ./server \
+          --source . \
           --region us-central1 \
           --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest \
           --quiet

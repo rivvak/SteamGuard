@@ -2,13 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Install server dependencies
+COPY server/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server/bot_requirements.txt .
+
+# Install bot dependencies
+COPY server/bot_requirements.txt ./bot_requirements.txt
 RUN pip install --no-cache-dir -r bot_requirements.txt
 
+# Copy application code
 COPY server/ ./server/
-COPY server/bot.py .
+COPY server/bot.py ./bot.py
+
+# Copy dashboard static files
 COPY dashboard/ ./dashboard/
 
 ENV PORT=8080
