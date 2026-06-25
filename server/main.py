@@ -367,6 +367,9 @@ async def favicon():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://rivvak.app",
+        "https://www.rivvak.app",
+        "https://steamguard-775181381055.us-central1.run.app",
         "https://steamguard.pages.dev",
         "https://steamguard-dashboard.pages.dev",
         "http://localhost:3000",
@@ -1681,7 +1684,7 @@ async def web_login(req: WebLoginRequest, response: Response):
         "sub": str(req.discord_user_id),
         "kh": key_hash,                       # key hash, never the raw key
         "is_admin": is_admin,
-        "exp": utcnow() + timedelta(hours=24),
+        "exp": utcnow() + timedelta(days=7),
         "iat": utcnow(),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
@@ -1712,6 +1715,124 @@ async def _require_admin_jwt(authorization: str = Header(None)):
 
 
 # ── User endpoints ────────────────────────────────────────────────────────────
+
+
+# ── Discord OAuth2 ────────────────────────────────────────────────────────────
+
+DISCORD_CLIENT_ID     = os.environ.get("DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+DISCORD_REDIRECT_URI  = os.environ.get(
+    "DISCORD_REDIRECT_URI",
+    "https://rivvak.app/auth/discord/callback"
+)
+
+@app.get("/auth/discord/start")
+async def discord_oauth_start():
+    """Redirect user to Discord OAuth2 authorization page."""
+    if not DISCORD_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="Discord OAuth not configured")
+    import urllib.parse
+    params = urllib.parse.urlencode({
+        "client_id":     DISCORD_CLIENT_ID,
+        "redirect_uri":  DISCORD_REDIRECT_URI,
+        "response_type": "code",
+        "scope":         "identify",
+    })
+    return RedirectResponse(f"https://discord.com/oauth2/authorize?{params}")
+
+
+@app.get("/auth/discord/callback")
+async def discord_oauth_callback(code: str = None, error: str = None):
+    """Handle Discord OAuth2 callback, issue JWT, redirect to dashboard."""
+    from fastapi.responses import HTMLResponse as _HTMLResponse
+
+    if error or not code:
+        # Redirect to login with error
+        return RedirectResponse("/dashboard/index.html?error=discord_denied")
+
+    if not DISCORD_CLIENT_ID or not DISCORD_CLIENT_SECRET:
+        return RedirectResponse("/dashboard/index.html?error=oauth_not_configured")
+
+    # Exchange code for access token
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://discord.com/api/oauth2/token",
+            data={
+                "client_id":     DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type":    "authorization_code",
+                "code":          code,
+                "redirect_uri":  DISCORD_REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10,
+        )
+
+    if token_resp.status_code != 200:
+        LOG.error(f"Discord token exchange failed: {token_resp.text}")
+        return RedirectResponse("/dashboard/index.html?error=token_failed")
+
+    access_token = token_resp.json().get("access_token")
+
+    # Get Discord user info
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            "https://discord.com/api/users/@me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+
+    if user_resp.status_code != 200:
+        return RedirectResponse("/dashboard/index.html?error=user_fetch_failed")
+
+    discord_user = user_resp.json()
+    discord_id   = discord_user.get("id", "")
+
+    if not discord_id:
+        return RedirectResponse("/dashboard/index.html?error=no_discord_id")
+
+    # Find their license key in Firestore
+    docs = list(
+        db.collection(LICENSES_COL)
+          .where("discord_user_id", "==", discord_id)
+          .where("revoked", "==", False)
+          .limit(1)
+          .stream()
+    )
+
+    if not docs:
+        # No key found — redirect to get-key page
+        return RedirectResponse(
+            "/dashboard/index.html?error=no_key&discord_id=" + discord_id)
+
+    key_doc  = docs[0]
+    key_hash = key_doc.id
+
+    is_admin = discord_id in {str(x) for x in ADMIN_USER_IDS}
+    payload  = {
+        "sub":      discord_id,
+        "key":      key_hash,
+        "is_admin": is_admin,
+        "exp":      utcnow() + timedelta(days=7),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+
+    # Use an HTML page that stores token in localStorage then redirects
+    dest = "/dashboard/admin.html" if is_admin else "/dashboard/user.html"
+    html = f"""<!doctype html>
+<html><head><title>Signing in...</title></head>
+<body>
+<script>
+  localStorage.setItem('sg_token', {repr(token)});
+  localStorage.setItem('sg_user', JSON.stringify({{
+    discord_user_id: {repr(discord_id)},
+    is_admin: {'true' if is_admin else 'false'}
+  }}));
+  window.location.href = {repr(dest)};
+</script>
+<p>Signing you in...</p>
+</body></html>"""
+    return _HTMLResponse(content=html)
 
 @app.get("/me/overview")
 async def me_overview(user=Depends(_get_current_user)):

@@ -17,6 +17,24 @@
     :root { --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
     body { font-family: var(--font-sans); }
   </style>
+
+  <script>
+    // Show error from Discord OAuth callback if present
+    const urlParams = new URLSearchParams(window.location.search);
+    const err = urlParams.get('error');
+    if (err) {
+      const msgs = {
+        'discord_denied': 'Discord login was cancelled.',
+        'no_key': 'No SteamGuard key found for your Discord account. Get a key in #get-key first.',
+        'token_failed': 'Discord authentication failed. Please try again.',
+        'oauth_not_configured': 'Discord login is not set up yet.',
+      };
+      document.addEventListener('DOMContentLoaded', () => {
+        const el = document.getElementById('error-msg');
+        if (el) { el.textContent = msgs[err] || 'Login error: ' + err; el.style.display='block'; }
+      });
+    }
+  </script>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
 

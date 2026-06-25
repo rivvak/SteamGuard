@@ -3,7 +3,7 @@
    Rivvak Community
    ========================================================================== */
 
-const API_BASE = 'https://steamguard-775181381055.us-central1.run.app';
+const API_BASE = 'https://rivvak.app';
 
 const REWARD_ICONS = {
   invite_friend:   'fa-user-plus',
@@ -58,14 +58,14 @@ async function apiFetch(path, options = {}) {
 /* --- auth flow helpers ---------------------------------------------------- */
 function logout() {
   localStorage.clear();
-  window.location.href = '/dashboard/index.html';
+  window.location.href = 'index.html';
 }
 
 function requireAuth(adminRequired = false) {
   const token = getToken();
-  if (!token) { window.location.href = '/dashboard/index.html'; return false; }
+  if (!token) { window.location.href = 'index.html'; return false; }
   const user = getUser();
-  if (adminRequired && !user.is_admin) { window.location.href = '/dashboard/user.html'; return false; }
+  if (adminRequired && !user.is_admin) { window.location.href = 'user.html'; return false; }
   return true;
 }
 
