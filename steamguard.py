@@ -365,12 +365,12 @@ BG_DARK   = BG_BASE
 BG_MID    = BG_SIDEBAR
 BG_PANEL  = BG_CARD
 
-F_HEAD   = ("Segoe UI", 14, "bold")    # section headings
-F_BODY   = ("Segoe UI", 11)            # body text
-F_SMALL  = ("Segoe UI", 10)            # small text
+F_HEAD   = ("Segoe UI", 11, "bold")    # section headings
+F_BODY   = ("Segoe UI", 10)            # body text
+F_SMALL  = ("Segoe UI", 9)             # small text
 F_MONO   = ("Consolas", 10)            # codes / logs
-F_TITLE  = ("Segoe UI", 16, "bold")    # app title
-F_LABEL  = ("Segoe UI", 9)             # dim section labels / caps
+F_TITLE  = ("Segoe UI", 13, "bold")    # app title
+F_LABEL  = ("Segoe UI", 8)             # dim section labels / caps
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DPAPI helpers
@@ -1225,7 +1225,7 @@ class SteamGuard(tk.Tk):
         self._initial_load()
 
         self.update_idletasks()
-        w, h = 480, 720
+        w, h = 460, 680
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
@@ -1874,36 +1874,36 @@ class SteamGuard(tk.Tk):
 
     def _build_ui(self):
         # ── Custom draggable title bar ─────────────────────────────────────────
-        hdr = tk.Frame(self, bg=BG_SIDEBAR, height=44)
+        hdr = tk.Frame(self, bg=BG_SIDEBAR, height=36)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
         # Shield canvas icon (28x28)
-        hc = tk.Canvas(hdr, width=28, height=28, bg=BG_SIDEBAR, highlightthickness=0)
-        hc.place(x=10, y=8)
-        hc.create_polygon(14, 2, 26, 7, 26, 17, 14, 26, 2, 17, 2, 7,
+        hc = tk.Canvas(hdr, width=24, height=24, bg=BG_SIDEBAR, highlightthickness=0)
+        hc.place(x=8, y=6)
+        hc.create_polygon(12, 2, 22, 6, 22, 15, 12, 22, 2, 15, 2, 6,
                           fill=ACCENT, outline="", smooth=False)
-        hc.create_text(14, 15, text="S", fill="white", font=("Segoe UI", 10, "bold"))
+        hc.create_text(12, 12, text="S", fill="white", font=("Segoe UI", 8, "bold"))
 
         title_lbl = tk.Label(hdr, text="SteamGuard", bg=BG_SIDEBAR, fg=TEXT_MAIN,
-                             font=("Segoe UI", 13, "bold"))
-        title_lbl.place(x=46, y=10)
+                             font=("Segoe UI", 11, "bold"))
+        title_lbl.place(x=38, y=8)
 
-        ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_SIDEBAR, fg=TEXT_DIM, font=F_SMALL)
-        ver_lbl.place(x=158, y=14)
+        ver_lbl = tk.Label(hdr, text=f"v{CURRENT_VERSION}", bg=BG_SIDEBAR, fg=TEXT_DIM, font=("Segoe UI", 8))
+        ver_lbl.place(x=148, y=11)
 
         # Admin pill canvas (70x18)
-        pill_cv = tk.Canvas(hdr, width=70, height=18, bg=BG_SIDEBAR, highlightthickness=0)
-        pill_cv.place(relx=1.0, x=-80, y=13)
+        pill_cv = tk.Canvas(hdr, width=60, height=16, bg=BG_SIDEBAR, highlightthickness=0)
+        pill_cv.place(relx=1.0, x=-68, y=10)
         if self._admin:
             pill_color = GREEN
             pill_text  = "✓ ADMIN"
         else:
             pill_color = YELLOW
             pill_text  = "⚠ NO ADMIN"
-        pill_cv.create_rectangle(0, 0, 70, 20, fill=pill_color, outline="")
-        pill_cv.create_text(35, 10, text=pill_text, fill=BG_DARK,
-                            font=("Segoe UI", 7, "bold"))
+        pill_cv.create_rectangle(0, 0, 60, 16, fill=pill_color, outline="")
+        pill_cv.create_text(30, 8, text=pill_text, fill=BG_DARK,
+                            font=("Segoe UI", 6, "bold"))
 
         # No custom minimize/close — native title bar handles these now
         # (overrideredirect is gone, so OS controls work correctly)
@@ -1912,7 +1912,7 @@ class SteamGuard(tk.Tk):
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         # ── Animated shield canvas (centrepiece) ──────────────────────────────
-        SHIELD_W, SHIELD_H = 480, 110
+        SHIELD_W, SHIELD_H = 460, 80
         self._shield_cv = tk.Canvas(self, width=SHIELD_W, height=SHIELD_H,
                                     bg=BG_DARK, highlightthickness=0)
         self._shield_cv.pack(fill="x")
@@ -1943,7 +1943,7 @@ class SteamGuard(tk.Tk):
             fill=BG_ELEVATED, outline=ACCENT, width=2, smooth=False)
         self._shield_letter = self._shield_cv.create_text(
             cx, cy+2, text="S", fill=ACCENT,
-            font=("Segoe UI", 28, "bold"))
+            font=("Segoe UI", 20, "bold"))
 
         # Status text under shield
         self._shield_status_txt = self._shield_cv.create_text(
@@ -1958,7 +1958,7 @@ class SteamGuard(tk.Tk):
 
         # ── 3-column status indicators ────────────────────────────────────────
         status_outer = tk.Frame(self, bg=BORDER)   # BORDER bg shows through as dividers
-        status_outer.pack(fill="x", padx=12, pady=(2, 0))
+        status_outer.pack(fill="x", padx=12, pady=(1, 0))
 
         self._status_cards = []
 
@@ -1968,14 +1968,14 @@ class SteamGuard(tk.Tk):
             card = tk.Frame(parent, bg=BG_CARD)
             card.pack(side="left", fill="both", expand=True)
             tk.Label(card, text=label, bg=BG_CARD, fg=TEXT_DIM,
-                     font=F_LABEL).pack(pady=(12, 2), padx=10)
-            dot_cv = tk.Canvas(card, width=12, height=12, bg=BG_CARD,
+                     font=F_LABEL).pack(pady=(6, 1), padx=8)
+            dot_cv = tk.Canvas(card, width=10, height=10, bg=BG_CARD,
                                highlightthickness=0)
             dot_cv.pack()
             dot = dot_cv.create_oval(1, 1, 11, 11, fill=TEXT_DIM, outline="")
             lbl = tk.Label(card, text="—", bg=BG_CARD, fg=TEXT_DIM,
                            font=("Segoe UI", 8, "bold"))
-            lbl.pack(pady=(2, 12), padx=10)
+            lbl.pack(pady=(1, 6), padx=8)
             self._status_cards.append(card)
             return dot_cv, dot, lbl
 
@@ -1992,7 +1992,7 @@ class SteamGuard(tk.Tk):
         Tooltip(self._lib_dot_cv,  "Shared library status: LOCKED means someone else is using it")
 
         # Section separator after status row
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=(8, 0))
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", pady=(4, 0))
 
         # ── Game detection card ───────────────────────────────────────────────
         game_section = tk.Frame(self, bg=BG_DARK)
@@ -2013,12 +2013,12 @@ class SteamGuard(tk.Tk):
 
         # Game art image — wide banner, shown when a game is running
         self._game_icon = tk.Label(game_top, text="🎮", bg=BG_CARD,
-                                   font=("Segoe UI Emoji", 22),
-                                   width=12, compound="center")
-        self._game_icon.pack(side="left", padx=(10, 8), pady=8)
+                                   font=("Segoe UI Emoji", 16),
+                                   width=10, compound="center")
+        self._game_icon.pack(side="left", padx=(8, 6), pady=6)
 
         game_text = tk.Frame(game_top, bg=BG_CARD)
-        game_text.pack(side="left", fill="x", expand=True, pady=12)
+        game_text.pack(side="left", fill="x", expand=True, pady=6)
         self._game_name_lbl = tk.Label(game_text, text="Waiting for game to launch…",
                                        bg=BG_CARD, fg=TEXT_DIM, font=F_HEAD, anchor="w")
         self._game_name_lbl.pack(fill="x")
@@ -2040,20 +2040,20 @@ class SteamGuard(tk.Tk):
         self._badge_panel.pack(fill="x", pady=(2, 0))
 
         # Section separator after game card
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(8, 0))
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=12, pady=(4, 0))
 
         # ── Feature A: Playtime tracker pills ─────────────────────────────────
         pills_outer = tk.Frame(self, bg=BG_DARK)
-        pills_outer.pack(fill="x", padx=12, pady=(8, 0))
+        pills_outer.pack(fill="x", padx=12, pady=(4, 0))
 
         def _make_pill(parent, label, init_val):
             pill = tk.Frame(parent, bg=BG_CARD)
             pill.pack(side="left", fill="both", expand=True, padx=(0, 6))
             tk.Label(pill, text=label, bg=BG_CARD, fg=TEXT_DIM,
-                     font=F_LABEL).pack(pady=(8, 0), padx=10)
+                     font=F_LABEL).pack(pady=(4, 0), padx=8)
             val = tk.Label(pill, text=init_val, bg=BG_CARD, fg=TEXT_MAIN,
-                           font=("Segoe UI", 11, "bold"))
-            val.pack(pady=(0, 8), padx=10)
+                           font=("Segoe UI", 10, "bold"))
+            val.pack(pady=(0, 4), padx=8)
             return pill, val
 
         _, self._pill_session_val   = _make_pill(pills_outer, "SESSION",   "0h 0m")
@@ -2067,11 +2067,11 @@ class SteamGuard(tk.Tk):
         self._protect_btn = tk.Button(
             self, text="🛡  START PROTECTION",
             bg=ACCENT, fg="white",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 10, "bold"),
             relief="raised", bd=2, cursor="hand2",
             activebackground=BG_ELEVATED,
             command=self._on_protect_toggle)
-        self._protect_btn.pack(fill="x", padx=12, pady=(8, 0), ipady=8)
+        self._protect_btn.pack(fill="x", padx=12, pady=(6, 0), ipady=5)
         self._protect_btn.bind("<Enter>", lambda e: self._hover_enter(self._protect_btn, BG_ELEVATED))
         self._protect_btn.bind("<Leave>", lambda e: self._update_protect_btn())
         Tooltip(self._protect_btn, "Toggle Steam CM firewall block on/off")
@@ -2100,9 +2100,9 @@ class SteamGuard(tk.Tk):
 
 
         # ── Control toolbar (was Settings tab) ──────────────────────────────
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=0, pady=(6,0))
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=0, pady=(4,0))
         ctrl = tk.Frame(self, bg=BG_DARK)
-        ctrl.pack(fill="x", padx=12, pady=(4, 2))
+        ctrl.pack(fill="x", padx=12, pady=(2, 2))
 
         # Row 1: checkboxes + scan + help
         ctrl_r1 = tk.Frame(ctrl, bg=BG_DARK)
@@ -2605,9 +2605,9 @@ class SteamGuard(tk.Tk):
         import math
         import time as _time
 
-        SHIELD_W, SHIELD_H = 480, 110
+        SHIELD_W, SHIELD_H = 460, 80
         cx, cy = SHIELD_W // 2, SHIELD_H // 2 + 2
-        SW, SH = 68, 76
+        SW, SH = 58, 66
 
         # ── Glow pulse: sine over ~2 s period ─────────────────────────────
         t = _time.monotonic()
