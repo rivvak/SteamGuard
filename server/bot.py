@@ -83,6 +83,25 @@ ADMIN_USER_IDS: set[int] = set(
     int(x) for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()
 )
 
+# Owner Discord IDs — exempt from reward tracking, get unlimited time
+OWNER_DISCORD_IDS: set[int] = set(
+    int(x) for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()
+)
+
+YOUTUBE_URL  = "https://www.youtube.com/@Rivvak"
+
+# Human-readable reward menu (trigger -> display info)
+REWARD_MENU = {
+    "invite_friend":   ("Invite a friend",             "+3h",  "Friend joins server & activates SteamGuard"),
+    "daily_check_in":  ("Daily check-in",               "+30m", "Run SteamGuard and check in once per day"),
+    "weekly_streak":   ("7-day protection streak",      "+5h",  "Protect for 7 days in a row"),
+    "youtube_sub":     ("Subscribe on YouTube",         "+2h",  "Subscribe to youtube.com/@Rivvak (once ever)"),
+    "server_boost":    ("Boost the Discord server",     "+24h", "Boost the Rivvak Community server (once ever)"),
+    "share_card_post": ("Share your stats card",        "+1h",  "Post your SteamGuard stats card in #showcase"),
+    "bug_report":      ("Report a verified bug",        "+6h",  "Submit a bug via /support — admin verifies"),
+    "first_heal":      ("First protection heal",        "+1h",  "Earn your first heal (once ever)"),
+}
+
 YT_CLIENT_ID     = os.environ.get("YOUTUBE_CLIENT_ID", "")
 YT_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 
@@ -1282,6 +1301,170 @@ async def slash_checkbadges(interaction: discord.Interaction):
         color=C_GREEN,
     )
     await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+
+
+# ── /rewards ──────────────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="rewards",
+    description="See all ways to earn free SteamGuard time",
+)
+async def cmd_rewards(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    uid = str(interaction.user.id)
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(f"{LICENSE_SERVER_URL}/rewards/status/{uid}")
+            status = resp.json() if resp.status_code == 200 else {}
+    except Exception:
+        status = {}
+    is_owner  = status.get("is_owner", False)
+    total_hrs = status.get("total_reward_hours", 0.0)
+    triggers  = status.get("triggers", {})
+    embed = discord.Embed(
+        title="\u23f0  SteamGuard Rewards",
+        description=("Earn free hours by completing these actions."
+                     if not is_owner else
+                     "\u267e\ufe0f  You have unlimited access as an owner."),
+        color=0x23A559,
+    )
+    if not is_owner:
+        embed.add_field(name="\U0001f381  Total Earned",
+                        value=f"**{total_hrs:.1f}h** bonus time", inline=False)
+    for trigger, (label, reward_str, description) in REWARD_MENU.items():
+        t_data = triggers.get(trigger, {})
+        count  = t_data.get("times_claimed", 0)
+        next_a = t_data.get("next_available")
+        mx     = t_data.get("max_per_user", -1)
+        if next_a:        avail = "\u23f3 Cooldown active"
+        elif mx != -1 and count >= mx: avail = "\u2705 Claimed"
+        else:             avail = "\u2705 Available"
+        embed.add_field(name=f"{reward_str}  \u2014  {label}",
+                        value=f"{description}\n*{avail}* (claimed {count}x)", inline=False)
+    embed.set_footer(text="Use /invite-friends to share your referral link")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ── /invite-friends ───────────────────────────────────────────────────────────
+
+@bot.tree.command(
+    name="invite-friends",
+    description="Get your referral link — earn +3h for each friend who activates",
+)
+async def cmd_invite_friends(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    uid = str(interaction.user.id)
+    if interaction.user.id in OWNER_DISCORD_IDS:
+        await interaction.followup.send(
+            "\u267e\ufe0f Owner account \u2014 you have unlimited access.", ephemeral=True)
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.post(f"{LICENSE_SERVER_URL}/referral/create",
+                json={"discord_user_id": uid, "admin_key": ADMIN_KEY})
+        data = resp.json()
+    except Exception as e:
+        await interaction.followup.send(f"\u274c Could not create referral link: {e}", ephemeral=True)
+        return
+    referral_link   = data.get("referral_link", data.get("link", "N/A"))
+    valid_referrals = data.get("valid_referrals", 0)
+    pending         = data.get("pending_referrals", 0)
+    earned_hours    = valid_referrals * 3.0
+    invite_msg = (
+        f"\U0001f6e1\ufe0f Hey! I've been using **SteamGuard** \u2014 a free tool from Rivvak Community "
+        f"that keeps you in Steam games when family sharing kicks you out.\n\n"
+        f"\U0001f449 Join the server: **{DISCORD_INVITE}**\n"
+        f"\U0001f511 Use my referral code to get started: **{referral_link}**\n\n"
+        f"It's free, takes 2 minutes to set up, and actually works."
+    )
+    embed = discord.Embed(
+        title="\U0001f517  Invite Friends \u2014 Earn +3h Each",
+        description=(
+            f"For every friend who joins **and activates SteamGuard**, "
+            f"you earn **+3 free hours** of access.\n\n"
+            f"Share your link or copy the pre-written message below."
+        ),
+        color=0x5865F2,
+    )
+    embed.add_field(name="\U0001f517  Your Referral Link",  value=f"`{referral_link}`",   inline=False)
+    embed.add_field(name="\u2705  Valid Referrals",         value=str(valid_referrals),   inline=True)
+    embed.add_field(name="\u23f3  Pending",                 value=str(pending),           inline=True)
+    embed.add_field(name="\u23f0  Total Earned",            value=f"{earned_hours:.0f}h", inline=True)
+    embed.add_field(name="\U0001f4cb  Copy this message to DM friends:",
+                    value=f"```\n{invite_msg}\n```", inline=False)
+    embed.set_footer(text="Credits apply after your friend activates their key")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ── /daily ────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="daily", description="Claim your daily +30 min reward (once per ~20h)")
+async def cmd_daily(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    uid = str(interaction.user.id)
+    if interaction.user.id in OWNER_DISCORD_IDS:
+        await interaction.followup.send("\u267e\ufe0f Owner \u2014 unlimited access.", ephemeral=True)
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.post(
+                f"{LICENSE_SERVER_URL}/rewards/grant",
+                json={"discord_user_id": uid, "trigger": "daily_check_in"},
+                headers={"x-admin-key": ADMIN_KEY},
+            )
+        result = resp.json()
+    except Exception as e:
+        await interaction.followup.send(f"\u274c Error: {e}", ephemeral=True)
+        return
+    if result.get("granted"):
+        embed = discord.Embed(title="\u2705  Daily Reward Claimed!",
+                              description="\U0001f552 **+30 minutes** added to your SteamGuard access.",
+                              color=0x23A559)
+        embed.set_footer(text="Come back tomorrow for another reward")
+    else:
+        embed = discord.Embed(title="\u23f3  Already Claimed",
+                              description=result.get("reason", "Try again later."),
+                              color=0xF0B232)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ── /grant-reward (admin) ─────────────────────────────────────────────────────
+
+@bot.tree.command(name="grant-reward", description="[Admin] Manually grant a reward to a user")
+@discord.app_commands.describe(user="Discord user to reward",
+                                trigger="Reward trigger (e.g. bug_report)",
+                                override="Bypass cooldown/cap?")
+async def cmd_grant_reward(interaction: discord.Interaction,
+                            user: discord.Member, trigger: str, override: bool = False):
+    if interaction.user.id not in ADMIN_USER_IDS:
+        await interaction.response.send_message("\u274c Admin only.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.post(f"{LICENSE_SERVER_URL}/rewards/grant",
+                json={"discord_user_id": str(user.id), "trigger": trigger, "admin_override": override},
+                headers={"x-admin-key": ADMIN_KEY})
+        result = resp.json()
+    except Exception as e:
+        await interaction.followup.send(f"\u274c Error: {e}", ephemeral=True)
+        return
+    if result.get("granted"):
+        embed = discord.Embed(
+            title="\U0001f381  Reward Granted",
+            description=(f"Gave **{user.display_name}** {result['reason']}\n"
+                         f"Total hours now: **{result.get('new_total_hours', 0):.1f}h**"),
+            color=0x23A559)
+        try:
+            await user.send(f"\U0001f381 You received a SteamGuard reward from an admin!\n"
+                            f"{result['reason']}\nYour total: {result.get('new_total_hours', 0):.1f}h")
+        except Exception:
+            pass
+    else:
+        embed = discord.Embed(title="\u274c Not Granted",
+                              description=result.get("reason", "Unknown"), color=0xF23F43)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # ── Slash command error handler ───────────────────────────────────────────────
 

@@ -60,6 +60,24 @@ MIN_SUPPORTED_VERSION = os.environ.get("MIN_SUPPORTED_VERSION", "1.0.0")
 DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATS_CHANNEL_ID      = os.environ.get("STATS_CHANNEL_ID", "")
 
+# Owner/admin Discord IDs that are exempt from reward caps and get unlimited time
+OWNER_DISCORD_IDS: set = {
+    os.environ.get("OWNER_DISCORD_ID", ""),   # set OWNER_DISCORD_ID in Cloud Run secrets
+}
+
+# Reward definitions: { trigger: (hours, description, cooldown_hours, max_per_user) }
+# max_per_user = -1 means unlimited
+REWARDS = {
+    "invite_friend":     (3,   "Invited a friend",             24,  -1),   # +3h per successful invite
+    "daily_check_in":    (0.5, "Daily check-in",               20,  -1),   # +30min, once per ~day
+    "weekly_streak":     (5,   "7-day protection streak",       168, -1),   # +5h for 7d streak
+    "youtube_sub":       (2,   "Subscribed to YouTube channel", 0,   1),    # +2h once ever
+    "server_boost":      (24,  "Boosted the Discord server",    0,   1),    # +24h once ever
+    "share_card_post":   (1,   "Shared a stats card",           168, -1),   # +1h once per week
+    "bug_report":        (6,   "Reported a verified bug",       0,   -1),   # admin-granted
+    "first_heal":        (1,   "First protection heal",         0,   1),    # +1h once ever
+}
+
 LOG = logging.getLogger("steamguard")
 logging.basicConfig(level=logging.INFO)
 
@@ -73,6 +91,8 @@ EVENTS_COL      = "events"         # security audit log
 YT_TOKENS_COL   = "yt_tokens"      # doc id = discord_user_id
 REFERRAL_CODES_COL  = "referral_codes"   # doc id = code
 REFERRALS_COL       = "referrals"        # doc id = auto
+REWARDS_COL         = "rewards"          # doc id = discord_user_id
+REWARD_LOG_COL      = "reward_log"       # doc id = auto (audit trail)
 LEADERBOARD_COL     = "leaderboard"      # doc id = "weekly"
 
 # ── Simple in-memory stats cache ──────────────────────────────────────────────
@@ -367,6 +387,155 @@ class DeviceResetRequest(BaseModel):
     sig:              str
 
 # ── /health ───────────────────────────────────────────────────────────────────
+
+
+# ── Reward helpers ────────────────────────────────────────────────────────────
+
+def _is_owner(discord_user_id: str) -> bool:
+    """Owners are exempt from reward tracking and get unlimited time."""
+    return discord_user_id.strip() in {x for x in OWNER_DISCORD_IDS if x}
+
+
+def _extend_key_expiry(discord_user_id: str, hours: float):
+    """Extend expires_at on all active keys for this user by N hours."""
+    if _is_owner(discord_user_id):
+        return
+    docs = (db.collection(LICENSES_COL)
+              .where("discord_user_id", "==", discord_user_id)
+              .where("revoked", "==", False)
+              .stream())
+    for doc in docs:
+        data = doc.to_dict()
+        exp  = data.get("expires_at", utcnow())
+        if isinstance(exp, datetime) and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        base = max(exp, utcnow())
+        doc.reference.update({"expires_at": base + timedelta(hours=hours)})
+
+
+def _grant_reward(discord_user_id: str, trigger: str, admin_override: bool = False) -> dict:
+    """Grant bonus hours for a reward trigger. Returns result dict."""
+    if trigger not in REWARDS:
+        return {"granted": False, "hours": 0, "reason": "Unknown reward trigger"}
+
+    hours, description, cooldown_h, max_per_user = REWARDS[trigger]
+
+    if _is_owner(discord_user_id):
+        return {"granted": False, "hours": 0, "reason": "Owner — exempt"}
+
+    rewards_ref  = db.collection(REWARDS_COL).document(discord_user_id)
+    rewards_doc  = rewards_ref.get()
+    rewards_data = rewards_doc.to_dict() if rewards_doc.exists else {}
+
+    trigger_key   = f"reward_{trigger}"
+    count_key     = f"reward_{trigger}_count"
+    last_time     = rewards_data.get(trigger_key)
+    current_count = rewards_data.get(count_key, 0)
+    total_hours   = rewards_data.get("total_reward_hours", 0.0)
+
+    if not admin_override and max_per_user != -1 and current_count >= max_per_user:
+        return {"granted": False, "hours": 0,
+                "reason": f"Already claimed max uses ({max_per_user}) for {trigger}"}
+
+    if not admin_override and cooldown_h > 0 and last_time:
+        if isinstance(last_time, datetime) and last_time.tzinfo is None:
+            last_time = last_time.replace(tzinfo=timezone.utc)
+        next_allowed = last_time + timedelta(hours=cooldown_h)
+        if utcnow() < next_allowed:
+            remaining = int((next_allowed - utcnow()).total_seconds() / 60)
+            return {"granted": False, "hours": 0,
+                    "reason": f"Cooldown active — {remaining}m remaining"}
+
+    new_total = total_hours + hours
+    rewards_ref.set({
+        trigger_key:          utcnow(),
+        count_key:            current_count + 1,
+        "total_reward_hours": new_total,
+        "last_updated":       utcnow(),
+    }, merge=True)
+
+    _extend_key_expiry(discord_user_id, hours)
+
+    db.collection(REWARD_LOG_COL).add({
+        "discord_user_id": discord_user_id,
+        "trigger":         trigger,
+        "hours":           hours,
+        "description":     description,
+        "timestamp":       utcnow(),
+    })
+
+    LOG.info(f"Reward: {discord_user_id} +{hours}h for {trigger}")
+    return {
+        "granted":          True,
+        "hours":            hours,
+        "description":      description,
+        "reason":           f"+{hours}h — {description}",
+        "new_total_hours":  new_total,
+    }
+
+
+# ── /rewards/grant (admin) ────────────────────────────────────────────────────
+
+class RewardGrantRequest(BaseModel):
+    discord_user_id: str
+    trigger:         str
+    admin_override:  bool = False
+
+@app.post("/rewards/grant")
+async def grant_reward_endpoint(req: RewardGrantRequest, x_admin_key: str = Header(None)):
+    _require_admin(x_admin_key)
+    return _grant_reward(req.discord_user_id, req.trigger, req.admin_override)
+
+
+# ── /rewards/status/{discord_user_id} ────────────────────────────────────────
+
+@app.get("/rewards/status/{discord_user_id}")
+async def reward_status(discord_user_id: str):
+    if _is_owner(discord_user_id):
+        return {"is_owner": True, "total_reward_hours": 999999,
+                "remaining_hours": 999999, "triggers": {}}
+    ref  = db.collection(REWARDS_COL).document(discord_user_id)
+    doc  = ref.get()
+    data = doc.to_dict() if doc.exists else {}
+    total = data.get("total_reward_hours", 0.0)
+    triggers = {}
+    for trig, (hrs, desc, cd, mx) in REWARDS.items():
+        last_ts = data.get(f"reward_{trig}")
+        count   = data.get(f"reward_{trig}_count", 0)
+        # Compute next available time
+        next_avail = None
+        if cd > 0 and last_ts and isinstance(last_ts, datetime):
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            na = last_ts + timedelta(hours=cd)
+            if utcnow() < na:
+                next_avail = na.isoformat()
+        triggers[trig] = {
+            "description":   desc,
+            "hours_per_use": hrs,
+            "times_claimed": count,
+            "cooldown_hours": cd,
+            "max_per_user":  mx,
+            "next_available": next_avail,
+        }
+    return {"is_owner": False, "total_reward_hours": total,
+            "remaining_hours": total, "triggers": triggers}
+
+
+# ── /rewards/check-in ────────────────────────────────────────────────────────
+
+class CheckInRequest(BaseModel):
+    discord_user_id: str
+    key:             str
+    sig:             str
+
+@app.post("/rewards/check-in")
+async def daily_check_in(req: CheckInRequest):
+    expected = _hmac_sign(f"{req.key}:{req.discord_user_id}")
+    if not hmac.compare_digest(req.sig, expected):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    return _grant_reward(req.discord_user_id, "daily_check_in")
+
 
 @app.get("/health")
 def health():
@@ -1082,6 +1251,9 @@ async def referral_use(req: ReferralUseRequest):
         "referrer_discord_id": referrer_discord_id,
         "referred_discord_id": req.referred_discord_id,
     })
+    # Auto-grant +3h to the referrer (not if they're an owner)
+    if referrer_discord_id:
+        _grant_reward(referrer_discord_id, "invite_friend")
     return {"ok": True, "referral_id": referral_id}
 
 # ── /referral/stats/{discord_user_id} ────────────────────────────────────────
