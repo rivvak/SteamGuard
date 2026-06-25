@@ -73,7 +73,8 @@ logging.basicConfig(level=logging.INFO)
 
 GUILD_ID           = int(os.environ["DISCORD_GUILD_ID"])
 ROLE_ID            = int(os.environ["DISCORD_ROLE_ID"])
-GETKEY_CHANNEL_ID  = int(os.environ.get("GETKEY_CHANNEL_ID", "0"))
+GETKEY_CHANNEL_ID    = int(os.environ.get("GETKEY_CHANNEL_ID", "0"))
+OFF_TOPIC_CHANNEL_ID = int(os.environ.get("OFF_TOPIC_CHANNEL_ID", "1513193890117714182"))
 LICENSE_SERVER_URL = os.environ["LICENSE_SERVER_URL"]
 ADMIN_KEY          = os.environ["ADMIN_KEY"]
 BOT_TOKEN          = os.environ["DISCORD_BOT_TOKEN"]
@@ -144,16 +145,58 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ── Channel guard decorator ───────────────────────────────────────────────────
+
+async def check_slash_channel(interaction: discord.Interaction) -> bool:
+    """Global slash check: slash commands only work in #-off-topic (admins exempt)."""
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ Please use commands in the Rivvak Community server.", ephemeral=True)
+        return False
+    user = interaction.user
+    is_adm = (user.id in ADMIN_USER_IDS
+              or (hasattr(user, "guild_permissions")
+                  and user.guild_permissions.administrator))
+    if is_adm:
+        return True
+    if OFF_TOPIC_CHANNEL_ID != 0 and interaction.channel_id != OFF_TOPIC_CHANNEL_ID:
+        ch = interaction.guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+        ref = ch.mention if ch else "#-off-topic"
+        await interaction.response.send_message(
+            f"❌ Please use slash commands in {ref}.", ephemeral=True)
+        return False
+    return True
+
+
+bot.tree.interaction_check = check_slash_channel
+
+
+# ── Channel guard decorators ───────────────────────────────────────────────────
 
 def in_getkey_channel():
-    """Only allow command if used in #get-key channel (or GETKEY_CHANNEL_ID = 0 = any)."""
+    """!getkey / !mykey / !linkyoutube — only in #get-key channel."""
     async def predicate(ctx: commands.Context):
+        if ctx.author.id in ADMIN_USER_IDS:
+            return True   # admins bypass everywhere
+        if ctx.guild is None:
+            return False
         if GETKEY_CHANNEL_ID == 0:
             return True
-        if ctx.guild is None:
-            return False   # DMs handled separately
         return ctx.channel.id == GETKEY_CHANNEL_ID
+    return commands.check(predicate)
+
+def in_off_topic():
+    """All general commands — only in #-off-topic channel.
+    Admins are exempt and can run commands anywhere."""
+    async def predicate(ctx: commands.Context):
+        if ctx.author.id in ADMIN_USER_IDS:
+            return True
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            return True
+        if ctx.guild is None:
+            return False
+        if OFF_TOPIC_CHANNEL_ID == 0:
+            return True
+        return ctx.channel.id == OFF_TOPIC_CHANNEL_ID
     return commands.check(predicate)
 
 def is_admin():
@@ -210,6 +253,37 @@ async def on_message(message: discord.Message):
         except Exception:
             pass
         return
+
+    # ── Channel routing for prefix commands ──────────────────────────────────
+    if message.content.startswith("!") and message.guild is not None:
+        is_admin_user = (message.author.id in ADMIN_USER_IDS
+                         or message.author.guild_permissions.administrator)
+        if not is_admin_user:
+            key_cmds = {"!getkey", "!mykey", "!linkyoutube"}
+            cmd_word = message.content.split()[0].lower()
+
+            if cmd_word in key_cmds:
+                # Must be in #get-key
+                if GETKEY_CHANNEL_ID != 0 and message.channel.id != GETKEY_CHANNEL_ID:
+                    ch = message.guild.get_channel(GETKEY_CHANNEL_ID)
+                    ref = ch.mention if ch else "#get-key"
+                    await message.reply(f"❌ `{cmd_word}` only works in {ref}.", delete_after=8)
+                    try:
+                        await message.delete()
+                    except Exception:
+                        pass
+                    return
+            else:
+                # All other commands must be in #-off-topic
+                if OFF_TOPIC_CHANNEL_ID != 0 and message.channel.id != OFF_TOPIC_CHANNEL_ID:
+                    ch = message.guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+                    ref = ch.mention if ch else "#-off-topic"
+                    await message.reply(f"❌ Please use commands in {ref}.", delete_after=8)
+                    try:
+                        await message.delete()
+                    except Exception:
+                        pass
+                    return
 
     await bot.process_commands(message)
 
@@ -331,6 +405,7 @@ async def _post_welcome_embed():
 # ── !getkey ───────────────────────────────────────────────────────────────────
 
 @bot.command(name="getkey")
+@in_getkey_channel()
 async def get_key(ctx: commands.Context):
     """Issue a license key — only in #get-key, only with Member role."""
     if ctx.guild.id != GUILD_ID:
@@ -397,6 +472,7 @@ async def get_key(ctx: commands.Context):
 # ── !mykey ────────────────────────────────────────────────────────────────────
 
 @bot.command(name="mykey")
+@in_getkey_channel()
 async def my_key(ctx: commands.Context):
     """Show the user their own key status."""
     try:
@@ -441,6 +517,7 @@ async def my_key(ctx: commands.Context):
 # ── !linkyoutube ──────────────────────────────────────────────────────────────
 
 @bot.command(name="linkyoutube")
+@in_getkey_channel()
 async def link_youtube(ctx: commands.Context):
     """Start YouTube OAuth flow so we can verify subscription."""
     try:
