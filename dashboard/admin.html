@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SteamGuard · Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/dashboard/css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="flex items-center gap-2.5 px-1 mb-6">
+        <div class="rc-logo" style="background:linear-gradient(135deg,var(--purple),var(--accent))">RC</div>
+        <div>
+          <div class="font-extrabold leading-tight">SteamGuard</div>
+          <div class="text-purple text-[11px] font-bold">ADMIN PANEL</div>
+        </div>
+      </div>
+
+      <nav class="flex-1">
+        <a class="nav-link" data-section="overview"><i class="fa-solid fa-gauge-high"></i> Overview</a>
+        <a class="nav-link" data-section="users"><i class="fa-solid fa-key"></i> Users &amp; Keys</a>
+        <a class="nav-link" data-section="health"><i class="fa-solid fa-heart-pulse"></i> System Health</a>
+        <a class="nav-link" data-section="bot"><i class="fa-solid fa-robot"></i> Bot Status</a>
+        <a class="nav-link" data-section="leaderboard"><i class="fa-solid fa-trophy"></i> Leaderboard</a>
+        <a class="nav-link" data-section="grants"><i class="fa-solid fa-gift"></i> Reward Grants</a>
+      </nav>
+
+      <a href="/dashboard/user.html" class="nav-link"><i class="fa-solid fa-user"></i> User View</a>
+      <button onclick="logout()" class="nav-link" style="color:var(--error)">
+        <i class="fa-solid fa-right-from-bracket"></i> Logout
+      </button>
+    </aside>
+    <div id="nav-overlay" class="nav-overlay"></div>
+
+    <!-- Main -->
+    <div class="flex-1 min-w-0 flex flex-col">
+      <div class="mobile-bar">
+        <button id="mobile-menu-btn" class="btn btn-ghost btn-sm"><i class="fa-solid fa-bars"></i></button>
+        <div class="rc-logo" style="width:30px;height:30px;font-size:12px;background:linear-gradient(135deg,var(--purple),var(--accent))">RC</div>
+        <span class="font-bold">Admin</span>
+      </div>
+
+      <main class="main">
+
+        <!-- ============ OVERVIEW ============ -->
+        <section id="section-overview" class="section">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Admin Overview</h1>
+            <p class="text-muted text-sm mt-0.5">Real-time system snapshot.</p>
+          </header>
+
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div class="card card-hover p-5">
+              <span class="stat-label">Total Keys</span>
+              <div class="stat-value mt-2" id="ov-total">—</div>
+            </div>
+            <div class="card card-hover p-5">
+              <span class="stat-label">Active Keys</span>
+              <div class="stat-value text-neon mt-2" id="ov-active">—</div>
+            </div>
+            <div class="card card-hover p-5">
+              <span class="stat-label">Premium Keys</span>
+              <div class="stat-value text-purple mt-2" id="ov-premium">—</div>
+            </div>
+            <div class="card card-hover p-5">
+              <span class="stat-label">Server Uptime</span>
+              <div class="stat-value text-accent mt-2" id="ov-uptime">—</div>
+            </div>
+          </div>
+
+          <div class="grid lg:grid-cols-3 gap-4">
+            <div class="card p-5">
+              <span class="stat-label">Live Health</span>
+              <div class="space-y-3 mt-3 text-sm">
+                <div class="flex items-center justify-between"><span><span class="status-dot" id="h-cloudrun"></span> Cloud Run</span><span class="text-muted text-xs" id="h-cloudrun-t">…</span></div>
+                <div class="flex items-center justify-between"><span><span class="status-dot" id="h-firestore"></span> Firestore</span><span class="text-muted text-xs" id="h-firestore-t">…</span></div>
+                <div class="flex items-center justify-between"><span><span class="status-dot" id="h-bot"></span> Discord Bot</span><span class="text-muted text-xs" id="h-bot-t">…</span></div>
+              </div>
+            </div>
+            <div class="card p-5 lg:col-span-2">
+              <div class="flex items-center justify-between mb-3">
+                <span class="stat-label">Recent Activity</span>
+                <span class="text-muted text-xs"><span class="status-dot ok"></span> live · 15s</span>
+              </div>
+              <div id="activity-feed" class="space-y-2 text-sm">
+                <div class="skeleton skeleton-text" style="width:80%"></div>
+                <div class="skeleton skeleton-text" style="width:65%"></div>
+                <div class="skeleton skeleton-text" style="width:72%"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ USERS & KEYS ============ -->
+        <section id="section-users" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Users &amp; Keys</h1>
+            <p class="text-muted text-sm mt-0.5">Manage license keys and accounts.</p>
+          </header>
+
+          <div class="flex flex-col sm:flex-row gap-3 mb-4">
+            <div class="flex-1 relative">
+              <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
+              <input id="user-search" class="field" style="padding-left:36px" placeholder="Search by Discord ID or key…" />
+            </div>
+            <select id="user-filter" class="field" style="max-width:200px">
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="revoked">Revoked</option>
+              <option value="premium">Premium</option>
+            </select>
+          </div>
+
+          <div class="card p-4 overflow-x-auto">
+            <table class="tbl">
+              <thead><tr>
+                <th>Discord ID</th><th>Key</th><th>Tier</th><th>Status</th><th>Heals</th><th>Last Active</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="users-body">
+                <tr><td colspan="7" class="text-center text-muted py-6"><i class="fa-solid fa-spinner fa-spin"></i> Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ SYSTEM HEALTH ============ -->
+        <section id="section-health" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">System Health</h1>
+            <p class="text-muted text-sm mt-0.5">Infrastructure metrics · polled every 30s.</p>
+          </header>
+          <div class="grid md:grid-cols-3 gap-4">
+            <div class="card p-5">
+              <div class="flex items-center gap-2 mb-3"><i class="fa-brands fa-google text-accent"></i><span class="font-bold">Cloud Run</span><span class="status-dot ml-auto" id="sh-cr"></span></div>
+              <dl class="text-sm space-y-2 text-muted">
+                <div class="flex justify-between"><dt>Revision</dt><dd class="text-white mono" id="cr-rev">steamguard-latest</dd></div>
+                <div class="flex justify-between"><dt>Instances</dt><dd class="text-white" id="cr-inst">1</dd></div>
+                <div class="flex justify-between"><dt>Memory</dt><dd class="text-white" id="cr-mem">~256 MiB</dd></div>
+              </dl>
+            </div>
+            <div class="card p-5">
+              <div class="flex items-center gap-2 mb-3"><i class="fa-solid fa-database text-neon"></i><span class="font-bold">Firestore</span><span class="status-dot ml-auto" id="sh-fs"></span></div>
+              <dl class="text-sm space-y-2 text-muted">
+                <div class="flex justify-between"><dt>Reads today</dt><dd class="text-white" id="fs-reads">—</dd></div>
+                <div class="flex justify-between"><dt>Writes today</dt><dd class="text-white" id="fs-writes">—</dd></div>
+                <div class="flex justify-between"><dt>Deletes today</dt><dd class="text-white" id="fs-deletes">—</dd></div>
+              </dl>
+            </div>
+            <div class="card p-5">
+              <div class="flex items-center gap-2 mb-3"><i class="fa-brands fa-discord text-purple"></i><span class="font-bold">Discord Bot</span><span class="status-dot ml-auto" id="sh-bot"></span></div>
+              <dl class="text-sm space-y-2 text-muted">
+                <div class="flex justify-between"><dt>Status</dt><dd class="text-white" id="bot-status">—</dd></div>
+                <div class="flex justify-between"><dt>Guilds</dt><dd class="text-white" id="bot-guilds">—</dd></div>
+                <div class="flex justify-between"><dt>Uptime</dt><dd class="text-white" id="bot-uptime">—</dd></div>
+              </dl>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ BOT STATUS ============ -->
+        <section id="section-bot" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Bot Status</h1>
+            <p class="text-muted text-sm mt-0.5">Discord bot live state and logs.</p>
+          </header>
+          <div class="card p-5 mb-4 flex items-center gap-4">
+            <span class="status-dot" id="bs-dot" style="width:14px;height:14px"></span>
+            <div>
+              <div class="font-bold" id="bs-state">Checking…</div>
+              <div class="text-muted text-xs" id="bs-presence">Presence: —</div>
+            </div>
+          </div>
+          <div class="card p-5">
+            <span class="stat-label mb-3 block">Recent Bot Log</span>
+            <div id="bot-log" class="mono text-xs space-y-1" style="max-height:340px;overflow:auto;color:var(--muted)">
+              <div class="skeleton skeleton-text" style="width:90%"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ LEADERBOARD ============ -->
+        <section id="section-leaderboard" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Weekly Leaderboard</h1>
+            <p class="text-muted text-sm mt-0.5">Top 10 by protection heals this week.</p>
+          </header>
+          <div class="card p-4 overflow-x-auto">
+            <table class="tbl">
+              <thead><tr><th>Rank</th><th>Discord ID</th><th>Heals</th><th>Kills</th><th>XP</th><th>Game</th></tr></thead>
+              <tbody id="lb-body"><tr><td colspan="6" class="text-center text-muted py-6">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ REWARD GRANTS ============ -->
+        <section id="section-grants" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Reward Grants</h1>
+            <p class="text-muted text-sm mt-0.5">Manually grant rewards to a user.</p>
+          </header>
+          <div class="card p-5 max-w-xl mb-4">
+            <form id="grant-form" class="space-y-3">
+              <div>
+                <label class="stat-label block mb-1.5">Discord User ID</label>
+                <input id="grant-id" class="field" inputmode="numeric" placeholder="123456789012345678" required />
+              </div>
+              <div>
+                <label class="stat-label block mb-1.5">Trigger</label>
+                <select id="grant-trigger" class="field" required></select>
+              </div>
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" id="grant-override" class="accent-purple-500" /> Override cooldown / max-per-user
+              </label>
+              <button type="submit" class="btn btn-purple w-full"><i class="fa-solid fa-gift"></i> Grant Reward</button>
+            </form>
+          </div>
+          <div class="card p-5">
+            <span class="stat-label mb-3 block">Recent Grants</span>
+            <div id="grants-log" class="text-sm space-y-2 text-muted"><div class="text-muted text-xs">No grants yet this session.</div></div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <script src="/dashboard/js/app.js"></script>
+  <script>
+    if (!requireAuth(true)) { throw new Error('redirecting'); }
+
+    initNav();
+    initMobileNav();
+
+    let allUsers = [];
+    const grantsLog = [];
+
+    function setDot(id, ok) {
+      const el = document.getElementById(id);
+      if (el) el.className = `status-dot ${ok ? 'ok' : 'err'}`;
+    }
+
+    /* ---- overview + health ---- */
+    async function loadHealth() {
+      const h = await apiFetch('/admin/system-health');
+      if (!h) return;
+      document.getElementById('ov-total').textContent = (h.total_keys ?? 0).toLocaleString();
+      document.getElementById('ov-active').textContent = (h.active_keys ?? 0).toLocaleString();
+      document.getElementById('ov-premium').textContent = (h.premium_keys ?? 0).toLocaleString();
+      document.getElementById('ov-uptime').textContent = h.cloud_run === 'ok' ? '99.9%' : 'down';
+
+      const crOk = h.cloud_run === 'ok', fsOk = h.firestore === 'ok', botOk = h.bot === 'ok';
+      setDot('h-cloudrun', crOk); setDot('h-firestore', fsOk); setDot('h-bot', botOk);
+      setDot('sh-cr', crOk); setDot('sh-fs', fsOk); setDot('sh-bot', botOk);
+      setDot('bs-dot', botOk);
+      document.getElementById('h-cloudrun-t').textContent = crOk ? 'Operational' : 'Down';
+      document.getElementById('h-firestore-t').textContent = fsOk ? 'Operational' : 'Error';
+      document.getElementById('h-bot-t').textContent = botOk ? 'Online' : 'Offline';
+
+      // health section detail
+      document.getElementById('bot-status').textContent = botOk ? 'Online' : 'Offline';
+      document.getElementById('bs-state').textContent = botOk ? 'Bot Online' : 'Bot Offline';
+      document.getElementById('bs-presence').textContent = 'Presence: Watching SteamGuard';
+    }
+
+    async function loadActivity() {
+      const r = await apiFetch('/admin/events?limit=10');
+      const feed = document.getElementById('activity-feed');
+      if (!r || !r.events) { return; }
+      if (!r.events.length) { feed.innerHTML = '<div class="text-muted text-xs">No recent events.</div>'; return; }
+      feed.innerHTML = r.events.map((e) => `
+        <div class="flex items-center justify-between gap-3 py-1.5" style="border-bottom:1px solid rgba(30,42,58,0.5)">
+          <span class="flex items-center gap-2">
+            <span class="badge badge-time" style="text-transform:capitalize">${(e.event||'').replace(/_/g,' ')}</span>
+            <span class="mono text-muted text-xs">${e.license_id || ''}</span>
+          </span>
+          <span class="text-muted text-xs">${timeAgo(e.ts)}</span>
+        </div>`).join('');
+    }
+
+    /* ---- users table ---- */
+    function statusBadge(u) {
+      if (u.revoked) return '<span class="badge badge-revoked">Revoked</span>';
+      if (u.paused)  return '<span class="badge badge-paused">Paused</span>';
+      return '<span class="badge badge-active">Active</span>';
+    }
+    function tierBadge(u) {
+      return u.tier === 'premium'
+        ? '<span class="badge badge-premium"><i class="fa-solid fa-crown"></i> Premium</span>'
+        : '<span class="badge badge-free">Free</span>';
+    }
+    function renderUsers() {
+      const q = (document.getElementById('user-search').value || '').toLowerCase().trim();
+      const f = document.getElementById('user-filter').value;
+      let rows = allUsers.filter((u) => {
+        if (q && !(`${u.discord_user_id}`.includes(q) || `${u.full_key||''}`.toLowerCase().includes(q))) return false;
+        if (f === 'active'  && (u.revoked || u.paused)) return false;
+        if (f === 'paused'  && !u.paused) return false;
+        if (f === 'revoked' && !u.revoked) return false;
+        if (f === 'premium' && u.tier !== 'premium') return false;
+        return true;
+      });
+      const body = document.getElementById('users-body');
+      if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-6">No matching keys.</td></tr>'; return; }
+      body.innerHTML = rows.map((u) => `
+        <tr>
+          <td class="mono">${u.discord_user_id || '—'}</td>
+          <td class="mono text-muted">${u.key}</td>
+          <td>${tierBadge(u)}</td>
+          <td>${statusBadge(u)}</td>
+          <td>${u.total_heals ?? 0}</td>
+          <td class="text-muted text-xs">${u.last_active ? timeAgo(u.last_active) : '—'}</td>
+          <td>
+            <div class="flex gap-1.5">
+              <button class="btn btn-ghost btn-sm" title="View" onclick="viewUser('${u.discord_user_id}')"><i class="fa-solid fa-eye"></i></button>
+              <button class="btn btn-ghost btn-sm" title="Pause" style="color:var(--warning)"><i class="fa-solid fa-pause"></i></button>
+              <button class="btn btn-ghost btn-sm" title="Revoke" style="color:var(--error)"><i class="fa-solid fa-ban"></i></button>
+            </div>
+          </td>
+        </tr>`).join('');
+    }
+    function viewUser(id) { showToast(`Discord ID: ${id}`, 'info'); }
+
+    async function loadUsers() {
+      const r = await apiFetch('/admin/users?limit=100');
+      if (r && r.users) { allUsers = r.users; renderUsers(); }
+    }
+    document.getElementById('user-search').addEventListener('input', renderUsers);
+    document.getElementById('user-filter').addEventListener('change', renderUsers);
+
+    /* ---- leaderboard ---- */
+    async function loadLeaderboard() {
+      let r;
+      try { r = await (await fetch(`${API_BASE}/leaderboard`)).json(); } catch { r = null; }
+      const body = document.getElementById('lb-body');
+      if (!r || !r.top10 || !r.top10.length) {
+        body.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-6">No leaderboard data this week.</td></tr>';
+        return;
+      }
+      body.innerHTML = r.top10.map((e, i) => {
+        const rank = i + 1;
+        const rcls = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-n';
+        return `<tr>
+          <td><span class="rank ${rcls}">${rank}</span></td>
+          <td class="mono">${e.discord_user_id}</td>
+          <td class="text-neon font-bold">${e.heals ?? 0}</td>
+          <td>${e.kills ?? 0}</td>
+          <td>${e.xp ?? 0}</td>
+          <td class="text-muted">${e.game || '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    /* ---- bot log (placeholder feed; real logs would come from a log endpoint) ---- */
+    function renderBotLog() {
+      const lines = [
+        '[INFO] Bot connected to gateway',
+        '[INFO] Synced application commands',
+        '[INFO] Watching SteamGuard · ready',
+        '[INFO] Heartbeat ACK received',
+      ];
+      const el = document.getElementById('bot-log');
+      el.innerHTML = lines.map((l) => `<div>${new Date().toISOString()} ${l}</div>`).join('');
+    }
+
+    /* ---- reward grants ---- */
+    function populateTriggers() {
+      const sel = document.getElementById('grant-trigger');
+      sel.innerHTML = Object.entries(REWARD_NAMES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+    }
+    document.getElementById('grant-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const discord_user_id = document.getElementById('grant-id').value.trim();
+      const trigger = document.getElementById('grant-trigger').value;
+      const override = document.getElementById('grant-override').checked;
+      const res = await apiFetch('/rewards/grant', {
+        method: 'POST',
+        body: JSON.stringify({ discord_user_id, trigger, admin_override: override }),
+      });
+      if (res && (res.granted || res.success || res.total_reward_hours !== undefined)) {
+        showToast(`Granted "${REWARD_NAMES[trigger]}" to ${discord_user_id}`, 'success');
+        grantsLog.unshift({ id: discord_user_id, trigger, ts: new Date().toISOString() });
+        renderGrantsLog();
+      } else {
+        showToast((res && res.detail) || 'Grant failed.', 'error');
+      }
+    });
+    function renderGrantsLog() {
+      const el = document.getElementById('grants-log');
+      if (!grantsLog.length) { el.innerHTML = '<div class="text-muted text-xs">No grants yet this session.</div>'; return; }
+      el.innerHTML = grantsLog.map((g) => `
+        <div class="flex items-center justify-between py-1.5" style="border-bottom:1px solid rgba(30,42,58,0.5)">
+          <span><span class="badge badge-time">${REWARD_NAMES[g.trigger] || g.trigger}</span> <span class="mono text-muted">${g.id}</span></span>
+          <span class="text-muted text-xs">${timeAgo(g.ts)}</span>
+        </div>`).join('');
+    }
+
+    /* ---- boot + polling ---- */
+    populateTriggers();
+    renderBotLog();
+    loadHealth();
+    loadActivity();
+    loadUsers();
+    loadLeaderboard();
+
+    setInterval(loadActivity, 15000);                 // activity feed: 15s
+    setInterval(loadHealth, 30000);                   // health: 30s
+    setInterval(loadUsers, 60000);                    // users: 60s
+    setInterval(loadLeaderboard, 60000);
+  </script>
+</body>
+</html>

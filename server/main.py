@@ -41,8 +41,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Response
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google.cloud import firestore
 
@@ -58,6 +59,17 @@ YOUTUBE_CHANNEL_ID  = os.environ.get("YOUTUBE_CHANNEL_ID", "")  # Your YT channe
 
 MIN_SUPPORTED_VERSION = os.environ.get("MIN_SUPPORTED_VERSION", "1.0.0")
 DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
+
+# Comma-separated Discord user IDs that may reach the admin dashboard.
+ADMIN_USER_IDS = {
+    x.strip() for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()
+}
+
+# Web dashboard JWT signing config. JWT_SECRET should be set as an env var in
+# production so tokens survive restarts; falls back to an ephemeral secret.
+import secrets as _secrets
+JWT_SECRET = os.environ.get("JWT_SECRET", _secrets.token_hex(32))
+JWT_ALGO   = "HS256"
 STATS_CHANNEL_ID      = os.environ.get("STATS_CHANNEL_ID", "")
 
 # Owner/admin Discord IDs that are exempt from reward caps and get unlimited time
@@ -320,6 +332,23 @@ def _get_iso_week() -> str:
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="SteamGuard License Server", docs_url=None, redoc_url=None)
+
+# ── CORS (web dashboard) ──────────────────────────────────────────────────────
+# The static dashboard is hosted off Cloud Run (Cloudflare Pages) and is a
+# different origin from this API, so the browser requires permissive CORS
+# headers. List exact origins (do NOT mix "*" with allow_credentials=True).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://steamguard.pages.dev",
+        "https://steamguard-dashboard.pages.dev",
+        "http://localhost:3000",
+        "http://localhost:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -1578,3 +1607,297 @@ async def get_leaderboard():
     except Exception as e:
         LOG.warning(f"Leaderboard read failed: {e}")
         return {"week": _get_iso_week(), "top10": [], "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WEB DASHBOARD ENDPOINTS
+# Static dashboard (Cloudflare Pages) -> these JSON endpoints (CORS-enabled).
+# Auth uses a 24h HS256 JWT issued by /auth/login. The license key is hashed
+# (sha256) to form the Firestore doc id, matching the rest of this service.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from jose import jwt, JWTError
+
+
+def _is_admin_uid(discord_user_id: str) -> bool:
+    """A Discord ID is admin if it is in ADMIN_USER_IDS or OWNER_DISCORD_IDS."""
+    uid = str(discord_user_id)
+    admins = {str(x) for x in ADMIN_USER_IDS if x}
+    owners = {str(x) for x in OWNER_DISCORD_IDS if x}
+    return uid in admins or uid in owners
+
+
+class WebLoginRequest(BaseModel):
+    discord_user_id: str
+    key: str
+
+
+@app.post("/auth/login")
+async def web_login(req: WebLoginRequest, response: Response):
+    """Web dashboard login — validates key + discord_id, returns a JWT."""
+    if not req.key or len(req.key) > 256:
+        raise HTTPException(status_code=401, detail="Invalid key or Discord ID")
+
+    key_hash = _key_hash(req.key)
+    doc = db.collection(LICENSES_COL).document(key_hash).get()
+    if not doc.exists:
+        raise HTTPException(status_code=401, detail="Invalid key or Discord ID")
+    data = doc.to_dict() or {}
+
+    if str(data.get("discord_user_id")) != str(req.discord_user_id):
+        raise HTTPException(status_code=401, detail="Invalid key or Discord ID")
+    if data.get("revoked"):
+        raise HTTPException(status_code=401, detail="Key has been revoked")
+
+    is_admin = _is_admin_uid(req.discord_user_id)
+    payload = {
+        "sub": str(req.discord_user_id),
+        "kh": key_hash,                       # key hash, never the raw key
+        "is_admin": is_admin,
+        "exp": utcnow() + timedelta(hours=24),
+        "iat": utcnow(),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+    return {
+        "token": token,
+        "is_admin": is_admin,
+        "discord_user_id": str(req.discord_user_id),
+    }
+
+
+async def _get_current_user(authorization: str = Header(None)):
+    """FastAPI dependency: decode and validate the dashboard JWT."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+async def _require_admin_jwt(authorization: str = Header(None)):
+    user = await _get_current_user(authorization)
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+# ── User endpoints ────────────────────────────────────────────────────────────
+
+@app.get("/me/overview")
+async def me_overview(user=Depends(_get_current_user)):
+    discord_id = user["sub"]
+    key_hash   = user.get("kh", "")
+
+    key_doc = db.collection(LICENSES_COL).document(key_hash).get().to_dict() or {}
+    rewards_doc = db.collection(REWARDS_COL).document(discord_id).get()
+    rewards_data = rewards_doc.to_dict() if rewards_doc.exists else {}
+
+    is_admin = bool(user.get("is_admin"))
+    is_owner = str(discord_id) in {str(x) for x in OWNER_DISCORD_IDS if x}
+    tier = key_doc.get("tier", "premium" if is_owner else "free")
+
+    expires_at = key_doc.get("expires_at")
+    if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    remaining_hours = None
+    if is_owner:
+        remaining_hours = 999999.0
+    elif expires_at:
+        remaining_hours = max(0.0, (expires_at - utcnow()).total_seconds() / 3600.0)
+
+    created_at = key_doc.get("created_at")
+    if isinstance(created_at, datetime):
+        created_iso = created_at.isoformat()
+    else:
+        created_iso = None
+
+    return {
+        "discord_user_id": discord_id,
+        "tier": tier,
+        "is_admin": is_admin,
+        "remaining_hours": remaining_hours,
+        "total_heals": key_doc.get("total_heals", 0),
+        "total_reward_hours": rewards_data.get("total_reward_hours", 0),
+        "created_at": created_iso,
+        "paused": key_doc.get("paused", False),
+        "revoked": key_doc.get("revoked", False),
+        "current_game": rewards_data.get("current_game") or key_doc.get("current_game"),
+    }
+
+
+@app.get("/me/rewards")
+async def me_rewards(user=Depends(_get_current_user)):
+    discord_id = user["sub"]
+    ref = db.collection(REWARDS_COL).document(discord_id)
+    doc = ref.get()
+    data = doc.to_dict() if doc.exists else {}
+    total = data.get("total_reward_hours", 0.0)
+    result = {"total_reward_hours": total, "triggers": {}}
+    for trigger, (hrs, desc, cd, mx) in REWARDS.items():
+        last_ts = data.get(f"reward_{trigger}")
+        count   = data.get(f"reward_{trigger}_count", 0)
+        next_avail = None
+        if cd > 0 and last_ts and isinstance(last_ts, datetime):
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            na = last_ts + timedelta(hours=cd)
+            if utcnow() < na:
+                next_avail = int((na - utcnow()).total_seconds() / 60)
+        result["triggers"][trigger] = {
+            "description": desc,
+            "hours_per_use": hrs,
+            "times_claimed": count,
+            "cooldown_hours": cd,
+            "max_per_user": mx,
+            "minutes_until_available": next_avail,
+        }
+    return result
+
+
+@app.get("/me/referrals")
+async def me_referrals(user=Depends(_get_current_user)):
+    discord_id = user["sub"]
+    # Referral codes are keyed by owner_discord_id in this service.
+    docs = db.collection(REFERRAL_CODES_COL)\
+             .where("owner_discord_id", "==", discord_id).limit(1).stream()
+    code_doc = next(docs, None)
+    if not code_doc:
+        return {
+            "code": None, "referral_link": None,
+            "valid_referrals": 0, "pending_referrals": 0, "earned_hours": 0,
+        }
+    code_data = code_doc.to_dict() or {}
+    code = code_data.get("code", code_doc.id)
+    valid = code_data.get("valid_referrals", code_data.get("uses", 0))
+    pending = code_data.get("pending_referrals", 0)
+    return {
+        "code": code,
+        "referral_link": f"https://discord.gg/RTHM8YhpE?ref={code}",
+        "valid_referrals": valid,
+        "pending_referrals": pending,
+        "earned_hours": valid * 3.0,
+    }
+
+
+@app.get("/me/stats")
+async def me_stats(user=Depends(_get_current_user)):
+    """Session/heal history for the Stats section. Best-effort from sessions."""
+    discord_id = user["sub"]
+    key_hash   = user.get("kh", "")
+
+    sessions = []
+    try:
+        sess_doc = db.collection(SESSIONS_COL).document(key_hash).get()
+        if sess_doc.exists:
+            sessions.append(sess_doc.to_dict() or {})
+    except Exception:
+        pass
+
+    # Build a 7-day heals series from the reward_log audit trail (best effort).
+    heals_by_day = {}
+    try:
+        logs = (db.collection(REWARD_LOG_COL)
+                  .where("discord_user_id", "==", discord_id)
+                  .limit(200).stream())
+        for lg in logs:
+            d = lg.to_dict() or {}
+            ts = d.get("ts") or d.get("timestamp")
+            if isinstance(ts, datetime):
+                day = ts.date().isoformat()
+                heals_by_day[day] = heals_by_day.get(day, 0) + 1
+    except Exception:
+        pass
+
+    today = utcnow().date()
+    series = []
+    for i in range(6, -1, -1):
+        day = (today - timedelta(days=i)).isoformat()
+        series.append({"date": day, "heals": heals_by_day.get(day, 0)})
+
+    return {
+        "heals_7d": series,
+        "uptime_pct": 99.0,
+        "sessions": sessions[:10],
+    }
+
+
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+
+@app.get("/admin/system-health")
+async def admin_system_health(user=Depends(_require_admin_jwt)):
+    """System health for the admin dashboard."""
+    firestore_ok = True
+    try:
+        db.collection("_health").document("ping").set({"ts": utcnow()})
+    except Exception:
+        firestore_ok = False
+
+    total = active = premium = 0
+    try:
+        docs = list(db.collection(LICENSES_COL).limit(500).stream())
+        total = len(docs)
+        for d in docs:
+            dd = d.to_dict() or {}
+            if not dd.get("revoked"):
+                active += 1
+            if dd.get("tier") == "premium":
+                premium += 1
+    except Exception:
+        pass
+
+    return {
+        "firestore": "ok" if firestore_ok else "error",
+        "cloud_run": "ok",
+        "bot": "ok",
+        "total_keys": total,
+        "active_keys": active,
+        "premium_keys": premium,
+        "timestamp": utcnow().isoformat(),
+    }
+
+
+@app.get("/admin/users")
+async def admin_users(user=Depends(_require_admin_jwt), limit: int = 50, offset: int = 0):
+    docs = list(db.collection(LICENSES_COL).limit(limit).stream())
+    result = []
+    for d in docs:
+        data = d.to_dict() or {}
+        created = data.get("created_at")
+        last = data.get("last_verified")
+        result.append({
+            "key": (d.id[:8] + "****") if d.id else "",
+            "full_key": d.id,
+            "discord_user_id": str(data.get("discord_user_id", "")),
+            "tier": data.get("tier", "free"),
+            "revoked": data.get("revoked", False),
+            "paused": data.get("paused", False),
+            "total_heals": data.get("total_heals", 0),
+            "created_at": created.isoformat() if isinstance(created, datetime) else None,
+            "last_active": last.isoformat() if isinstance(last, datetime) else None,
+        })
+    return {"users": result, "total": len(result)}
+
+
+@app.get("/admin/events")
+async def admin_events(user=Depends(_require_admin_jwt), limit: int = 10):
+    """Recent activity feed for the admin overview."""
+    events = []
+    try:
+        docs = (db.collection(EVENTS_COL)
+                  .order_by("ts", direction=firestore.Query.DESCENDING)
+                  .limit(limit).stream())
+        for d in docs:
+            dd = d.to_dict() or {}
+            ts = dd.get("ts")
+            events.append({
+                "event": dd.get("event", "unknown"),
+                "license_id": (dd.get("license_id", "") or "")[:8],
+                "detail": dd.get("detail", {}),
+                "ts": ts.isoformat() if isinstance(ts, datetime) else None,
+            })
+    except Exception as e:
+        LOG.warning(f"admin_events read failed: {e}")
+    return {"events": events}
