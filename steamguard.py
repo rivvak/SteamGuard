@@ -3097,7 +3097,8 @@ KEYBOARD SHORTCUTS
         """
         Attempt to create a system tray icon using pystray.
         Silently skipped if pystray / Pillow are not installed.
-        The tray icon lets the user minimise SteamGuard without a taskbar button.
+        The tray icon sits in the system tray while the app runs normally.
+        Minimizing always goes to the taskbar — tray is just a bonus.
         """
         try:
             import pystray
@@ -3106,16 +3107,18 @@ KEYBOARD SHORTCUTS
             # Draw a simple shield icon in memory
             img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
             d   = ImageDraw.Draw(img)
-            # Shield polygon
             d.polygon([(32, 4), (60, 16), (60, 36), (32, 60), (4, 36), (4, 16)],
-                      fill="#58a6ff")
+                      fill="#23a559")
             d.text((22, 24), "S", fill="white")
 
             def on_show(icon, item):
+                """Restore from tray."""
                 icon.stop()
                 self._tray_icon = None
                 self._minimized_to_tray = False
                 self._ui(self.deiconify)
+                self._ui(lambda: self.wm_attributes("-topmost", True))
+                self._ui(self.lift)
 
             def on_quit(icon, item):
                 icon.stop()
@@ -3128,24 +3131,15 @@ KEYBOARD SHORTCUTS
             )
             self._tray_icon = pystray.Icon(
                 "SteamGuard", img, "SteamGuard", menu)
-
-            # Minimize to tray: hide window when iconified
-            self.bind("<Unmap>", self._on_minimize)
+            # Start the tray icon thread (icon sits in tray without hiding the window)
+            threading.Thread(target=self._tray_icon.run, daemon=True).start()
         except Exception:
-            pass  # pystray/Pillow not installed — no tray icon, normal taskbar behaviour
+            pass  # pystray/Pillow not installed — no tray icon, normal behaviour
 
     def _on_minimize(self, event):
-        """Hide to tray when minimized (only if tray icon is running).
-        Guard: only act when the event widget IS the root window, not a child
-        frame/notebook tab unmapping (switching tabs fires <Unmap> on child frames).
-        """
-        if event.widget is not self:
-            return  # ignore child widget unmaps (notebook tab switches, etc.)
-        if self._tray_icon and not self._minimized_to_tray:
-            self._minimized_to_tray = True
-            self.withdraw()
-            threading.Thread(
-                target=self._tray_icon.run, daemon=True).start()
+        """No-op — minimize now works normally via the native title bar.
+        The window stays in the taskbar when minimized. No withdraw()."""
+        pass
 
     # ── Log ───────────────────────────────────────────────────────────────────
 
