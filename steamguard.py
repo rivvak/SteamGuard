@@ -1997,7 +1997,10 @@ class SteamGuard(tk.Tk):
                     # Auto-enable protection after a delay so the game
                     # can fully log into Steam servers before the block fires.
                     if self._auto_heal.get() and not self._protected:
-                        self.after(6000, self._auto_protect_if_still_running)
+                        # Random 5-8 second delay so game fully logs into Steam
+                        import random as _random
+                        _delay_ms = _random.randint(5000, 8000)
+                        self.after(_delay_ms, self._auto_protect_if_still_running)
                 else:
                     self._ui(lambda: self._update_game_card(None))
                     if self._protected:
