@@ -78,6 +78,14 @@ OWNER_DISCORD_IDS: set = {
     os.environ.get("OWNER_DISCORD_ID", ""),   # set OWNER_DISCORD_ID in Cloud Run secrets
 }
 
+# Discord OAuth2 — for web dashboard login
+DISCORD_CLIENT_ID     = os.environ.get("DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+DISCORD_REDIRECT_URI  = os.environ.get(
+    "DISCORD_REDIRECT_URI",
+    "https://rivvak.app/auth/discord/callback"
+)
+
 # Reward definitions: { trigger: (hours, description, cooldown_hours, max_per_user) }
 # max_per_user = -1 means unlimited
 REWARDS = {
@@ -1719,12 +1727,6 @@ async def _require_admin_jwt(authorization: str = Header(None)):
 
 # ── Discord OAuth2 ────────────────────────────────────────────────────────────
 
-DISCORD_CLIENT_ID     = os.environ.get("DISCORD_CLIENT_ID", "")
-DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
-DISCORD_REDIRECT_URI  = os.environ.get(
-    "DISCORD_REDIRECT_URI",
-    "https://rivvak.app/auth/discord/callback"
-)
 
 @app.get("/auth/discord/start")
 async def discord_oauth_start():
