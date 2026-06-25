@@ -528,9 +528,9 @@ class LicenseWindow(tk.Toplevel):
                  font=F_SMALL).pack(side="left")
 
         def _open_discord():
-            webbrowser.open("https://discord.gg/REPLACE_YOUR_INVITE")
+            webbrowser.open("https://discord.gg/RTHM8YhpE")
 
-        tk.Button(join_row, text="⚙ Join our Discord", bg=BG_DARK, fg=ACCENT, font=F_SMALL,
+        tk.Button(join_row, text="Join our Discord", bg=BG_DARK, fg=ACCENT, font=F_SMALL,
                   relief="flat", bd=0, cursor="hand2", command=_open_discord).pack(side="left")
 
     def _btn_hover_in(self, event=None):
