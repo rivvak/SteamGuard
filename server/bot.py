@@ -146,32 +146,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-async def check_slash_channel(interaction: discord.Interaction) -> bool:
-    """Global slash check: slash commands only work in #-off-topic (admins exempt)."""
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            "❌ Please use commands in the Rivvak Community server.", ephemeral=True)
-        return False
-    user = interaction.user
-    is_adm = (user.id in ADMIN_USER_IDS
-              or (hasattr(user, "guild_permissions")
-                  and user.guild_permissions.administrator))
-    if is_adm:
-        return True
-    if OFF_TOPIC_CHANNEL_ID != 0 and interaction.channel_id != OFF_TOPIC_CHANNEL_ID:
-        ch = interaction.guild.get_channel(OFF_TOPIC_CHANNEL_ID)
-        ref = ch.mention if ch else "#-off-topic"
-        await interaction.response.send_message(
-            f"❌ Please use slash commands in {ref}.", ephemeral=True)
-        return False
-    return True
-
-
-bot.tree.interaction_check = check_slash_channel
-
-
-# ── Channel guard decorators ───────────────────────────────────────────────────
-
 def in_getkey_channel():
     """!getkey / !mykey / !linkyoutube — only in #get-key channel."""
     async def predicate(ctx: commands.Context):
@@ -834,8 +808,7 @@ class DeviceResetView(discord.ui.View):
         self.license_key     = license_key
 
     @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+    async def confirm(self, ctx: commands.Context, button: discord.ui.Button):
         try:
             data = await _api("post", "/device/reset", json={
                 "discord_user_id": self.discord_user_id,
@@ -865,7 +838,7 @@ class DeviceResetView(discord.ui.View):
             child.disabled = True
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def cancel(self, ctx: commands.Context, button: discord.ui.Button):
         await interaction.response.edit_message(content="Device reset cancelled.", view=None)
 
     async def on_timeout(self):
@@ -899,11 +872,11 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
             color=C_BLUE,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(name="User",        value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        embed.add_field(name="User",        value=f"{ctx.author.mention} (`{ctx.author.id}`)", inline=False)
         embed.add_field(name="Category",    value=self.category.value,    inline=True)
         embed.add_field(name="App Version", value=self.app_version.value, inline=True)
         embed.add_field(name="Description", value=self.description.value, inline=False)
-        embed.set_footer(text=f"User ID: {interaction.user.id}")
+        embed.set_footer(text=f"User ID: {ctx.author.id}")
 
         if SUPPORT_CHANNEL_ID:
             guild = bot.get_guild(GUILD_ID)
@@ -915,17 +888,13 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
                     except Exception as e:
                         LOG.warning(f"Could not post support request to channel: {e}")
 
-        await interaction.response.send_message(
-            "✅ Your support request has been submitted. Our team will get back to you soon!",
-            ephemeral=True,
-        )
+        await ctx.send(
+            "✅ Your support request has been submitted. Our team will get back to you soon!")
 
-    async def on_error(self, interaction: discord.Interaction, error: Exception):
+    async def on_error(self, ctx: commands.Context, error: Exception):
         LOG.error(f"SupportModal error: {error}")
-        await interaction.response.send_message(
-            "❌ Failed to submit your request. Please try again later.",
-            ephemeral=True,
-        )
+        await ctx.send(
+            "❌ Failed to submit your request. Please try again later.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── Slash Commands ────────────────────────────────────────────────────────────
@@ -933,25 +902,19 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
 
 # ── /status ───────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="status",
-    description="Check your SteamGuard license and account status",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_status(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+@bot.command(name="status", help="Check your SteamGuard license and account status")
+@in_off_topic()
+async def slash_status(ctx: commands.Context):
     try:
-        data = await _api_get(f"/admin/key-info/{interaction.user.id}")
+        data = await _api_get(f"/admin/key-info/{ctx.author.id}")
     except Exception as e:
         LOG.error(f"/status API error: {e}")
-        await interaction.followup.send("❌ Could not reach the license server. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not reach the license server. Try again later.")
         return
 
     if "error" in data and not data.get("keys"):
-        await interaction.followup.send(
-            "❌ Could not fetch your status. You may not have a key yet — use `!getkey` to get one.",
-            ephemeral=True,
-        )
+        await ctx.send(
+            "❌ Could not fetch your status. You may not have a key yet — use `!getkey` to get one.")
         return
 
     keys = data.get("keys", [])
@@ -961,7 +924,7 @@ async def slash_status(interaction: discord.Interaction):
             description="You don't have a SteamGuard license yet. Use `!getkey` to get one.",
             color=C_GREY,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         return
 
     # Use the first (most recent) key for the summary card
@@ -989,28 +952,24 @@ async def slash_status(interaction: discord.Interaction):
         embed.add_field(name="Pause Reason", value=k["pause_reason"], inline=False)
 
     embed.set_footer(text="SteamGuard • Only visible to you")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await ctx.send(embed=embed)
 
 # ── /refer ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="refer",
-    description="Get your personal SteamGuard referral link",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_refer(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+@bot.command(name="refer", help="Get your personal SteamGuard referral link")
+@in_off_topic()
+async def slash_refer(ctx: commands.Context):
     try:
         data = await _api("post", "/referral/create", json={
-            "discord_user_id": str(interaction.user.id),
+            "discord_user_id": str(ctx.author.id),
         })
     except Exception as e:
         LOG.error(f"/refer API error: {e}")
-        await interaction.followup.send("❌ Could not create referral link. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not create referral link. Try again later.")
         return
 
     if "error" in data:
-        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        await ctx.send(f"❌ {data['error']}")
         return
 
     referral_link   = data.get("referral_link", "N/A")
@@ -1034,30 +993,24 @@ async def slash_refer(interaction: discord.Interaction):
         inline=False,
     )
     embed.set_footer(text="SteamGuard • Only visible to you")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await ctx.send(embed=embed)
 
 # ── /stats ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="stats",
-    description="View your SteamGuard protection statistics",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_stats(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
+@bot.command(name="stats", help="View your SteamGuard protection statistics")
+@in_off_topic()
+async def slash_stats(ctx: commands.Context):
     try:
-        key_data   = await _api_get(f"/admin/key-info/{interaction.user.id}")
-        badge_data = await _api_get(f"/badges/{interaction.user.id}")
+        key_data   = await _api_get(f"/admin/key-info/{ctx.author.id}")
+        badge_data = await _api_get(f"/badges/{ctx.author.id}")
     except Exception as e:
         LOG.error(f"/stats API error: {e}")
-        await interaction.followup.send("❌ Could not fetch your stats. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not fetch your stats. Try again later.")
         return
 
     if "error" in key_data and not key_data.get("keys"):
-        await interaction.followup.send(
-            "❌ No license found. Use `!getkey` to get started.",
-            ephemeral=True,
-        )
+        await ctx.send(
+            "❌ No license found. Use `!getkey` to get started.")
         return
 
     xp          = key_data.get("xp", 0)
@@ -1071,11 +1024,11 @@ async def slash_stats(interaction: discord.Interaction):
     streak = badge_data.get("current_streak", key_data.get("current_streak", "—"))
 
     embed = discord.Embed(
-        title=f"📊  {interaction.user.display_name}'s SteamGuard Stats",
+        title=f"📊  {ctx.author.display_name}'s SteamGuard Stats",
         color=C_BLUE,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
     embed.add_field(name="⭐ XP",           value=f"{xp:,}",         inline=True)
     embed.add_field(name="🏆 Level",        value=str(level),         inline=True)
     embed.add_field(name="​",               value="​",                 inline=True)
@@ -1089,26 +1042,22 @@ async def slash_stats(interaction: discord.Interaction):
     )
     embed.add_field(name="🕒 Last Active",  value=str(last_active), inline=False)
     embed.set_footer(text="Use /refer to earn rewards • SteamGuard")
-    await interaction.followup.send(embed=embed)
+    await ctx.send(embed=embed)
 
 # ── /leaderboard ──────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="leaderboard",
-    description="View the weekly SteamGuard leaderboard",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_leaderboard(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
+@bot.command(name="leaderboard", help="View the weekly SteamGuard leaderboard")
+@in_off_topic()
+async def slash_leaderboard(ctx: commands.Context):
     try:
         data = await _api_get("/leaderboard")
     except Exception as e:
         LOG.error(f"/leaderboard API error: {e}")
-        await interaction.followup.send("❌ Could not fetch leaderboard. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not fetch leaderboard. Try again later.")
         return
 
     if "error" in data:
-        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        await ctx.send(f"❌ {data['error']}")
         return
 
     entries = data.get("entries", data.get("leaderboard", []))[:10]
@@ -1142,34 +1091,28 @@ async def slash_leaderboard(interaction: discord.Interaction):
         embed.description = "\n".join(lines)
 
     embed.set_footer(text="Resets every Monday at midnight UTC • SteamGuard")
-    await interaction.followup.send(embed=embed)
+    await ctx.send(embed=embed)
 
 # ── /reset-device ─────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="reset-device",
-    description="Reset your hardware binding (30-day cooldown)",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_reset_device(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+@bot.command(name="resetdevice", help="")
+@in_off_topic()
+async def slash_reset_device(ctx: commands.Context):
 
     # Fetch the user's key first
     try:
-        data = await _api_get(f"/admin/key-info/{interaction.user.id}")
+        data = await _api_get(f"/admin/key-info/{ctx.author.id}")
     except Exception as e:
         LOG.error(f"/reset-device key fetch error: {e}")
-        await interaction.followup.send("❌ Could not reach the license server. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not reach the license server. Try again later.")
         return
 
     keys = data.get("keys", [])
     active_keys = [k for k in keys if k.get("status") == "active"]
 
     if not active_keys:
-        await interaction.followup.send(
-            "❌ You don't have an active license key to reset.",
-            ephemeral=True,
-        )
+        await ctx.send(
+            "❌ You don't have an active license key to reset.")
         return
 
     license_key = active_keys[0].get("key_hash", "")
@@ -1186,20 +1129,16 @@ async def slash_reset_device(interaction: discord.Interaction):
     embed.set_footer(text="This confirmation expires in 30 seconds")
 
     view = DeviceResetView(
-        discord_user_id=str(interaction.user.id),
+        discord_user_id=str(ctx.author.id),
         license_key=license_key,
     )
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    await ctx.send(embed=embed, view=view)
 
 # ── /download ─────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="download",
-    description="Get the latest SteamGuard installer",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_download(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+@bot.command(name="download", help="Get the latest SteamGuard installer")
+@in_off_topic()
+async def slash_download(ctx: commands.Context):
 
     version = "latest"
     try:
@@ -1232,16 +1171,13 @@ async def slash_download(interaction: discord.Interaction):
         inline=False,
     )
     embed.set_footer(text=f"SteamGuard v{version} • Only visible to you")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await ctx.send(embed=embed)
 
 # ── /vote ─────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="vote",
-    description="Vote on upcoming SteamGuard features",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_vote(interaction: discord.Interaction):
+@bot.command(name="vote", help="Vote on upcoming SteamGuard features")
+@in_off_topic()
+async def slash_vote(ctx: commands.Context):
     number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
     embed = discord.Embed(
@@ -1262,7 +1198,7 @@ async def slash_vote(interaction: discord.Interaction):
     embed.description += "\n".join(topic_lines)
     embed.set_footer(text="SteamGuard • Your feedback shapes the roadmap")
 
-    await interaction.response.send_message(embed=embed, ephemeral=False)
+    await ctx.send(embed=embed, ephemeral=False)
 
     # Add reaction prompts to the sent message
     sent_message = await interaction.original_response()
@@ -1274,33 +1210,26 @@ async def slash_vote(interaction: discord.Interaction):
 
 # ── /support ──────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="support",
-    description="Submit a support request",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_support(interaction: discord.Interaction):
+@bot.command(name="support", help="Submit a support request")
+@in_off_topic()
+async def slash_support(ctx: commands.Context):
     await interaction.response.send_modal(SupportModal())
 
 # ── /checkbadges ──────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="checkbadges",
-    description="Check if you earned any new badges and announce them",
-    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None,
-)
-async def slash_checkbadges(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+@bot.command(name="checkbadges", help="Check if you earned any new badges and announce them")
+@in_off_topic()
+async def slash_checkbadges(ctx: commands.Context):
 
     try:
-        data = await _api_get(f"/badges/{interaction.user.id}")
+        data = await _api_get(f"/badges/{ctx.author.id}")
     except Exception as e:
         LOG.error(f"/checkbadges API error: {e}")
-        await interaction.followup.send("❌ Could not fetch badge data. Try again later.", ephemeral=True)
+        await ctx.send("❌ Could not fetch badge data. Try again later.")
         return
 
     if "error" in data:
-        await interaction.followup.send(f"❌ {data['error']}", ephemeral=True)
+        await ctx.send(f"❌ {data['error']}")
         return
 
     new_badges = data.get("new_badges", [])
@@ -1316,7 +1245,7 @@ async def slash_checkbadges(interaction: discord.Interaction):
             ),
             color=C_GREY,
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         return
 
     # Announce new badges in badge channel if configured
@@ -1327,14 +1256,14 @@ async def slash_checkbadges(interaction: discord.Interaction):
             announce_embed = discord.Embed(
                 title="🎖  New Badge Unlocked!",
                 description=(
-                    f"{interaction.user.mention} just earned "
+                    f"{ctx.author.mention} just earned "
                     + (", ".join(f"**{b}**" for b in new_badges))
                     + "!"
                 ),
                 color=C_GREEN,
                 timestamp=datetime.now(timezone.utc),
             )
-            announce_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+            announce_embed.set_thumbnail(url=ctx.author.display_avatar.url)
             announce_embed.set_footer(text="SteamGuard • Keep protecting to earn more")
             try:
                 await announce_channel.send(embed=announce_embed)
@@ -1349,18 +1278,14 @@ async def slash_checkbadges(interaction: discord.Interaction):
         ),
         color=C_GREEN,
     )
-    await interaction.followup.send(embed=confirm_embed, ephemeral=True)
-
+    await ctx.send(embed=confirm_embed)
 
 # ── /rewards ──────────────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="rewards",
-    description="See all ways to earn free SteamGuard time",
-)
-async def cmd_rewards(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    uid = str(interaction.user.id)
+@bot.command(name="rewards", help="See all ways to earn free SteamGuard time")
+@in_off_topic()
+async def cmd_rewards(ctx: commands.Context):
+    uid = str(ctx.author.id)
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.get(f"{LICENSE_SERVER_URL}/rewards/status/{uid}")
@@ -1391,21 +1316,17 @@ async def cmd_rewards(interaction: discord.Interaction):
         embed.add_field(name=f"{reward_str}  \u2014  {label}",
                         value=f"{description}\n*{avail}* (claimed {count}x)", inline=False)
     embed.set_footer(text="Use /invite-friends to share your referral link")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
+    await ctx.send(embed=embed)
 
 # ── /invite-friends ───────────────────────────────────────────────────────────
 
-@bot.tree.command(
-    name="invite-friends",
-    description="Get your referral link — earn +3h for each friend who activates",
-)
-async def cmd_invite_friends(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    uid = str(interaction.user.id)
-    if interaction.user.id in OWNER_DISCORD_IDS:
-        await interaction.followup.send(
-            "\u267e\ufe0f Owner account \u2014 you have unlimited access.", ephemeral=True)
+@bot.command(name="invitefriends", help="Get your referral link — earn +3h for each friend who activates")
+@in_off_topic()
+async def cmd_invite_friends(ctx: commands.Context):
+    uid = str(ctx.author.id)
+    if ctx.author.id in OWNER_DISCORD_IDS:
+        await ctx.send(
+            "\u267e\ufe0f Owner account \u2014 you have unlimited access.")
         return
     try:
         async with httpx.AsyncClient(timeout=8) as client:
@@ -1413,7 +1334,7 @@ async def cmd_invite_friends(interaction: discord.Interaction):
                 json={"discord_user_id": uid, "admin_key": ADMIN_KEY})
         data = resp.json()
     except Exception as e:
-        await interaction.followup.send(f"\u274c Could not create referral link: {e}", ephemeral=True)
+        await ctx.send(f"\u274c Could not create referral link: {e}")
         return
     referral_link   = data.get("referral_link", data.get("link", "N/A"))
     valid_referrals = data.get("valid_referrals", 0)
@@ -1442,17 +1363,16 @@ async def cmd_invite_friends(interaction: discord.Interaction):
     embed.add_field(name="\U0001f4cb  Copy this message to DM friends:",
                     value=f"```\n{invite_msg}\n```", inline=False)
     embed.set_footer(text="Credits apply after your friend activates their key")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
+    await ctx.send(embed=embed)
 
 # ── /daily ────────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="daily", description="Claim your daily +30 min reward (once per ~20h)")
-async def cmd_daily(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    uid = str(interaction.user.id)
-    if interaction.user.id in OWNER_DISCORD_IDS:
-        await interaction.followup.send("\u267e\ufe0f Owner \u2014 unlimited access.", ephemeral=True)
+@bot.command(name="daily", help="")
+@in_off_topic()
+async def cmd_daily(ctx: commands.Context):
+    uid = str(ctx.author.id)
+    if ctx.author.id in OWNER_DISCORD_IDS:
+        await ctx.send("\u267e\ufe0f Owner \u2014 unlimited access.")
         return
     try:
         async with httpx.AsyncClient(timeout=8) as client:
@@ -1463,7 +1383,7 @@ async def cmd_daily(interaction: discord.Interaction):
             )
         result = resp.json()
     except Exception as e:
-        await interaction.followup.send(f"\u274c Error: {e}", ephemeral=True)
+        await ctx.send(f"\u274c Error: {e}")
         return
     if result.get("granted"):
         embed = discord.Embed(title="\u2705  Daily Reward Claimed!",
@@ -1474,21 +1394,19 @@ async def cmd_daily(interaction: discord.Interaction):
         embed = discord.Embed(title="\u23f3  Already Claimed",
                               description=result.get("reason", "Try again later."),
                               color=0xF0B232)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
+    await ctx.send(embed=embed)
 
 # ── /grant-reward (admin) ─────────────────────────────────────────────────────
 
-@bot.tree.command(name="grant-reward", description="[Admin] Manually grant a reward to a user")
+@bot.command(name="grantreward", help="[Admin] Manually grant a reward to a user")
+@in_off_topic()
 @discord.app_commands.describe(user="Discord user to reward",
                                 trigger="Reward trigger (e.g. bug_report)",
                                 override="Bypass cooldown/cap?")
-async def cmd_grant_reward(interaction: discord.Interaction,
-                            user: discord.Member, trigger: str, override: bool = False):
-    if interaction.user.id not in ADMIN_USER_IDS:
-        await interaction.response.send_message("\u274c Admin only.", ephemeral=True)
+async def cmd_grant_reward(ctx: commands.Context, user: discord.Member, trigger: str, override: bool = False):
+    if ctx.author.id not in ADMIN_USER_IDS:
+        await ctx.send("\u274c Admin only.")
         return
-    await interaction.response.defer(ephemeral=True)
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.post(f"{LICENSE_SERVER_URL}/rewards/grant",
@@ -1496,7 +1414,7 @@ async def cmd_grant_reward(interaction: discord.Interaction,
                 headers={"x-admin-key": ADMIN_KEY})
         result = resp.json()
     except Exception as e:
-        await interaction.followup.send(f"\u274c Error: {e}", ephemeral=True)
+        await ctx.send(f"\u274c Error: {e}")
         return
     if result.get("granted"):
         embed = discord.Embed(
@@ -1512,22 +1430,9 @@ async def cmd_grant_reward(interaction: discord.Interaction,
     else:
         embed = discord.Embed(title="\u274c Not Granted",
                               description=result.get("reason", "Unknown"), color=0xF23F43)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
+    await ctx.send(embed=embed)
 
 # ── Slash command error handler ───────────────────────────────────────────────
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    LOG.error(f"Slash command error: {error}")
-    msg = "❌ An unexpected error occurred. Please try again later."
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except Exception:
-        pass
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
