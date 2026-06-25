@@ -320,9 +320,9 @@ async def on_ready():
     async def rotate_presence():
         await bot.wait_until_ready()
         presences = [
-            discord.Activity(type=discord.ActivityType.watching, name="!commandhelp"),
+            discord.Activity(type=discord.ActivityType.watching, name="RC"),
             discord.Activity(type=discord.ActivityType.watching, name=f"{total_keys:,} licenses"),
-            discord.Activity(type=discord.ActivityType.playing, name="Protecting Steam"),
+            discord.Activity(type=discord.ActivityType.playing, name="Protecting RivvakCommunity"),
             discord.Activity(type=discord.ActivityType.watching, name="Rivvak Community"),
         ]
         i = 0
