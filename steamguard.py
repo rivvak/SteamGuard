@@ -2358,48 +2358,94 @@ class SteamGuard(tk.Tk):
     # Game art dimensions: header.jpg is 460x215, capsule_231x87 is 231x87.
     # We show header at 190x89 (keeps aspect ratio) as the primary banner.
     _ART_W, _ART_H = 190, 89
+    _art_url_cache: dict = {}  # appid -> resolved image URL, avoids repeat API calls
 
     def _fetch_game_art(self, appid: int):
         def worker():
-            # Try header first (most recognizable), fall back to capsule
-            urls = [
-                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg",
-                f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/capsule_231x87.jpg",
-            ]
-            for url in urls:
+            _UA = {"User-Agent": "Mozilla/5.0 SteamGuard/1.4"}
+
+            def _fetch_image(url: str):
+                """Fetch image bytes from url. Returns bytes or None."""
                 try:
-                    req = urllib.request.Request(
-                        url, headers={"User-Agent": "SteamGuard/1.4"})
+                    req = urllib.request.Request(url, headers=_UA)
                     with urllib.request.urlopen(req, timeout=6) as r:
-                        data = r.read()
-                    if not data:
-                        continue
-                    try:
-                        from PIL import Image, ImageTk
-                        import io as _io
-                        img = Image.open(_io.BytesIO(data))
-                        # Resize preserving aspect ratio to fit _ART_W x _ART_H
-                        img.thumbnail(
-                            (SteamGuard._ART_W, SteamGuard._ART_H),
-                            Image.LANCZOS)
-                        photo = ImageTk.PhotoImage(img)
-                        # Configure label size to match the image
-                        self._ui(lambda p=photo,
-                                        w=img.width, h=img.height:
-                                    self._set_game_art(p, w, h))
-                        return
-                    except ImportError:
-                        # Pillow not installed — emoji fallback
-                        self._ui(lambda: self._game_icon.config(
-                            image="", text="🎮", width=12))
-                        return
-                    except Exception as e:
-                        debug_log(f"_fetch_game_art decode error: {e}", level="WARN")
-                        continue
+                        if r.status == 200:
+                            data = r.read()
+                            return data if data else None
                 except Exception:
-                    continue
-            # All URLs failed
-            self._ui(lambda: self._game_icon.config(image="", text="🎮", width=12))
+                    pass
+                return None
+
+            def _decode_and_show(data: bytes):
+                """Decode image bytes, resize, and post to UI. Returns True on success."""
+                try:
+                    from PIL import Image, ImageTk
+                    import io as _io
+                    img = Image.open(_io.BytesIO(data))
+                    img.thumbnail(
+                        (SteamGuard._ART_W, SteamGuard._ART_H),
+                        Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    iw, ih = img.width, img.height
+                    self._ui(lambda p=photo, w=iw, h=ih: self._set_game_art(p, w, h))
+                    return True
+                except ImportError:
+                    # Pillow not installed
+                    self._ui(lambda: self._game_icon.config(image="", text="🎮", width=10))
+                    return True  # handled (emoji shown)
+                except Exception as e:
+                    debug_log(f"_fetch_game_art decode: {e}", level="WARN")
+                    return False
+
+            # ── Step 1: check cache ────────────────────────────────────────
+            if appid in SteamGuard._art_url_cache:
+                cached_url = SteamGuard._art_url_cache[appid]
+                data = _fetch_image(cached_url)
+                if data and _decode_and_show(data):
+                    return
+
+            # ── Step 2: try static CDN (fast, works for most games) ────────
+            static_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/header.jpg"
+            data = _fetch_image(static_url)
+            if data:
+                SteamGuard._art_url_cache[appid] = static_url
+                if _decode_and_show(data):
+                    return
+
+            # ── Step 3: query Steam Store API for content-hashed URL ───────
+            # Newer games have hashed paths; only the API knows the real URL.
+            api_url = (f"https://store.steampowered.com/api/appdetails"
+                       f"?appids={appid}&filters=basic")
+            resolved_url = None
+            try:
+                req = urllib.request.Request(api_url, headers=_UA)
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    api_data = json.loads(r.read())
+                app_info = api_data.get(str(appid), {}).get("data", {})
+                resolved_url = (app_info.get("header_image")
+                                or app_info.get("capsule_image"))
+            except Exception as e:
+                debug_log(f"_fetch_game_art API: {e}", level="WARN")
+
+            if resolved_url:
+                data = _fetch_image(resolved_url)
+                if data:
+                    SteamGuard._art_url_cache[appid] = resolved_url
+                    if _decode_and_show(data):
+                        return
+
+            # ── Step 4: static capsule fallback ───────────────────────────
+            capsule_url = (f"https://cdn.akamai.steamstatic.com/steam/apps"
+                           f"/{appid}/capsule_231x87.jpg")
+            data = _fetch_image(capsule_url)
+            if data and _decode_and_show(data):
+                SteamGuard._art_url_cache[appid] = capsule_url
+                return
+
+            # ── All failed — emoji ─────────────────────────────────────────
+            debug_log(f"_fetch_game_art: all sources failed for appid {appid}", level="WARN")
+            self._ui(lambda: self._game_icon.config(image="", text="🎮", width=10))
+
         threading.Thread(target=worker, daemon=True).start()
 
     def _set_game_art(self, photo, w: int = 0, h: int = 0):
