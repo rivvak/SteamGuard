@@ -231,36 +231,36 @@ def _play_unprotect_sound():
 # Game servers (EOS/Epic, game-specific) are on different IP ranges.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# IPv4 CM CIDRs only — Windows Firewall cannot mix IPv4 and IPv6 in one rule.
 VALVE_CIDRS = [
     "162.254.192.0/21",   # Primary US/EU CM (sea1, lax1, ord1, iad1, atl3, fra1)
-    "155.133.224.0/19",   # Secondary CM + relay (all 155.133.x sub-ranges)
-    "103.10.124.0/23",    # Singapore/AU CM — covers .124 AND .125 (confirmed live)
-    "103.28.54.0/24",     # Hong Kong CM hkg1 — cmp*-hkg1.steamserver.net (confirmed live)
+    "155.133.224.0/19",   # Secondary CM + relay (covers all 155.133.x sub-ranges)
+    "103.10.124.0/23",    # Singapore/AU CM — covers .124 AND .125
+    "103.28.54.0/24",     # Hong Kong CM hkg1
     "153.254.86.0/24",    # Hong Kong CM (legacy)
     "205.196.6.0/24",     # Seattle CM
-    "208.64.200.0/21",    # Tukwila WA CDN + CM
-    "205.185.194.0/23",   # São Paulo CM
+    "208.64.200.0/21",    # Tukwila WA CDN + CM (covers 208.64.200-207)
+    "208.78.164.0/22",    # Tukwila/Seattle CM
+    "205.185.194.0/23",   # São Paulo CM (covers .194 AND .195)
     "146.66.152.0/24",    # Vienna EU CM
-    "146.66.155.0/24",    # Vienna EU CM
+    "146.66.155.0/24",    # Vienna EU CM (secondary)
     "45.121.184.0/23",    # Tokyo APAC CM (tyo3)
     "190.217.33.0/24",    # Lima CM
-    "185.25.182.0/23",    # Paris/Dubai CM — covers .182 AND .183 (confirmed live)
-    # ── Additional research-confirmed CM ranges ───────────────────────────────
-    # (gypthecat + shiyajunjeff research, June 2026)
-    "185.25.180.0/22",    # Paris/Dubai CM broader range
-    "208.78.164.0/22",    # Tukwila/Seattle CM
+    "185.25.180.0/22",    # Paris/Dubai CM (covers .180-.183)
     "192.69.96.0/22",     # Valve CM/CDN range
-    "103.10.124.0/24",    # Singapore/AU CM (research-confirmed)
-    "155.133.224.0/23",   # Secondary CM (research-confirmed sub-range)
-    "185.25.182.0/24",    # Paris/Dubai CM (research-confirmed sub-range)
-    "205.185.194.0/24",   # São Paulo CM (research-confirmed sub-range)
-    # ── IPv6 CM range ─────────────────────────────────────────────────────────
-    "2620:f9:8000::/48",  # Valve CM IPv6 range
 ]
+
+# IPv6 CM ranges — used for a SEPARATE firewall rule (cannot mix with IPv4)
+VALVE_CIDRS_V6 = [
+    "2620:f9:8000::/48",
+    "2620:f9::/44",
+]
+
 
 # Pre-parsed network objects for fast IP matching
 # Extended at runtime by refresh_cm_cidrs() with any newly discovered IPs.
-_VALVE_NETS: list = [ip_network(cidr) for cidr in VALVE_CIDRS]
+_VALVE_NETS: list = [ip_network(cidr, strict=False) for cidr in VALVE_CIDRS]
+_VALVE_NETS_V6: list = [ip_network(cidr, strict=False) for cidr in VALVE_CIDRS_V6]
 
 # Quick prefix match strings (faster than full CIDR check for the hot path)
 VALVE_PREFIXES = [
@@ -908,7 +908,22 @@ def fw_create(steam_exe: str) -> tuple[bool, str]:
     if not valid:
         return False, f"No valid CIDRs — {err}"
     rc2, _, err2 = run_ps(_make_cmd(steam_exe, valid))
-    return rc2 == 0, (note if rc2 == 0 else (err2 or err))
+    ok = rc2 == 0
+
+    # Also create a separate IPv6 rule (cannot mix IPv4+IPv6 in one rule)
+    if ok and VALVE_CIDRS_V6:
+        ipv6_cmd = (
+            f"New-NetFirewallRule "
+            f"-DisplayName '{RULE_NAME}_v6' "
+            f"-Direction Outbound "
+            f"-Program '{steam_exe}' "
+            f"-RemoteAddress {','.join(VALVE_CIDRS_V6)} "
+            f"-Action Block -Profile Any "
+            f"-Enabled False"
+        )
+        run_ps(ipv6_cmd)  # best-effort, don't fail if IPv6 rule fails
+
+    return ok, (note if ok else (err2 or err))
 
 def _kill_valve_connections(sleep_after: bool = True) -> int:
     """
@@ -989,14 +1004,17 @@ def _kill_valve_connections(sleep_after: bool = True) -> int:
 
 def fw_enable_fast() -> bool:
     """Enable via netsh — sub-50ms, no PowerShell startup overhead."""
+    run_netsh(f'set rule name="{RULE_NAME}_v6" new enable=yes')  # IPv6 rule
     rc = run_netsh(f'set rule name="{RULE_NAME}" new enable=yes')
     return rc == 0
 
 def fw_disable_fast() -> bool:
+    run_netsh(f'set rule name="{RULE_NAME}_v6" new enable=no')  # IPv6 rule
     rc = run_netsh(f'set rule name="{RULE_NAME}" new enable=no')
     return rc == 0
 
 def fw_remove() -> bool:
+    run_netsh(f'delete rule name="{RULE_NAME}_v6"')  # remove IPv6 rule too
     rc = run_netsh(f'delete rule name="{RULE_NAME}"')
     return rc == 0
 
