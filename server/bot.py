@@ -336,6 +336,21 @@ async def on_ready():
 
     bot.loop.create_task(rotate_presence())
 
+    # ── One-time revocation list (processed once at startup then cleared) ──
+    REVOKE_ON_STARTUP = [
+        ("1299189351598526494", "Admin removal — all keys wiped by request"),
+    ]
+    for uid, reason in REVOKE_ON_STARTUP:
+        try:
+            result = await _api("post", "/revoke-by-discord", json={
+                "discord_user_id": uid,
+                "reason": reason,
+            })
+            revoked = result.get("revoked_count", 0)
+            LOG.info(f"Startup revocation: {uid} → {revoked} key(s) revoked. Reason: {reason}")
+        except Exception as e:
+            LOG.warning(f"Startup revocation failed for {uid}: {e}")
+
 @bot.event
 async def on_member_remove(member: discord.Member):
     if member.guild.id != GUILD_ID:
@@ -721,6 +736,245 @@ async def link_youtube(ctx: commands.Context):
         await ctx.send(f"📬 {ctx.author.mention} YouTube link sent to your DMs.", delete_after=8)
     except discord.Forbidden:
         await ctx.send(embed=embed, delete_after=60)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ██  !admin — Interactive Admin Panel  (paginated, button-driven)
+# ══════════════════════════════════════════════════════════════════════════════
+
+PAGE_SIZE = 5   # keys per page
+
+class AdminKeyView(discord.ui.View):
+    """Interactive admin panel — paginated key list with Pause / Unpause / Revoke buttons."""
+
+    def __init__(self, keys: list, admin: discord.Member, page: int = 0):
+        super().__init__(timeout=120)
+        self.keys  = keys
+        self.admin = admin
+        self.page  = page
+        self.total = len(keys)
+        self.pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self._rebuild()
+
+    def _page_keys(self):
+        start = self.page * PAGE_SIZE
+        return self.keys[start: start + PAGE_SIZE]
+
+    def _rebuild(self):
+        self.clear_items()
+
+        # Pagination row (row 4)
+        prev = discord.ui.Button(label="◀  Prev", style=discord.ButtonStyle.secondary,
+                                  disabled=(self.page == 0), row=4)
+        prev.callback = self._prev
+        self.add_item(prev)
+
+        nxt = discord.ui.Button(label="Next  ▶", style=discord.ButtonStyle.secondary,
+                                 disabled=(self.page >= self.pages - 1), row=4)
+        nxt.callback = self._next
+        self.add_item(nxt)
+
+        ref = discord.ui.Button(label="🔄 Refresh", style=discord.ButtonStyle.primary, row=4)
+        ref.callback = self._do_refresh
+        self.add_item(ref)
+
+        # Per-key action buttons — one row per key, max PAGE_SIZE rows (0-3)
+        for row_idx, k in enumerate(self._page_keys()):
+            did    = k.get("discord_user_id", "unknown")
+            status = k.get("status", "active")
+            short  = did[:12] + "…"
+            r      = min(row_idx, 3)
+
+            if status == "paused":
+                btn = discord.ui.Button(label=f"▶ Unpause {short}",
+                                         style=discord.ButtonStyle.success,
+                                         custom_id=f"up_{did}_{row_idx}", row=r)
+                btn.callback = self._make_unpause(did)
+                self.add_item(btn)
+            elif status == "active":
+                btn = discord.ui.Button(label=f"⏸ Pause {short}",
+                                         style=discord.ButtonStyle.secondary,
+                                         custom_id=f"pa_{did}_{row_idx}", row=r)
+                btn.callback = self._make_pause(did)
+                self.add_item(btn)
+
+            if status != "revoked":
+                rev = discord.ui.Button(label=f"🗑 Revoke {short}",
+                                         style=discord.ButtonStyle.danger,
+                                         custom_id=f"rv_{did}_{row_idx}", row=r)
+                rev.callback = self._make_revoke(did)
+                self.add_item(rev)
+
+    def build_embed(self) -> discord.Embed:
+        status_icon = {"active": "🟢", "paused": "🟡", "revoked": "🔴"}
+        embed = discord.Embed(
+            title="🛡️  SteamGuard — Admin Panel",
+            description=(
+                f"**{self.total}** keys total  \u2022  Page **{self.page + 1} / {self.pages}**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x7C5CFC,
+        )
+        embed.set_author(name=f"Admin: {self.admin.display_name}",
+                         icon_url=self.admin.display_avatar.url)
+        embed.set_footer(text="AuthGuard • Rivvak Community  |  rivvak.app  |  Expires in 2 min")
+        embed.timestamp = discord.utils.utcnow()
+
+        for k in self._page_keys():
+            did    = k.get("discord_user_id") or "—"
+            status = k.get("status", "active")
+            icon   = status_icon.get(status, "⚪")
+            hwid   = "🔗 Bound" if k.get("hwid_bound") else "🔓 Unbound"
+            lines  = [
+                f"**Status:** {icon} `{status.upper()}`",
+                f"**Key:** `{k.get('key_hash', '')[:14]}…`",
+                f"**Machine:** {hwid}",
+                f"**Verified:** {k.get('last_verified', 'Never')}  •  **Checks:** {k.get('verify_count', 0)}",
+            ]
+            if k.get("pause_reason"):
+                lines.append(f"**Reason:** {k['pause_reason']}")
+            embed.add_field(name=f"`{did}`", value="\n".join(lines), inline=False)
+
+        return embed
+
+    # ── auth guard ──────────────────────────────────────────────────────────
+    async def _is_admin(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id not in ADMIN_USER_IDS:
+            await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+            return False
+        return True
+
+    # ── pagination ───────────────────────────────────────────────────────────
+    async def _prev(self, interaction: discord.Interaction):
+        if not await self._is_admin(interaction): return
+        self.page = max(0, self.page - 1)
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        if not await self._is_admin(interaction): return
+        self.page = min(self.pages - 1, self.page + 1)
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _do_refresh(self, interaction: discord.Interaction):
+        if not await self._is_admin(interaction): return
+        await interaction.response.defer()
+        fresh = await _api_get("/admin/list-keys", filter="all")
+        self.keys  = fresh.get("keys", [])
+        self.total = len(self.keys)
+        self.pages = max(1, (self.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.page  = min(self.page, self.pages - 1)
+        self._rebuild()
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
+
+    # ── action factories ─────────────────────────────────────────────────────
+    def _make_pause(self, did: str):
+        async def cb(interaction: discord.Interaction):
+            if not await self._is_admin(interaction): return
+            await interaction.response.defer(ephemeral=True)
+            res = await _api("post", "/admin/pause-by-discord", json={
+                "discord_user_id": did,
+                "reason": f"Paused by {interaction.user} via admin panel",
+            })
+            count = res.get("paused_count", res.get("count", "?"))
+            for k in self.keys:
+                if k.get("discord_user_id") == did:
+                    k["status"] = "paused"
+                    k["pause_reason"] = f"Paused by {interaction.user}"
+            self._rebuild()
+            await interaction.followup.send(f"⏸️ Paused **{count}** key(s) for `{did}`", ephemeral=True)
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        return cb
+
+    def _make_unpause(self, did: str):
+        async def cb(interaction: discord.Interaction):
+            if not await self._is_admin(interaction): return
+            await interaction.response.defer(ephemeral=True)
+            res = await _api("post", "/admin/unpause-by-discord", json={"discord_user_id": did})
+            count = res.get("unpaused_count", res.get("count", "?"))
+            for k in self.keys:
+                if k.get("discord_user_id") == did:
+                    k["status"] = "active"
+                    k["pause_reason"] = None
+            self._rebuild()
+            await interaction.followup.send(f"▶️ Unpaused **{count}** key(s) for `{did}`", ephemeral=True)
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
+        return cb
+
+    def _make_revoke(self, did: str):
+        async def cb(interaction: discord.Interaction):
+            if not await self._is_admin(interaction): return
+            confirm = _ConfirmRevokeView(did, self)
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="⚠️  Confirm Revocation",
+                    description=(
+                        f"Permanently revoke **all keys** for:\n```\n{did}\n```\n"
+                        "**This cannot be undone.**\nThe user loses access immediately.\n\nAre you sure?"
+                    ),
+                    color=0xEF4444,
+                ),
+                view=confirm,
+                ephemeral=True,
+            )
+        return cb
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class _ConfirmRevokeView(discord.ui.View):
+    def __init__(self, did: str, parent: AdminKeyView):
+        super().__init__(timeout=30)
+        self.did    = did
+        self.parent = parent
+
+    @discord.ui.button(label="✅  Yes, Revoke", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in ADMIN_USER_IDS:
+            await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        res = await _api("post", "/revoke-by-discord", json={
+            "discord_user_id": self.did,
+            "reason": f"Revoked by {interaction.user} via admin panel",
+        })
+        count = res.get("revoked_count", res.get("count", "?"))
+        # Remove from parent list so UI updates immediately
+        self.parent.keys  = [k for k in self.parent.keys if k.get("discord_user_id") != self.did]
+        self.parent.total = len(self.parent.keys)
+        self.parent.pages = max(1, (self.parent.total + PAGE_SIZE - 1) // PAGE_SIZE)
+        self.parent.page  = min(self.parent.page, self.parent.pages - 1)
+        self.parent._rebuild()
+        await interaction.followup.send(f"🗑️ Revoked **{count}** key(s) for `{self.did}`", ephemeral=True)
+        try:
+            await interaction.message.edit(embed=self.parent.build_embed(), view=self.parent)
+        except Exception:
+            pass
+
+    @discord.ui.button(label="❌  Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Cancelled.", ephemeral=True)
+
+
+@bot.command(name="admin")
+@is_admin()
+async def admin_panel(ctx: commands.Context, filter: str = "all"):
+    """Admin: open the interactive key management panel."""
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+    loading = await ctx.send("⏳ Loading admin panel…")
+    data  = await _api_get("/admin/list-keys", filter=filter)
+    keys  = data.get("keys", [])
+    if not keys:
+        await loading.edit(content=f"No keys found (filter: `{filter}`).")
+        return
+    view  = AdminKeyView(keys=keys, admin=ctx.author, page=0)
+    await loading.edit(content=None, embed=view.build_embed(), view=view)
+
 
 # ── Admin: !listkeys ──────────────────────────────────────────────────────────
 
