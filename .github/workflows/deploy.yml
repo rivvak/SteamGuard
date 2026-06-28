@@ -90,8 +90,9 @@ jobs:
         shell: pwsh
         run: |
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
-          # Make the file publicly readable so the redirect endpoint works
-          gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/SteamGuard.exe --member=allUsers --role=roles/storage.objectViewer
+          gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/SteamGuard.exe `
+            --member=allUsers `
+            --role=roles/storage.legacyObjectReader
 
       - name: Build Changelog
         id: changelog
