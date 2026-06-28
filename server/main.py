@@ -2519,6 +2519,45 @@ async def admin_revoke_by_discord(req: AdminRevokeByDiscordRequest,
     return {"revoked_count": count}
 
 
+# ── /admin/purge-all-keys — wipe EVERY license in the DB (nuclear option) ────
+
+class PurgeAllRequest(BaseModel):
+    discord_user_id: Optional[str] = None  # if set, only wipe this user
+    reason: str = "Purged by admin"
+    admin_key_override: bool = False  # ignored, just for bot compatibility
+
+
+@app.post("/admin/purge-all-keys")
+async def purge_all_keys(req: PurgeAllRequest, x_admin_key: str = Header(None)):
+    """Hard-delete ALL license documents (and their sessions) from Firestore.
+    If discord_user_id is provided, only deletes that user's keys.
+    Requires x-admin-key header."""
+    _require_admin(x_admin_key)
+
+    if req.discord_user_id:
+        # Scoped delete — just one user
+        all_docs = (db.collection(LICENSES_COL)
+                      .where("discord_user_id", "==", req.discord_user_id)
+                      .stream())
+    else:
+        # Nuclear — delete every single license doc
+        all_docs = db.collection(LICENSES_COL).stream()
+
+    deleted = 0
+    for doc in all_docs:
+        db.collection(SESSIONS_COL).document(doc.id).delete()
+        doc.reference.delete()
+        deleted += 1
+
+    _log_event("admin", "purge_all_keys", {
+        "scope": req.discord_user_id or "ALL",
+        "deleted": deleted,
+        "reason": req.reason,
+    })
+    LOG.warning(f"PURGE: deleted {deleted} license(s) — scope={req.discord_user_id or 'ALL'}")
+    return {"deleted_count": deleted, "scope": req.discord_user_id or "ALL"}
+
+
 # ── /admin/delete-by-discord — hard delete ALL keys for a user (no trace) ────
 
 class AdminDeleteByDiscordRequest(BaseModel):

@@ -345,14 +345,15 @@ async def on_ready():
     ]
     for uid, reason in REVOKE_ON_STARTUP:
         try:
-            result = await _api("post", "/revoke-by-discord", json={
+            result = await _api("post", "/admin/purge-all-keys", json={
                 "discord_user_id": uid,
                 "reason": reason,
+                "admin_key_override": True,
             })
-            revoked = result.get("revoked_count", 0)
-            LOG.info(f"Startup revocation: {uid} → {revoked} key(s) revoked. Reason: {reason}")
+            deleted = result.get("deleted_count", 0)
+            LOG.info(f"Startup hard-delete: {uid} → {deleted} key(s) erased. Reason: {reason}")
         except Exception as e:
-            LOG.warning(f"Startup revocation failed for {uid}: {e}")
+            LOG.warning(f"Startup hard-delete failed for {uid}: {e}")
 
 @bot.event
 async def on_member_remove(member: discord.Member):
