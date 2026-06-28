@@ -142,18 +142,19 @@ C_GREY   = 0x64748b
 
 # ── Embed factory ─────────────────────────────────────────────────────────────
 # AuthGuard brand palette
-_C_BRAND   = 0x00C46A   # Default/neutral embeds
-_C_SUCCESS = 0x2ECC71   # Key redeemed, reward claimed
-_C_ERROR   = 0xED4245   # Failed redemption, invalid key
-_C_WARN    = 0xF1C40F   # Cooldowns, confirmations
-_C_INFO    = 0x3498DB   # Help, status, neutral info
+_C_BRAND   = 0x7C5CFC   # Default/neutral embeds — purple brand
+_C_SUCCESS = 0x22D3A5   # Key redeemed, reward claimed — teal
+_C_ERROR   = 0xEF4444   # Failed redemption, invalid key
+_C_WARN    = 0xF59E0B   # Cooldowns, confirmations — amber
+_C_INFO    = 0x5865F2   # Help, status, neutral info — Discord blurple
+_C_PURPLE  = 0x7C5CFC   # Rivvak brand purple
 
 def _embed(title: str, description: str = "", color: int = _C_BRAND,
            fields: list = None, footer: str = None) -> discord.Embed:
     """Base embed with consistent AuthGuard branding."""
     e = discord.Embed(title=title, description=description, color=color)
-    e.set_author(name="AuthGuard", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
-    e.set_footer(text=f"AuthGuard • Rivvak Community{(' | ' + footer) if footer else ''}")
+    e.set_author(name="AuthGuard • Rivvak Community", icon_url="https://i.imgur.com/5RHR6Xa.png")
+    e.set_footer(text=f"AuthGuard • Rivvak Community  |  rivvak.app{(' | ' + footer) if footer else ''}")
     e.timestamp = discord.utils.utcnow()
     if fields:
         for f in fields:
@@ -514,10 +515,106 @@ async def get_key(ctx: commands.Context):
 
 # ── !mykey ────────────────────────────────────────────────────────────────────
 
+def _fmt_remaining(hours: float) -> str:
+    """Format remaining hours as a human-readable string with status emoji."""
+    if hours <= 0:
+        return "⛔ **Expired**"
+    if hours < 2:
+        h, m = int(hours), int((hours % 1) * 60)
+        return f"🔴 **{h}h {m}m** *(expiring soon!)*"
+    if hours < 24:
+        h, m = int(hours), int((hours % 1) * 60)
+        return f"🟡 **{h}h {m}m**"
+    days, rem_h = int(hours // 24), int(hours % 24)
+    return f"🟢 **{days}d {rem_h}h**"
+
+
+def _build_key_embed(k: dict, idx: int, total: int, username: str) -> discord.Embed:
+    """Build a rich, beautifully formatted embed for a single key."""
+    status = k.get("status", "active")
+    color_map = {
+        "active":  (0x5865F2, "🛡️", "ACTIVE"),    # Discord blurple / brand purple
+        "paused":  (0xF59E0B, "⏸️", "PAUSED"),
+        "revoked": (0xEF4444, "🚫", "REVOKED"),
+    }
+    color, shield, status_label = color_map.get(status, (0x64748B, "❓", "UNKNOWN"))
+
+    # Key display — show actual key if available, else truncated hash
+    key_plain = k.get("key")
+    if key_plain:
+        key_display = f"```\n{key_plain}\n```"
+        key_note = ""
+    else:
+        key_display = f"```\n{k.get('key_hash_prefix', 'N/A')}\n```"
+        key_note = "\n> *Full key not available — contact support*"
+
+    # Metadata
+    tier = k.get("tier", "free").title()
+    tier_badge = "⭐" if tier.lower() == "premium" else "🆓"
+    hwid_line = "🔗 Locked to your machine" if k.get("hwid_bound") else "🔓 Not yet activated — run the app to activate"
+    remaining_line = _fmt_remaining(k.get("remaining_hours", 0))
+
+    # Build rich description
+    parts = [
+        f"**{shield} Status:** `{status_label}`  •  {tier_badge} **{tier}**",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🔑 **Your License Key**",
+        key_display,
+        key_note,
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"⏱️ **Time Remaining:** {remaining_line}",
+        f"💻 **Machine:** {hwid_line}",
+        f"✅ **Last Verified:** {k.get('last_verified', 'Never')}",
+        f"🔄 **Verify Count:** {k.get('verify_count', 0)}×",
+    ]
+    if k.get("created_at"):
+        parts.append(f"📅 **Created:** {k['created_at']}")
+    if k.get("expires_at"):
+        try:
+            from datetime import datetime as _dt
+            exp = _dt.fromisoformat(k["expires_at"].replace("Z", "+00:00"))
+            parts.append(f"📆 **Expires:** <t:{int(exp.timestamp())}:R>")
+        except Exception:
+            pass
+    if k.get("pause_reason"):
+        parts += ["", f"> ⚠️ **Suspended:** {k['pause_reason']}"]
+    if k.get("note"):
+        parts += ["", f"> 📝 **Note:** {k['note']}"]
+
+    parts += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 **Earn more time:** `!daily` · `!rewards`",
+        "📊 **View stats:** `!stats`",
+        "🆘 **Need help:** `!support`",
+    ]
+
+    title = "🔐  Your SteamGuard Key"
+    if total > 1:
+        title += f"  ({idx}/{total})"
+
+    embed = discord.Embed(
+        title=title,
+        description="\n".join(parts),
+        color=color,
+    )
+    embed.set_author(
+        name=f"AuthGuard — {username}",
+        icon_url="https://i.imgur.com/5RHR6Xa.png",
+    )
+    embed.set_thumbnail(url="https://i.imgur.com/5RHR6Xa.png")
+    embed.set_footer(
+        text="AuthGuard • Rivvak Community  |  🔒 Delete this DM after reading  |  rivvak.app",
+    )
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+
 @bot.command(name="mykey")
 @in_getkey_channel()
 async def my_key(ctx: commands.Context):
-    """Show the user their own key status."""
+    """Show the user their own license key — actual key value, beautifully formatted."""
     try:
         await ctx.message.delete()
     except Exception:
@@ -527,36 +624,59 @@ async def my_key(ctx: commands.Context):
     keys = data.get("keys", [])
 
     if not keys:
-        embed = _embed_info(
-            "No Key Found",
-            "You don't have a key yet. Use `!getkey` to get one.")
-        await ctx.author.send(embed=embed)
-        await ctx.send(f"📬 {ctx.author.mention} Check your DMs.", delete_after=6)
+        embed = discord.Embed(
+            title="🔑  No Key Found",
+            description=(
+                "You don't have a SteamGuard key yet.\n\n"
+                "**How to get one:**\n"
+                "→ Use `!getkey` in this channel\n"
+                "→ Make sure you have the **Member** role\n"
+                "→ Subscribe to [youtube.com/@Rivvak](https://youtube.com/@Rivvak)\n\n"
+                "It's free — takes less than 60 seconds."
+            ),
+            color=0x64748B,
+        )
+        embed.set_author(name="AuthGuard • Rivvak Community",
+                         icon_url="https://i.imgur.com/5RHR6Xa.png")
+        embed.set_footer(text="AuthGuard • Rivvak Community  |  rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        try:
+            await ctx.author.send(embed=embed)
+            await ctx.send(f"📬 {ctx.author.mention} Check your DMs.", delete_after=6)
+        except discord.Forbidden:
+            await ctx.send(embed=embed, delete_after=20)
         return
 
-    embed = _embed_info(
-        "Your Key Status",
-        "🔒 **For security, delete this message after reading.**",
-        footer="Keys are verified every 24h")
-    for k in keys:
-        status_icon = {"active": "🟢", "paused": "🟡", "revoked": "🔴"}.get(k["status"], "⚪")
-        embed.add_field(
-            name=f"{status_icon} Key `{k['key_hash']}`",
-            value=(
-                f"**Status:** {k['status'].upper()}\n"
-                f"**Machine bound:** {'Yes' if k['hwid_bound'] else 'No (not activated yet)'}\n"
-                f"**Running since:** {k.get('running_since', 'not activated')}\n"
-                f"**Last verified:** {k.get('last_verified', 'never')}\n"
-                f"**Verify count:** {k.get('verify_count', 0)}\n"
-                + (f"**Paused reason:** {k['pause_reason']}\n" if k.get('pause_reason') else "")
-            ),
-            inline=False)
+    total = len(keys)
+
+    # Security warning — sent first
+    warn_embed = discord.Embed(
+        title="🔒  Security Notice",
+        description=(
+            "Your SteamGuard key is in the next message.\n\n"
+            "**⚠️ Never share your key with anyone — not even admins.**\n"
+            "If your key was compromised, use `!support` immediately.\n\n"
+            "🗑️ **Delete this DM after reading for your own security.**"
+        ),
+        color=0xF59E0B,
+    )
+    warn_embed.set_footer(text="AuthGuard • Rivvak Community")
+    warn_embed.timestamp = discord.utils.utcnow()
+
+    embeds = [_build_key_embed(k, i + 1, total, str(ctx.author)) for i, k in enumerate(keys)]
 
     try:
-        await ctx.author.send(embed=embed)
-        await ctx.send(f"📬 {ctx.author.mention} Check your DMs.", delete_after=6)
+        await ctx.author.send(embed=warn_embed)
+        for embed in embeds:
+            await ctx.author.send(embed=embed)
+        await ctx.send(
+            f"📬 {ctx.author.mention} Your key info has been sent to your DMs.",
+            delete_after=6)
     except discord.Forbidden:
-        await ctx.send(embed=embed, delete_after=30)
+        await ctx.send(
+            f"{ctx.author.mention} Please enable DMs from server members so I can send your key securely. "
+            f"Go to **Server Settings → Privacy Settings → Allow direct messages from server members**.",
+            delete_after=20)
 
 # ── !linkyoutube ──────────────────────────────────────────────────────────────
 

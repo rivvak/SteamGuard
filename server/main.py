@@ -977,6 +977,7 @@ async def generate(req: GenerateRequest, x_admin_key: str = Header(None)):
 
     db.collection(LICENSES_COL).document(key_hash).set({
         "key_hash":        key_hash,
+        "key_plain":       key,          # stored so user can retrieve their own key
         "discord_user_id": req.discord_user_id,
         "hwid":            None,
         "revoked":         False,
@@ -2505,3 +2506,55 @@ async def admin_revoke_by_discord(req: AdminRevokeByDiscordRequest,
         _log_event(doc.id, "revoked_by_discord", {"reason": req.reason})
         count += 1
     return {"revoked_count": count}
+
+
+# ── /me/mykey — returns actual key value for the authenticated user ───────────
+
+@app.get("/me/mykey")
+async def me_mykey(user=Depends(_get_current_user)):
+    """Return the user's own license key (actual value, not hash).
+    Only accessible via a valid JWT — the user can only see their own key."""
+    discord_id = user.get("sub") or user.get("discord_id", "")
+    try:
+        docs = list(
+            db.collection(LICENSES_COL)
+              .where("discord_user_id", "==", discord_id)
+              .stream()
+        )
+        results = []
+        for doc in docs:
+            d = doc.to_dict()
+            if d.get("revoked"):
+                status = "revoked"
+            elif d.get("paused"):
+                status = "paused"
+            else:
+                status = "active"
+
+            expires_at = d.get("expires_at")
+            remaining_hours: float = 0.0
+            expires_iso: Optional[str] = None
+            if isinstance(expires_at, datetime):
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                remaining_hours = max(0.0, (expires_at - utcnow()).total_seconds() / 3600)
+                expires_iso = expires_at.isoformat()
+
+            results.append({
+                "key":             d.get("key_plain"),        # may be None for legacy keys
+                "key_hash_prefix": doc.id[:8] + "…",
+                "status":          status,
+                "hwid_bound":      bool(d.get("hwid")),
+                "created_at":      _fmt_dt(d.get("created_at")),
+                "expires_at":      expires_iso,
+                "remaining_hours": round(remaining_hours, 2),
+                "last_verified":   _time_ago(d.get("last_verified")),
+                "verify_count":    d.get("verify_count", 0),
+                "pause_reason":    d.get("pause_reason"),
+                "note":            d.get("note", ""),
+                "tier":            d.get("tier", "free"),
+            })
+        return {"discord_id": discord_id, "keys": results}
+    except Exception as e:
+        LOG.warning(f"me_mykey failed for {discord_id}: {e}")
+        raise HTTPException(status_code=503, detail="License service temporarily unavailable")
