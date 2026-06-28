@@ -91,7 +91,7 @@ jobs:
         run: |
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
           # Make the file publicly readable so the redirect endpoint works
-          gcloud storage objects update gs://steamguard-downloads-fabled/SteamGuard.exe --add-acl-grant=entity=allUsers,role=READER --quiet
+          gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/SteamGuard.exe --member=allUsers --role=roles/storage.objectViewer
 
       - name: Build Changelog
         id: changelog
