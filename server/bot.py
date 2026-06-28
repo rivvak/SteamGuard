@@ -74,6 +74,7 @@ GUILD_ID           = int(os.environ["DISCORD_GUILD_ID"])
 ROLE_ID            = int(os.environ["DISCORD_ROLE_ID"])
 GETKEY_CHANNEL_ID    = int(os.environ.get("GETKEY_CHANNEL_ID", "0"))
 OFF_TOPIC_CHANNEL_ID = int(os.environ.get("OFF_TOPIC_CHANNEL_ID", "1513193890117714182"))
+MOD_CHANNEL_ID       = int(os.environ.get("MOD_CHANNEL_ID", "1513296463197769770"))  # moderator channel for admin alerts
 LICENSE_SERVER_URL = os.environ["LICENSE_SERVER_URL"]
 ADMIN_KEY          = os.environ["ADMIN_KEY"]
 # Shared HMAC secret — must match the license server's SECRET_KEY so that
@@ -306,6 +307,8 @@ async def on_ready():
     morning_health_check.start()
     uptime_check.start()
     weekly_key_audit.start()
+    weekly_key_cleanup.start()
+    weekly_gen_audit.start()
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
@@ -1688,10 +1691,10 @@ async def morning_health_check():
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         return
-    # Use OFF_TOPIC channel for admin monitoring reports
-    channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+    # Send to moderator channel
+    channel = guild.get_channel(MOD_CHANNEL_ID)
     if not channel:
-        LOG.warning("Morning health check: OFF_TOPIC_CHANNEL_ID not set or channel not found")
+        LOG.warning("Morning health check: MOD_CHANNEL_ID not set or channel not found")
         return
 
     try:
@@ -1751,7 +1754,7 @@ async def uptime_check():
         guild = bot.get_guild(GUILD_ID)
         if not guild:
             return
-        channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+        channel = guild.get_channel(MOD_CHANNEL_ID)
         if not channel:
             return
         embed = discord.Embed(
@@ -1782,7 +1785,7 @@ async def weekly_key_audit():
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         return
-    channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+    channel = guild.get_channel(MOD_CHANNEL_ID)
     if not channel:
         return
     try:
@@ -1835,6 +1838,142 @@ async def weekly_key_audit():
 
 @weekly_key_audit.before_loop
 async def before_weekly_audit():
+    await bot.wait_until_ready()
+
+
+
+# ── Weekly Expired/Revoked Key Cleanup (every 7 days) ────────────────────────
+
+@tasks.loop(hours=168)  # 7 days
+async def weekly_key_cleanup():
+    """Weekly: hard-delete all revoked and expired keys from Firestore to keep the DB clean."""
+    await bot.wait_until_ready()
+    guild = bot.get_guild(GUILD_ID)
+    channel = guild.get_channel(MOD_CHANNEL_ID) if guild else None
+
+    try:
+        res = await _api("post", "/admin/cleanup-stale-keys", json={})
+        deleted  = res.get("deleted_count", 0)
+        expired  = res.get("expired_count", 0)
+        revoked  = res.get("revoked_count", 0)
+
+        embed = discord.Embed(
+            title="🧹  Weekly Key Cleanup Complete",
+            description=(
+                f"Stale and expired keys have been purged from the database.\n"
+                f"**Revoked keys removed:** {revoked}\n"
+                f"**Expired keys removed:** {expired}\n"
+                f"**Total deleted:** {deleted}"
+            ),
+            color=0x22D3A5,
+        )
+        embed.set_footer(text="AuthGuard Cleanup • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        if channel:
+            await channel.send(embed=embed)
+        LOG.info(f"Weekly cleanup: {deleted} stale keys removed ({revoked} revoked, {expired} expired)")
+    except Exception as e:
+        LOG.error(f"Weekly cleanup failed: {e}")
+        if channel:
+            embed = discord.Embed(
+                title="⚠️  Weekly Cleanup Failed",
+                description=f"```{e}```",
+                color=0xF59E0B,
+            )
+            await channel.send(embed=embed)
+
+@weekly_key_cleanup.before_loop
+async def before_weekly_cleanup():
+    await bot.wait_until_ready()
+
+
+# ── Weekly Key Generation Audit (every 7 days) ───────────────────────────────
+
+@tasks.loop(hours=168)
+async def weekly_gen_audit():
+    """Weekly: scan recent key generation events for suspicious patterns (bulk creates, multi-account)."""
+    await bot.wait_until_ready()
+    guild = bot.get_guild(GUILD_ID)
+    channel = guild.get_channel(MOD_CHANNEL_ID) if guild else None
+    if not channel:
+        return
+
+    try:
+        # Fetch recent events log
+        events_data = await _api_get("/admin/events", limit=200)
+        events = events_data.get("events", [])
+
+        # Count generates per Discord user in the last 7 days
+        from collections import Counter
+        from datetime import timezone as _tz
+        gen_counts: Counter = Counter()
+        now_ts = discord.utils.utcnow().timestamp()
+        week_ago = now_ts - 604800  # 7 days in seconds
+
+        suspicious = []
+        seen_ips: dict = {}
+
+        for ev in events:
+            if ev.get("event_type") != "generated":
+                continue
+            ts_raw = ev.get("timestamp") or ev.get("created_at")
+            try:
+                # Handle both ISO string and epoch
+                if isinstance(ts_raw, str):
+                    from datetime import datetime as _dt
+                    ts = _dt.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+                else:
+                    ts = float(ts_raw) if ts_raw else 0.0
+            except Exception:
+                ts = 0.0
+
+            if ts < week_ago:
+                continue
+
+            uid = ev.get("data", {}).get("discord_uid") or ev.get("discord_user_id", "unknown")
+            gen_counts[uid] += 1
+
+        # Flag any user who generated more than 1 key this week (should be impossible, but double-check)
+        flags = [(uid, count) for uid, count in gen_counts.items() if count > 1]
+        total_gens = sum(gen_counts.values())
+
+        embed = discord.Embed(
+            title="🔍  Weekly Key Generation Audit",
+            description=(
+                f"**Keys generated in the last 7 days:** {total_gens}\n"
+                f"**Suspicious accounts (>1 key):** {len(flags)}"
+            ),
+            color=0xF59E0B if flags else 0x22D3A5,
+        )
+
+        if flags:
+            flag_lines = [f"`{uid}` — generated **{count}** keys this week" for uid, count in flags[:10]]
+            embed.add_field(
+                name="⚠️  Flagged Accounts",
+                value="\n".join(flag_lines),
+                inline=False,
+            )
+            embed.add_field(
+                name="Recommended Action",
+                value="Investigate with `!keyinfo @user`. Use `!ban @user` if abuse confirmed.",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="✅  No Suspicious Activity",
+                value="All key generation patterns look normal.",
+                inline=False,
+            )
+
+        embed.set_footer(text="AuthGuard Gen Audit • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        await channel.send(embed=embed)
+        LOG.info(f"Weekly gen audit: {total_gens} generates, {len(flags)} flagged")
+    except Exception as e:
+        LOG.error(f"Weekly gen audit failed: {e}")
+
+@weekly_gen_audit.before_loop
+async def before_weekly_gen_audit():
     await bot.wait_until_ready()
 
 

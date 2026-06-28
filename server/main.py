@@ -2519,6 +2519,47 @@ async def admin_revoke_by_discord(req: AdminRevokeByDiscordRequest,
     return {"revoked_count": count}
 
 
+# ── /admin/cleanup-stale-keys — remove revoked + expired keys from Firestore ──
+
+@app.post("/admin/cleanup-stale-keys")
+async def cleanup_stale_keys(x_admin_key: str = Header(None)):
+    """Delete all revoked keys and all expired (expires_at < now) keys from Firestore.
+    Keeps active and paused keys intact."""
+    _require_admin(x_admin_key)
+
+    now = utcnow()
+    all_docs = db.collection(LICENSES_COL).stream()
+
+    revoked_deleted = 0
+    expired_deleted = 0
+
+    for doc in all_docs:
+        d = doc.to_dict()
+
+        # Delete if revoked
+        if d.get("revoked"):
+            db.collection(SESSIONS_COL).document(doc.id).delete()
+            doc.reference.delete()
+            revoked_deleted += 1
+            continue
+
+        # Delete if expired (and not paused — paused keys keep their record)
+        expires_at = d.get("expires_at")
+        if expires_at and not d.get("paused"):
+            if isinstance(expires_at, datetime):
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at < now:
+                    db.collection(SESSIONS_COL).document(doc.id).delete()
+                    doc.reference.delete()
+                    expired_deleted += 1
+
+    total = revoked_deleted + expired_deleted
+    _log_event("admin", "cleanup_stale_keys", {"revoked": revoked_deleted, "expired": expired_deleted})
+    LOG.info(f"Cleanup: removed {revoked_deleted} revoked + {expired_deleted} expired = {total} total")
+    return {"deleted_count": total, "revoked_count": revoked_deleted, "expired_count": expired_deleted}
+
+
 # ── /admin/purge-all-keys — wipe EVERY license in the DB (nuclear option) ────
 
 class PurgeAllRequest(BaseModel):
