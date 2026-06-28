@@ -118,7 +118,7 @@ YT_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
 SUPPORT_CHANNEL_ID          = int(os.environ.get("SUPPORT_CHANNEL_ID", "0") or "0")
 BADGE_ANNOUNCE_CHANNEL_ID   = int(os.environ.get("BADGE_ANNOUNCE_CHANNEL_ID", "0") or "0")
 UPDATE_DOWNLOAD_URL         = os.environ.get(
-    "UPDATE_DOWNLOAD_URL", "https://github.com/rivvak/SteamGuard/releases/latest"
+    "UPDATE_DOWNLOAD_URL", "https://rivvak.app/dashboard/SteamGuard.exe"
 )
 _VOTE_TOPICS_RAW = os.environ.get("VOTE_TOPICS", "")
 DEFAULT_VOTE_TOPICS = [

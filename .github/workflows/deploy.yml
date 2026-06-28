@@ -90,6 +90,8 @@ jobs:
         shell: pwsh
         run: |
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
+          # Make the file publicly readable so the redirect endpoint works
+          gcloud storage objects update gs://steamguard-downloads-fabled/SteamGuard.exe --add-acl-grant=entity=allUsers,role=READER --quiet
 
       - name: Build Changelog
         id: changelog
@@ -153,7 +155,7 @@ jobs:
           $title       = "SteamGuard Client Updated - v$version"
           $description = "Terms of Service and EULA (v1.1) Acceptance Required. This tool is strictly for educational, research, and personal learning purposes."
           $footer      = "SteamGuard Security - Build #$buildNum - $sha - pushed by $actor"
-          $dlValue     = "[Click here to Download](https://linkvertise.com/YOUR_LINK_HERE)"
+          $dlValue     = "[Click here to Download](https://rivvak.app/dashboard/SteamGuard.exe)"
           $reqValue    = "Member of this server, subscribed to YouTube channel, run as Administrator"
 
           $body = [ordered]@{

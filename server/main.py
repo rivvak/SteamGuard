@@ -377,6 +377,19 @@ async def root_redirect():
     """Redirect root URL to the dashboard login page."""
     return "/dashboard/index.html"
 
+# GCS public URL for the latest SteamGuard installer
+_GCS_EXE_URL = "https://storage.googleapis.com/steamguard-downloads-fabled/SteamGuard.exe"
+
+@app.get("/dashboard/SteamGuard.exe", include_in_schema=False)
+@app.get("/download", include_in_schema=False)
+@app.get("/SteamGuard.exe", include_in_schema=False)
+async def download_exe():
+    """Redirect any download URL to the public GCS bucket object.
+    Keeps Linkvertise links and existing URLs working forever regardless
+    of how the binary is rebuilt or where it lives."""
+    return RedirectResponse(_GCS_EXE_URL, status_code=302)
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     """Serve RC logo as favicon — overrides FastAPI default leaf icon."""
