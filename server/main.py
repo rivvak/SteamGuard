@@ -134,6 +134,7 @@ REFERRALS_COL       = "referrals"        # doc id = auto
 REWARDS_COL         = "rewards"          # doc id = discord_user_id
 REWARD_LOG_COL      = "reward_log"       # doc id = auto (audit trail)
 LEADERBOARD_COL     = "leaderboard"      # doc id = "weekly"
+BANNED_USERS_COL    = "banned_users"     # doc id = discord_user_id — permanently blocked
 
 # ── Simple in-memory stats cache ──────────────────────────────────────────────
 
@@ -954,6 +955,16 @@ async def revoke(req: RevokeRequest, x_admin_key: str = Header(None)):
 @app.post("/generate")
 async def generate(req: GenerateRequest, x_admin_key: str = Header(None)):
     _require_admin(x_admin_key)
+
+    # Check if user is banned (no key generation ever again)
+    if req.discord_user_id and not req.admin_override:
+        ban_doc = db.collection(BANNED_USERS_COL).document(req.discord_user_id).get()
+        if ban_doc.exists:
+            ban_data = ban_doc.to_dict()
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {req.discord_user_id} is permanently banned: {ban_data.get('reason', 'No reason given')}"
+            )
 
     # Check 1-key-per-user limit (skip for admins/owners and explicit override)
     if (req.discord_user_id
@@ -2506,6 +2517,101 @@ async def admin_revoke_by_discord(req: AdminRevokeByDiscordRequest,
         _log_event(doc.id, "revoked_by_discord", {"reason": req.reason})
         count += 1
     return {"revoked_count": count}
+
+
+# ── /admin/delete-by-discord — hard delete ALL keys for a user (no trace) ────
+
+class AdminDeleteByDiscordRequest(BaseModel):
+    discord_user_id: str
+    reason: str = "Deleted by admin"
+
+
+@app.post("/admin/delete-by-discord")
+async def admin_delete_by_discord(req: AdminDeleteByDiscordRequest,
+                                   user=Depends(_require_admin_jwt)):
+    """Completely erase every license document for a Discord user.
+    No revoked record is left — the user has zero trace in the licenses collection.
+    Also deletes their session, rewards, and YT token documents."""
+    discord_id = req.discord_user_id
+
+    # 1. Delete ALL license docs (both active and already-revoked)
+    all_docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", discord_id)
+                  .stream())
+    deleted = 0
+    for doc in all_docs:
+        # Kill the session first
+        db.collection(SESSIONS_COL).document(doc.id).delete()
+        doc.reference.delete()
+        deleted += 1
+
+    # 2. Delete rewards document
+    db.collection(REWARDS_COL).document(discord_id).delete()
+
+    # 3. Delete YT token
+    db.collection(YT_TOKENS_COL).document(discord_id).delete()
+
+    _log_event("admin", "hard_delete_by_discord", {"discord_id": discord_id, "deleted": deleted, "reason": req.reason})
+    LOG.info(f"Hard-deleted {deleted} license(s) for Discord {discord_id}")
+    return {"deleted_count": deleted, "discord_user_id": discord_id}
+
+
+# ── /admin/ban-user — revoke keys AND block future key generation ─────────────
+
+class AdminBanUserRequest(BaseModel):
+    discord_user_id: str
+    reason: str = "Banned by admin"
+
+
+@app.post("/admin/ban-user")
+async def admin_ban_user(req: AdminBanUserRequest,
+                          user=Depends(_require_admin_jwt)):
+    """Revoke all active keys for a Discord user AND add them to the banned_users
+    blocklist so they can never generate a new key again."""
+    discord_id = req.discord_user_id
+
+    # 1. Revoke all active keys
+    active_docs = (db.collection(LICENSES_COL)
+                     .where("discord_user_id", "==", discord_id)
+                     .where("revoked", "==", False)
+                     .stream())
+    revoked = 0
+    for doc in active_docs:
+        doc.reference.update({
+            "revoked":       True,
+            "revoke_reason": req.reason,
+            "revoked_at":    utcnow(),
+        })
+        db.collection(SESSIONS_COL).document(doc.id).delete()
+        _log_event(doc.id, "banned_revoke", {"reason": req.reason})
+        revoked += 1
+
+    # 2. Write ban record
+    db.collection(BANNED_USERS_COL).document(discord_id).set({
+        "discord_user_id": discord_id,
+        "reason":          req.reason,
+        "banned_at":       utcnow(),
+        "banned_by":       user.get("sub", "admin"),
+    })
+
+    _log_event("admin", "user_banned", {"discord_id": discord_id, "revoked": revoked, "reason": req.reason})
+    LOG.info(f"Banned Discord {discord_id} — revoked {revoked} key(s)")
+    return {"banned": True, "revoked_count": revoked, "discord_user_id": discord_id}
+
+
+# ── /admin/unban-user — remove ban record so user can generate keys again ─────
+
+class AdminUnbanUserRequest(BaseModel):
+    discord_user_id: str
+
+
+@app.post("/admin/unban-user")
+async def admin_unban_user(req: AdminUnbanUserRequest,
+                            user=Depends(_require_admin_jwt)):
+    """Remove the ban for a Discord user so they can generate keys again."""
+    db.collection(BANNED_USERS_COL).document(req.discord_user_id).delete()
+    _log_event("admin", "user_unbanned", {"discord_id": req.discord_user_id})
+    return {"unbanned": True, "discord_user_id": req.discord_user_id}
 
 
 # ── /me/mykey — returns actual key value for the authenticated user ───────────

@@ -303,6 +303,9 @@ async def on_ready():
     LOG.info(f"Bot ready: {bot.user} (ID {bot.user.id})")
     await _post_welcome_embed()
     daily_membership_sweep.start()
+    morning_health_check.start()
+    uptime_check.start()
+    weekly_key_audit.start()
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
@@ -1124,57 +1127,145 @@ async def admin_panel(ctx: commands.Context, filter: str = "all"):
 async def remove_all_keys(ctx: commands.Context, member: discord.Member, *, reason: str = "Removed by admin"):
     """Admin: permanently revoke ALL keys for a user. Usage: !removeallkeys @User [reason]"""
     embed = discord.Embed(
-        title="⚠️  Confirm Revocation",
+        title="⚠️  Confirm Full Erasure",
         description=(
-            f"Permanently revoke **all keys** for {member.mention}?\n"
+            f"Completely erase **all keys and data** for {member.mention}?\n"
             f"**ID:** `{member.id}`\n"
-            f"**Reason:** {reason}\n"
-            "**This cannot be undone.** Use the buttons below."
+            f"**Reason:** {reason}\n\n"
+            f"Keys, session, rewards, and YT link will all be **deleted** — no trace.\n"
+            f"They will be able to get a new key afterwards. Use `!ban` to also block future keys."
         ),
         color=0xEF4444,
     )
     embed.set_thumbnail(url=member.display_avatar.url)
 
-    class QuickRevokeView(discord.ui.View):
+    class QuickDeleteView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=30)
 
-        @discord.ui.button(label="✅  Yes, Remove All Keys", style=discord.ButtonStyle.danger)
+        @discord.ui.button(label="🗑️  Yes, Erase All Traces", style=discord.ButtonStyle.danger)
         async def confirm(self_, interaction: discord.Interaction, button: discord.ui.Button):
             if interaction.user.id not in ADMIN_USER_IDS:
                 await interaction.response.send_message("❌ Admins only.", ephemeral=True)
                 return
             await interaction.response.defer()
-            res   = await _api("post", "/revoke-by-discord", json={
+            # Hard delete — no revoked record left behind
+            res   = await _api("post", "/admin/delete-by-discord", json={
                 "discord_user_id": str(member.id),
                 "reason": reason,
             })
-            count = res.get("revoked_count", 0)
+            count = res.get("deleted_count", 0)
             done  = discord.Embed(
-                title="🗑️  Keys Removed",
+                title="🗑️  All Data Erased",
                 description=(
-                    f"Revoked **{count}** key(s) for {member.mention}\n"
+                    f"Permanently deleted **{count}** key(s) for {member.mention}\n"
                     f"**ID:** `{member.id}`\n"
-                    f"**Reason:** {reason}"
+                    f"**Reason:** {reason}\n\n"
+                    f"No trace remains. They can generate a new key normally."
                 ),
                 color=0x22D3A5,
             )
             done.set_thumbnail(url=member.display_avatar.url)
-            done.set_footer(text=f"Action by {interaction.user}  |  AuthGuard • Rivvak Community")
+            done.set_footer(text=f"Action by {interaction.user}  |  AuthGuard • rivvak.app")
             done.timestamp = discord.utils.utcnow()
             for item in self_.children:
                 item.disabled = True
             await interaction.edit_original_response(embed=done, view=self_)
-            LOG.info(f"Admin {ctx.author} removed all keys for {member} ({member.id}) — {reason}")
+            LOG.info(f"Admin {ctx.author} hard-deleted all keys for {member} ({member.id}) — {reason}")
 
         @discord.ui.button(label="❌  Cancel", style=discord.ButtonStyle.secondary)
         async def cancel(self_, interaction: discord.Interaction, button: discord.ui.Button):
             await interaction.response.send_message("Cancelled.", ephemeral=True)
             await ctx.message.delete()
 
-    await ctx.send(embed=embed, view=QuickRevokeView())
+    await ctx.send(embed=embed, view=QuickDeleteView())
 
 # ── Admin: !listkeys ──────────────────────────────────────────────────────────
+
+
+
+# ── Admin: !ban @user [reason] ────────────────────────────────────────────────
+
+@bot.command(name="ban")
+@is_admin()
+async def cmd_ban(ctx: commands.Context, member: discord.Member, *, reason: str = "Banned by admin"):
+    """Admin: revoke all keys AND permanently block a user from generating new keys."""
+    embed = discord.Embed(
+        title="⛔  Confirm Ban",
+        description=(
+            f"Ban {member.mention} from SteamGuard?\n"
+            f"**ID:** `{member.id}`\n"
+            f"**Reason:** {reason}\n\n"
+            f"• All active keys will be **revoked** (record kept)\n"
+            f"• User is **permanently blocked** from generating new keys\n"
+            f"Use `!unban @user` to lift the ban later."
+        ),
+        color=0xEF4444,
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    class BanView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=30)
+
+        @discord.ui.button(label="⛔  Yes, Ban User", style=discord.ButtonStyle.danger)
+        async def confirm(self_, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id not in ADMIN_USER_IDS:
+                await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+                return
+            await interaction.response.defer()
+            res = await _api("post", "/admin/ban-user", json={
+                "discord_user_id": str(member.id),
+                "reason": reason,
+            })
+            revoked = res.get("revoked_count", 0)
+            done = discord.Embed(
+                title="⛔  User Banned",
+                description=(
+                    f"{member.mention} has been banned from SteamGuard.\n"
+                    f"**ID:** `{member.id}`\n"
+                    f"**Keys revoked:** {revoked}\n"
+                    f"**Reason:** {reason}\n\n"
+                    f"They cannot generate a new key. Use `!unban @{member.display_name}` to lift."
+                ),
+                color=0xEF4444,
+            )
+            done.set_thumbnail(url=member.display_avatar.url)
+            done.set_footer(text=f"Action by {interaction.user}  |  AuthGuard • rivvak.app")
+            done.timestamp = discord.utils.utcnow()
+            for item in self_.children:
+                item.disabled = True
+            await interaction.edit_original_response(embed=done, view=self_)
+            LOG.info(f"Admin {ctx.author} banned {member} ({member.id}) — {reason}")
+
+        @discord.ui.button(label="❌  Cancel", style=discord.ButtonStyle.secondary)
+        async def cancel(self_, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message("Cancelled.", ephemeral=True)
+            await ctx.message.delete()
+
+    await ctx.send(embed=embed, view=BanView())
+
+
+# ── Admin: !unban @user ───────────────────────────────────────────────────────
+
+@bot.command(name="unban")
+@is_admin()
+async def cmd_unban(ctx: commands.Context, member: discord.Member):
+    """Admin: lift a ban so a user can generate keys again."""
+    await _api("post", "/admin/unban-user", json={"discord_user_id": str(member.id)})
+    embed = discord.Embed(
+        title="✅  Ban Lifted",
+        description=(
+            f"{member.mention} can now generate SteamGuard keys again.\n"
+            f"**ID:** `{member.id}`"
+        ),
+        color=0x22D3A5,
+    )
+    embed.set_footer(text=f"Action by {ctx.author}  |  AuthGuard • rivvak.app")
+    embed.timestamp = discord.utils.utcnow()
+    await ctx.send(embed=embed)
+    LOG.info(f"Admin {ctx.author} unbanned {member} ({member.id})")
+
 
 @bot.command(name="listkeys")
 @is_admin()
@@ -1347,7 +1438,7 @@ async def on_command_error(ctx, error):
         await ctx.send(embed=_embed_error(
             "Missing argument",
             f"Usage: `!{ctx.command.name} {ctx.command.signature}`\n"
-            f"Run `!commandhelp` for all commands.",
+            f"Run `!help` for all commands.",
         ))
         return
     if isinstance(error, commands.MemberNotFound):
@@ -1368,93 +1459,184 @@ async def on_command_error(ctx, error):
     ))
 
 
-# ── !commandhelp ──────────────────────────────────────────────────────────────
 
-@bot.command(name="commandhelp", aliases=["commands", "cmds"])
-@in_off_topic()
-async def cmd_commandhelp(ctx: commands.Context):
-    """Lists all available SteamGuard bot commands."""
+# ── !help  (overrides default; also aliased as !commandhelp, !commands, !cmds) ─
+
+# Remove the default help command so we can register our own named "help"
+bot.remove_command("help")
+
+
+@bot.command(name="help", aliases=["commandhelp", "commands", "cmds"])
+async def cmd_help(ctx: commands.Context, *, section: str = ""):
+    """Shows this help menu. Type !help <section> for details on a section."""
     is_adm = (ctx.author.id in ADMIN_USER_IDS
               or (ctx.guild and ctx.author.guild_permissions.administrator))
 
-    getkey_ch = ctx.guild.get_channel(GETKEY_CHANNEL_ID) if ctx.guild and GETKEY_CHANNEL_ID else None
-    ot_ch     = ctx.guild.get_channel(OFF_TOPIC_CHANNEL_ID) if ctx.guild and OFF_TOPIC_CHANNEL_ID else None
+    getkey_ch  = ctx.guild.get_channel(GETKEY_CHANNEL_ID) if ctx.guild and GETKEY_CHANNEL_ID else None
+    ot_ch      = ctx.guild.get_channel(OFF_TOPIC_CHANNEL_ID) if ctx.guild and OFF_TOPIC_CHANNEL_ID else None
     getkey_ref = getkey_ch.mention if getkey_ch else "#get-key"
-    ot_ref     = ot_ch.mention if ot_ch else "#-off-topic"
+    ot_ref     = ot_ch.mention if ot_ch else "#off-topic"
 
-    embed = _embed_info(
-        "🛡  SteamGuard — All Commands",
-        (
-            f"Use commands in the correct channel.\n"
-            f"Key commands → {getkey_ref} | Everything else → {ot_ref}"
+    section = section.lower().strip()
+
+    # ── Detailed section views ──────────────────────────────────────────────────
+    if section in ("key", "keys", "license"):
+        e = discord.Embed(
+            title="🔑  Getting Your Key",
+            description=(
+                f"All key commands are used in {getkey_ref}.\n"
+                "Your key is tied to **one device** and **one Discord account**."
+            ),
+            color=0x7C5CFC,
+        )
+        e.add_field(name="`!getkey`", value="Generates your personal SteamGuard license key.\n"
+                    "Requirements: Member role + subscribed to YouTube.", inline=False)
+        e.add_field(name="`!mykey`", value="Shows your current key, status (active/paused/revoked), "
+                    "and how much time is left.", inline=False)
+        e.add_field(name="`!linkyoutube`", value="Links your YouTube account so the bot can verify "
+                    "your subscription automatically.", inline=False)
+        e.set_footer(text="One key per account • rivvak.app")
+        await ctx.send(embed=e)
+        return
+
+    if section in ("account", "profile", "status"):
+        e = discord.Embed(
+            title="👤  Account & Profile",
+            description=f"Use these commands in {ot_ref}.",
+            color=0x7C5CFC,
+        )
+        e.add_field(name="`!status`", value="Full snapshot: license tier, XP, badges, and account health.", inline=False)
+        e.add_field(name="`!stats`", value="Public protection card showing how many heals SteamGuard has done for you.", inline=False)
+        e.add_field(name="`!refer`", value="Get your unique referral link. Every friend who activates gives you +3 hours free.", inline=False)
+        e.add_field(name="`!resetdevice`", value="Resets your HWID binding so you can move SteamGuard to a new PC.\n"
+                    "⏳ 30-day cooldown between resets.", inline=False)
+        e.set_footer(text="rivvak.app")
+        await ctx.send(embed=e)
+        return
+
+    if section in ("reward", "rewards", "daily", "earn"):
+        e = discord.Embed(
+            title="🎁  Earning Free Time",
+            description="Multiple ways to extend your SteamGuard subscription for free.",
+            color=0x7C5CFC,
+        )
+        e.add_field(name="`!rewards`", value="See every reward you can earn — daily check-ins, referrals, badges, and more.", inline=False)
+        e.add_field(name="`!daily`", value="Claim a free **+30 minutes** every ~20 hours. Just type it in any channel.", inline=False)
+        e.add_field(name="`!invitefriends`", value="Get your referral message ready to share. Each friend who activates = **+3 hours**.", inline=False)
+        e.add_field(name="`!checkbadges`", value="Checks whether you've unlocked any new badges and announces them.", inline=False)
+        e.set_footer(text="Rewards stack • rivvak.app")
+        await ctx.send(embed=e)
+        return
+
+    if section in ("community", "social", "server"):
+        e = discord.Embed(
+            title="🌐  Community",
+            description="Engage with the Rivvak community.",
+            color=0x7C5CFC,
+        )
+        e.add_field(name="`!leaderboard`", value="Weekly top-10 players ranked by most heals.", inline=False)
+        e.add_field(name="`!vote`", value="Vote on the next SteamGuard feature. Your opinion shapes the roadmap.", inline=False)
+        e.add_field(name="`!download`", value="Get the latest SteamGuard installer link.", inline=False)
+        e.add_field(name="`!support`", value="Opens a support ticket form. A staff member will respond shortly.", inline=False)
+        e.set_footer(text="discord.gg/RTHM8YhpE")
+        await ctx.send(embed=e)
+        return
+
+    if section in ("admin", "staff") and is_adm:
+        e = discord.Embed(
+            title="⚙️  Admin Commands",
+            description="Staff-only commands. All require admin role or admin Discord ID.",
+            color=0xF59E0B,
+        )
+        e.add_field(name="`!admin`", value="Opens the interactive key management panel with search, pause, and revoke controls.", inline=False)
+        e.add_field(name="`!listkeys [all|active|paused|revoked]`", value="Table of every license key with status and stats.", inline=False)
+        e.add_field(name="`!keyinfo @user`", value="Deep-dive on all keys linked to a specific user.", inline=False)
+        e.add_field(name="`!pausekey @user [reason]`", value="Immediately suspends a user's key. They'll see 'suspended' in the app.", inline=False)
+        e.add_field(name="`!unpausekey @user`", value="Re-activates a paused key.", inline=False)
+        e.add_field(name="`!revokekey @user [reason]`", value="Permanently revokes a key. Record is kept in Firestore.", inline=False)
+        e.add_field(name="`!ban @user [reason]`", value="Revokes all keys **and** blacklists the user from ever getting a new one.", inline=False)
+        e.add_field(name="`!unban @user`", value="Lifts a ban so the user can generate a key again.", inline=False)
+        e.add_field(name="`!removeallkeys @user [reason]`", value="Hard-deletes every key and all data for a user. No trace left.", inline=False)
+        e.add_field(name="`!grantreward @user <trigger>`", value="Manually grants a reward (e.g. `youtube_sub`, `referral`).", inline=False)
+        e.add_field(name="`!sgstatus`", value="Live bot + server health dashboard with aggregate stats.", inline=False)
+        e.set_footer(text="Admin panel • rivvak.app")
+        await ctx.send(embed=e)
+        return
+
+    # ── Main help menu ──────────────────────────────────────────────────────────
+    embed = discord.Embed(
+        title="🛡️  AuthGuard — Command Help",
+        description=(
+            f"**Welcome to SteamGuard by Rivvak.**\n"
+            f"Type `!help <section>` for detailed info on any category.\n\n"
+            f"Key commands → {getkey_ref}   •   Everything else → {ot_ref}"
         ),
-        footer="discord.gg/RTHM8YhpE",
+        color=0x7C5CFC,
     )
 
-    # ── Key Commands ──
     embed.add_field(
-        name=f"🔑  Key Commands ({getkey_ref} only)",
+        name="🔑  License Key Commands",
         value=(
-            "`!getkey` — Get a SteamGuard license key\n"
-            "`!mykey` — Check your key status & expiry\n"
-            "`!linkyoutube` — Link your YouTube account for verification"
+            "`!getkey` — Get your SteamGuard license key\n"
+            "`!mykey` — Check your key & time remaining\n"
+            "`!linkyoutube` — Link YouTube for auto-verification\n"
+            "➜ `!help key` for details"
         ),
         inline=False,
     )
 
-    # ── Account Commands ──
     embed.add_field(
-        name=f"👤  Account Commands ({ot_ref})",
+        name="👤  Account & Profile",
         value=(
-            "`!status` — View your license, XP, badges & tier\n"
-            "`!stats` — Show your public protection stats card\n"
-            "`!refer` — Get your personal referral link\n"
-            "`!resetdevice` — Reset your HWID (30-day cooldown)"
+            "`!status` — Full account overview (tier, XP, badges)\n"
+            "`!stats` — Your public protection stats\n"
+            "`!refer` — Get your referral link\n"
+            "`!resetdevice` — Move to a new PC (30d cooldown)\n"
+            "➜ `!help account` for details"
         ),
         inline=False,
     )
 
-    # ── Rewards ──
     embed.add_field(
-        name="🎁  Reward Commands",
+        name="🎁  Earn Free Time",
         value=(
-            "`!rewards` — See all ways to earn free time\n"
-            "`!daily` — Claim your daily +30 min bonus (once per ~20h)\n"
-            "`!invitefriends` — Get your referral link + invite message (+3h per friend)"
+            "`!daily` — +30 min free every ~20 hours\n"
+            "`!rewards` — All reward options\n"
+            "`!invitefriends` — +3h per friend you refer\n"
+            "`!checkbadges` — Check for badge unlocks\n"
+            "➜ `!help rewards` for details"
         ),
         inline=False,
     )
 
-    # ── Community ──
     embed.add_field(
-        name="🌐  Community Commands",
+        name="🌐  Community",
         value=(
-            "`!leaderboard` — Weekly top-10 heals leaderboard\n"
-            "`!vote` — Vote on upcoming features\n"
-            "`!download` — Get the latest SteamGuard installer\n"
-            "`!support` — Submit a support ticket\n"
-            "`!checkbadges` — Check for any new badge unlocks"
+            "`!leaderboard` — Weekly heals top-10\n"
+            "`!vote` — Shape the next feature\n"
+            "`!download` — Latest installer\n"
+            "`!support` — Open a support ticket\n"
+            "➜ `!help community` for details"
         ),
         inline=False,
     )
 
-    # ── Admin Commands (only shown to admins) ──
     if is_adm:
         embed.add_field(
-            name="⚙️  Admin Commands",
+            name="⚙️  Admin Panel",
             value=(
-                "`!listkeys` — List all license keys\n"
-                "`!keyinfo @user` — Detailed info on a user's key\n"
-                "`!pausekey <key>` — Suspend a key\n"
-                "`!unpausekey <key>` — Unsuspend a key\n"
-                "`!revokekey <key>` — Permanently revoke a key\n"
-                "`!grantreward @user <trigger>` — Manually grant a reward\n"
-                "`!sgstatus` — Live server & bot health stats"
+                "`!admin` — Interactive key management panel\n"
+                "`!ban @user` — Revoke + blacklist a user\n"
+                "`!removeallkeys @user` — Hard delete all data\n"
+                "➜ `!help admin` for full list"
             ),
             inline=False,
         )
 
+    embed.set_footer(text="SteamGuard • rivvak.app • discord.gg/RTHM8YhpE")
+    embed.timestamp = discord.utils.utcnow()
     await ctx.send(embed=embed)
+
 
 # ── Daily membership sweep ────────────────────────────────────────────────────
 
@@ -1490,6 +1672,170 @@ async def daily_membership_sweep():
 @daily_membership_sweep.before_loop
 async def before_sweep():
     await bot.wait_until_ready()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── Scheduled Monitoring Tasks ─────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Morning Deployment Health Check (daily, 9 AM UTC) ────────────────────────
+
+@tasks.loop(hours=24)
+async def morning_health_check():
+    """Every morning: ping the license server and report deployment health + error snapshot."""
+    await bot.wait_until_ready()
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    # Use OFF_TOPIC channel for admin monitoring reports
+    channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+    if not channel:
+        LOG.warning("Morning health check: OFF_TOPIC_CHANNEL_ID not set or channel not found")
+        return
+
+    try:
+        import time as _time
+        t0 = _time.monotonic()
+        data = await _api_get("/stats/server")
+        latency_ms = round((_time.monotonic() - t0) * 1000)
+        total_keys   = data.get("total_keys", "?")
+        active_keys  = data.get("active_keys", "?")
+        paused_keys  = data.get("paused_keys", "?")
+        revoked_keys = data.get("revoked_keys", "?")
+        status_icon  = "🟢" if latency_ms < 800 else "🟡" if latency_ms < 2000 else "🔴"
+
+        embed = discord.Embed(
+            title=f"{status_icon}  SteamGuard Deployment Health",
+            description=(
+                f"**Daily morning check** — license server is responding.\n"
+                f"Latency: **{latency_ms} ms**"
+            ),
+            color=0x22D3A5 if latency_ms < 800 else 0xF59E0B if latency_ms < 2000 else 0xEF4444,
+        )
+        embed.add_field(name="Total Keys", value=str(total_keys), inline=True)
+        embed.add_field(name="Active",     value=str(active_keys), inline=True)
+        embed.add_field(name="Paused",     value=str(paused_keys), inline=True)
+        embed.add_field(name="Revoked",    value=str(revoked_keys), inline=True)
+        embed.set_footer(text="AuthGuard Monitor • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        await channel.send(embed=embed)
+        LOG.info(f"Morning health check: OK ({latency_ms}ms)")
+    except Exception as e:
+        embed = discord.Embed(
+            title="🔴  License Server Unreachable",
+            description=f"Morning health check **FAILED**.\n```{e}```",
+            color=0xEF4444,
+        )
+        embed.set_footer(text="AuthGuard Monitor • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        await channel.send(embed=embed)
+        LOG.error(f"Morning health check failed: {e}")
+
+@morning_health_check.before_loop
+async def before_morning_check():
+    await bot.wait_until_ready()
+
+# ── License Server Uptime Check (every 10 minutes) ───────────────────────────
+
+@tasks.loop(minutes=10)
+async def uptime_check():
+    """Every 10 minutes: ping /health. If it fails, alert in the off-topic channel."""
+    await bot.wait_until_ready()
+    try:
+        data = await _api_get("/health")
+        if data.get("status") not in ("ok", "healthy", None):
+            raise ValueError(f"Unexpected health status: {data}")
+        # Silently pass — only alert on failure
+    except Exception as e:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return
+        channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+        if not channel:
+            return
+        embed = discord.Embed(
+            title="🔴  OUTAGE DETECTED — License Server Down",
+            description=(
+                f"The SteamGuard license server failed an uptime check.\n"
+                f"```{e}```\n"
+                f"URL: `{LICENSE_SERVER_URL}`\n"
+                f"Action: check Cloud Run logs → `fabled-mystery-474200-i1`"
+            ),
+            color=0xEF4444,
+        )
+        embed.set_footer(text="AuthGuard Uptime Monitor • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        await channel.send(embed=embed)
+        LOG.error(f"Uptime check FAILED: {e}")
+
+@uptime_check.before_loop
+async def before_uptime_check():
+    await bot.wait_until_ready()
+
+# ── Weekly Key Generation Spike Audit (every 7 days) ─────────────────────────
+
+@tasks.loop(hours=168)  # 7 days
+async def weekly_key_audit():
+    """Weekly: check for any user with suspiciously high verify counts or duplicate key attempts."""
+    await bot.wait_until_ready()
+    guild = bot.get_guild(GUILD_ID)
+    if not guild:
+        return
+    channel = guild.get_channel(OFF_TOPIC_CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        data   = await _api_get("/admin/list-keys", filter="all")
+        keys   = data.get("keys", [])
+        count  = data.get("count", 0)
+
+        # Find users with unusually high verify counts (>200/week is suspicious)
+        THRESHOLD = 200
+        spikes = [
+            k for k in keys
+            if (k.get("verify_count") or 0) > THRESHOLD
+        ]
+
+        embed = discord.Embed(
+            title="📋  Weekly Key Audit Report",
+            description=(
+                f"**Total keys in system:** {count}\n"
+                f"**High-activity accounts (>{THRESHOLD} verifies):** {len(spikes)}"
+            ),
+            color=0xF59E0B if spikes else 0x22D3A5,
+        )
+
+        if spikes:
+            spike_lines = []
+            for k in spikes[:10]:  # Cap at 10 to avoid embed overflow
+                did   = k.get("discord_user_id", "unknown")
+                vc    = k.get("verify_count", 0)
+                stat  = k.get("status", "?")
+                spike_lines.append(f"`{did}` — {vc} verifies — {stat}")
+            embed.add_field(
+                name="⚠️  Suspicious Accounts",
+                value="\n".join(spike_lines) or "None",
+                inline=False,
+            )
+            embed.add_field(
+                name="Recommended Action",
+                value="Review with `!keyinfo @user` — use `!ban @user` if abuse confirmed.",
+                inline=False,
+            )
+        else:
+            embed.add_field(name="✅  No Anomalies", value="All accounts within normal activity range.", inline=False)
+
+        embed.set_footer(text="AuthGuard Weekly Audit • rivvak.app")
+        embed.timestamp = discord.utils.utcnow()
+        await channel.send(embed=embed)
+        LOG.info(f"Weekly audit complete: {count} keys, {len(spikes)} spikes")
+    except Exception as e:
+        LOG.error(f"Weekly key audit failed: {e}")
+
+@weekly_key_audit.before_loop
+async def before_weekly_audit():
+    await bot.wait_until_ready()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── UI Views & Modals ─────────────────────────────────────────────────────────
