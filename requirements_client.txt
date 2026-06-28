@@ -1,4 +1,10 @@
 # SteamGuard client dependencies
+
+# UI framework (required) — PySide6 (Qt) replaces the old tkinter UI.
+# tkinter is stdlib and is no longer used by the Qt client, so it is not listed.
+PySide6>=6.7.0
+pyqtdarktheme>=2.1.0
+
 # Core (required)
 psutil
 pywin32

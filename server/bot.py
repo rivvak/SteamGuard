@@ -57,6 +57,8 @@ import json
 import asyncio
 import logging
 import time
+import hmac
+import hashlib
 import httpx
 import discord
 import discord.app_commands
@@ -74,7 +76,14 @@ GETKEY_CHANNEL_ID    = int(os.environ.get("GETKEY_CHANNEL_ID", "0"))
 OFF_TOPIC_CHANNEL_ID = int(os.environ.get("OFF_TOPIC_CHANNEL_ID", "1513193890117714182"))
 LICENSE_SERVER_URL = os.environ["LICENSE_SERVER_URL"]
 ADMIN_KEY          = os.environ["ADMIN_KEY"]
+# Shared HMAC secret — must match the license server's SECRET_KEY so that
+# request signatures (e.g. /device/reset) validate via _verify_sig.
+SECRET_KEY         = os.environ.get("SECRET_KEY", "")
 BOT_TOKEN          = os.environ["DISCORD_BOT_TOKEN"]
+
+def _hmac_sign(data: str) -> str:
+    """Mirror of the license server's _hmac_sign — HMAC-SHA256 over SECRET_KEY."""
+    return hmac.new(SECRET_KEY.encode(), data.encode(), hashlib.sha256).hexdigest()
 DISCORD_INVITE     = os.environ.get("DISCORD_INVITE", "https://discord.gg/REPLACE")
 
 ADMIN_USER_IDS: set[int] = set(
@@ -447,6 +456,19 @@ async def get_key(ctx: commands.Context):
         await ctx.message.delete()
     except Exception:
         pass
+
+    # Enforce 1-key-per-user: if they already have an active key, send them to !mykey.
+    existing = await _api_get(f"/admin/user-keys/{ctx.author.id}")
+    if isinstance(existing, dict) and any(
+        not k.get("revoked", False) for k in existing.get("keys", [])
+    ):
+        await ctx.send(
+            f"{ctx.author.mention} You already have an active SteamGuard key. "
+            "Use `!mykey` to view it, or contact support if you need to transfer "
+            "it to a new machine.",
+            delete_after=20,
+        )
+        return
 
     # Generate key via license server
     data = await _api("post", "/generate", json={
@@ -912,11 +934,14 @@ class DeviceResetView(discord.ui.View):
         self.license_key     = license_key
 
     @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger)
-    async def confirm(self, ctx: commands.Context, button: discord.ui.Button):
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Acknowledge the interaction so edit_original_response() is valid.
+        await interaction.response.defer()
         try:
             data = await _api("post", "/device/reset", json={
                 "discord_user_id": self.discord_user_id,
                 "key": self.license_key,
+                "sig": _hmac_sign(f"{self.license_key}:{self.discord_user_id}"),
             })
             if "error" in data:
                 err = data["error"]
@@ -942,7 +967,7 @@ class DeviceResetView(discord.ui.View):
             child.disabled = True
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, ctx: commands.Context, button: discord.ui.Button):
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Device reset cancelled.", view=None)
 
     async def on_timeout(self):
@@ -972,11 +997,11 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
     async def on_submit(self, interaction: discord.Interaction):
         # Post embed to SUPPORT_CHANNEL_ID if configured
         embed = _embed_info("🎫  New Support Request")
-        embed.add_field(name="User",        value=f"{ctx.author.mention} (`{ctx.author.id}`)", inline=False)
+        embed.add_field(name="User",        value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
         embed.add_field(name="Category",    value=self.category.value,    inline=True)
         embed.add_field(name="App Version", value=self.app_version.value, inline=True)
         embed.add_field(name="Description", value=self.description.value, inline=False)
-        embed.set_footer(text=f"User ID: {ctx.author.id}")
+        embed.set_footer(text=f"User ID: {interaction.user.id}")
 
         if SUPPORT_CHANNEL_ID:
             guild = bot.get_guild(GUILD_ID)
@@ -988,12 +1013,13 @@ class SupportModal(discord.ui.Modal, title="SteamGuard Support Request"):
                     except Exception as e:
                         LOG.warning(f"Could not post support request to channel: {e}")
 
-        await ctx.send(
-            "✅ Your support request has been submitted. Our team will get back to you soon!")
+        await interaction.response.send_message(
+            "✅ Your support request has been submitted. Our team will get back to you soon!",
+            ephemeral=True)
 
-    async def on_error(self, ctx: commands.Context, error: Exception):
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
         LOG.error(f"SupportModal error: {error}")
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ Failed to submit your request. Please try again later.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1051,12 +1077,13 @@ async def slash_status(ctx: commands.Context):
 
 # ── /refer ────────────────────────────────────────────────────────────────────
 
-@bot.command(name="refer", help="Get your personal SteamGuard referral link")
+@bot.command(name="refer", aliases=["referral"], help="Get your personal SteamGuard referral link")
 @in_off_topic()
 async def slash_refer(ctx: commands.Context):
     try:
         data = await _api("post", "/referral/create", json={
             "discord_user_id": str(ctx.author.id),
+            "admin_key":       ADMIN_KEY,
         })
     except Exception as e:
         LOG.error(f"/refer API error: {e}")
@@ -1113,8 +1140,17 @@ async def slash_stats(ctx: commands.Context):
     badges      = badge_data.get("badges", key_data.get("badges", []))
     last_active = key_data.get("last_heartbeat", key_data.get("last_verified", "—"))
 
-    # Try to get streak from badge data
-    streak = badge_data.get("current_streak", key_data.get("current_streak", "—"))
+    # Streak now lives in the rewards Firestore doc — source it from
+    # /rewards/status so /stats reflects the authoritative check-in streak.
+    streak = "—"
+    try:
+        rstatus = await _api_get(f"/rewards/status/{ctx.author.id}")
+        if isinstance(rstatus, dict) and "error" not in rstatus:
+            cs = int(rstatus.get("current_streak", 0) or 0)
+            streak = f"🔥 {cs} day{'s' if cs != 1 else ''}" if cs >= 3 else f"{cs} day{'s' if cs != 1 else ''}"
+    except Exception as e:
+        LOG.warning(f"/stats streak fetch failed: {e}")
+        streak = badge_data.get("current_streak", key_data.get("current_streak", "—"))
 
     embed = _embed(
         f"📊  {ctx.author.display_name}'s SteamGuard Stats",
@@ -1278,10 +1314,9 @@ async def slash_vote(ctx: commands.Context):
 
     embed.description += "\n".join(topic_lines)
 
-    await ctx.send(embed=embed, ephemeral=False)
+    sent_message = await ctx.send(embed=embed)
 
     # Add reaction prompts to the sent message
-    sent_message = await interaction.original_response()
     for i in range(min(len(VOTE_TOPICS), 10)):
         try:
             await sent_message.add_reaction(number_emojis[i])
@@ -1290,10 +1325,22 @@ async def slash_vote(ctx: commands.Context):
 
 # ── /support ──────────────────────────────────────────────────────────────────
 
+class SupportButtonView(discord.ui.View):
+    """Prefix commands can't open a modal directly (modals need an Interaction),
+    so we surface a button whose callback opens the SupportModal."""
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="Open Support Form", style=discord.ButtonStyle.primary)
+    async def open_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SupportModal())
+
 @bot.command(name="support", help="Submit a support request")
 @in_off_topic()
 async def slash_support(ctx: commands.Context):
-    await interaction.response.send_modal(SupportModal())
+    await ctx.send(
+        "Click the button below to open the support form:",
+        view=SupportButtonView())
 
 # ── /checkbadges ──────────────────────────────────────────────────────────────
 
@@ -1368,6 +1415,14 @@ async def cmd_rewards(ctx: commands.Context):
     is_owner  = status.get("is_owner", False)
     total_hrs = status.get("total_reward_hours", 0.0)
     triggers  = status.get("triggers", {})
+    streak    = int(status.get("current_streak", 0) or 0)
+    longest   = int(status.get("longest_streak", 0) or 0)
+
+    def _fmt_cooldown(minutes):
+        minutes = int(minutes or 0)
+        h, m = divmod(minutes, 60)
+        return f"{h}h {m}m" if h else f"{m}m"
+
     embed = _embed_info(
         "\u23f0  SteamGuard Rewards",
         ("Earn free hours by completing these actions."
@@ -1376,15 +1431,29 @@ async def cmd_rewards(ctx: commands.Context):
         footer="Use !invitefriends to share your referral link")
     if not is_owner:
         embed.add_field(name="\U0001f381  Total Earned",
-                        value=f"**{total_hrs:.1f}h** bonus time", inline=False)
+                        value=f"**{total_hrs:.1f}h** bonus time", inline=True)
+        flame = "\U0001f525" if streak >= 3 else "\U0001f4c5"
+        streak_val = f"{flame} **{streak}** day{'s' if streak != 1 else ''} in a row"
+        if streak > 0 and streak % 7 != 0:
+            streak_val += f"\n*{7 - (streak % 7)} more for +5h*"
+        if longest:
+            streak_val += f"\n*Best: {longest}d*"
+        embed.add_field(name="\U0001f525  Check-in Streak", value=streak_val, inline=True)
     for trigger, (label, reward_str, description) in REWARD_MENU.items():
         t_data = triggers.get(trigger, {})
         count  = t_data.get("times_claimed", 0)
-        next_a = t_data.get("next_available")
         mx     = t_data.get("max_per_user", -1)
-        if next_a:        avail = "\u23f3 Cooldown active"
-        elif mx != -1 and count >= mx: avail = "\u2705 Claimed"
-        else:             avail = "\u2705 Available"
+        # Prefer the explicit flags the server now sends.
+        maxed       = t_data.get("maxed", (mx != -1 and count >= mx))
+        on_cooldown = t_data.get("on_cooldown", bool(t_data.get("next_available")))
+        mins_left   = t_data.get("minutes_until_available")
+        if maxed:
+            avail = "\u2705 Claimed (max)"
+        elif on_cooldown:
+            avail = (f"\u23f3 Cooldown — {_fmt_cooldown(mins_left)} left"
+                     if mins_left is not None else "\u23f3 Cooldown active")
+        else:
+            avail = "\u2705 Available"
         embed.add_field(name=f"{reward_str}  \u2014  {label}",
                         value=f"{description}\n*{avail}* (claimed {count}x)", inline=False)
     await ctx.send(embed=embed)
@@ -1436,7 +1505,7 @@ async def cmd_invite_friends(ctx: commands.Context):
 
 # ── /daily ────────────────────────────────────────────────────────────────────
 
-@bot.command(name="daily", help="")
+@bot.command(name="daily", aliases=["check-in", "checkin"], help="Claim your daily check-in reward")
 @in_off_topic()
 async def cmd_daily(ctx: commands.Context):
     uid = str(ctx.author.id)
@@ -1455,9 +1524,29 @@ async def cmd_daily(ctx: commands.Context):
         await ctx.send(f"\u274c Error: {e}")
         return
     if result.get("granted"):
-        embed = _embed_success("Daily Reward Claimed!",
-                               "\U0001f552 **+30 minutes** added to your SteamGuard access.",
-                               footer="Come back tomorrow for another reward")
+        streak = int(result.get("current_streak", 0) or 0)
+        hours  = result.get("hours", 0.5) or 0.5
+        gained = (f"+{int(round(hours * 60))} minutes" if hours < 1
+                  else f"+{hours:g}h")
+        desc = f"\U0001f552 **{gained}** added to your SteamGuard access."
+
+        # Streak feedback.
+        if streak > 0:
+            flame = "\U0001f525" if streak >= 3 else "\U0001f4c5"
+            desc += f"\n\n{flame} **{streak}-day** check-in streak!"
+            remaining = (7 - (streak % 7)) % 7
+            if result.get("streak_bonus", {}).get("granted"):
+                bonus_h = result["streak_bonus"].get("hours", 5)
+                desc += (f"\n\U0001f389 7-day streak reached — "
+                         f"**+{bonus_h:g}h** streak bonus awarded!")
+            elif remaining:
+                desc += f"\n*{remaining} more day{'s' if remaining != 1 else ''} until your +5h streak bonus.*"
+
+        total = result.get("new_total_hours")
+        footer = (f"Total bonus: {total:.1f}h · Come back tomorrow"
+                  if isinstance(total, (int, float))
+                  else "Come back tomorrow for another reward")
+        embed = _embed_success("Daily Reward Claimed!", desc, footer=footer)
     else:
         embed = _embed_warn("Already Claimed",
                             result.get("reason", "Try again later."))

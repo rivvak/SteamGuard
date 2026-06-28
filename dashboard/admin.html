@@ -327,13 +327,61 @@
           <td>
             <div class="flex gap-1.5">
               <button class="btn btn-ghost btn-sm" title="View" onclick="viewUser('${u.discord_user_id}')"><i class="fa-solid fa-eye"></i></button>
-              <button class="btn btn-ghost btn-sm" title="Pause" style="color:var(--warning)"><i class="fa-solid fa-pause"></i></button>
-              <button class="btn btn-ghost btn-sm" title="Revoke" style="color:var(--error)"><i class="fa-solid fa-ban"></i></button>
+              <button class="btn btn-ghost btn-sm" title="${u.paused ? 'Unpause' : 'Pause'}" style="color:var(--warning)" onclick="togglePause('${u.discord_user_id}', ${u.paused ? 'true' : 'false'})" ${u.revoked ? 'disabled' : ''}>
+                <i class="fa-solid ${u.paused ? 'fa-play' : 'fa-pause'}"></i>
+              </button>
+              <button class="btn btn-ghost btn-sm" title="Revoke" style="color:var(--error)" onclick="revokeUser('${u.discord_user_id}')" ${u.revoked ? 'disabled' : ''}>
+                <i class="fa-solid fa-ban"></i>
+              </button>
             </div>
           </td>
         </tr>`).join('');
     }
     function viewUser(id) { showToast(`Discord ID: ${id}`, 'info'); }
+
+    /* ---- moderation: pause / unpause / revoke ----
+       The dashboard authenticates with a Bearer JWT (handled inside apiFetch),
+       so these call the JWT-authed /admin/*-by-discord endpoints. They operate
+       on every key tied to the given Discord user. */
+    async function togglePause(discordId, currentlyPaused) {
+      const action = currentlyPaused ? 'unpause' : 'pause';
+      let reason = '';
+      if (!currentlyPaused) {
+        reason = prompt('Reason for pausing (optional):');
+        if (reason === null) return;            // user cancelled the prompt
+        reason = reason.trim() || 'Suspended by admin';
+      }
+      const endpoint = currentlyPaused ? '/admin/unpause-by-discord' : '/admin/pause-by-discord';
+      const body = currentlyPaused
+        ? { discord_user_id: discordId }
+        : { discord_user_id: discordId, reason };
+      const res = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify(body) });
+      const ok = res && (res.paused_count !== undefined || res.unpaused_count !== undefined);
+      if (ok) {
+        const n = currentlyPaused ? res.unpaused_count : res.paused_count;
+        showToast(`User ${action}d successfully (${n} key${n === 1 ? '' : 's'})`, 'success');
+        loadUsers();                            // refresh the table
+      } else {
+        showToast((res && res.detail) || `Failed to ${action} user`, 'error');
+      }
+    }
+
+    async function revokeUser(discordId) {
+      if (!confirm("Are you sure you want to REVOKE this user's key? This cannot be undone.")) return;
+      let reason = prompt('Reason for revocation:');
+      if (reason === null) return;              // user cancelled the prompt
+      reason = reason.trim() || 'Revoked by admin';
+      const res = await apiFetch('/admin/revoke-by-discord', {
+        method: 'POST',
+        body: JSON.stringify({ discord_user_id: discordId, reason }),
+      });
+      if (res && res.revoked_count !== undefined) {
+        showToast(`User key revoked (${res.revoked_count} key${res.revoked_count === 1 ? '' : 's'})`, 'success');
+        loadUsers();
+      } else {
+        showToast((res && res.detail) || 'Failed to revoke user', 'error');
+      }
+    }
 
     async function loadUsers() {
       const r = await apiFetch('/admin/users?limit=100');

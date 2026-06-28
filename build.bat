@@ -16,11 +16,14 @@ python -m nuitka ^
     --windows-console-mode=disable ^
     --windows-uac-admin ^
     --windows-icon-from-ico=icon.ico ^
-    --enable-plugin=tk-inter ^
+    --enable-plugin=pyside6 ^
+    --include-qt-plugins=sensible,styles ^
+    --include-package-data=qdarktheme ^
     --output-filename=SteamGuard.exe ^
     --output-dir=%DIST% ^
     --include-package=auth ^
     --include-data-dir=auth=auth ^
+    --include-data-files=icon.png=icon.png ^
     --company-name="SteamGuard" ^
     --product-name="SteamGuard" ^
     --file-description="SteamGuard" ^
@@ -31,7 +34,7 @@ python -m nuitka ^
     --remove-output ^
     --no-pyi-file ^
     --experimental=disable-all-tracebacks ^
-    steamguard.py
+    steamguard_qt.py
 
 if %ERRORLEVEL% EQU 0 (
     echo.

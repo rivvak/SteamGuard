@@ -894,9 +894,28 @@ def fw_create(steam_exe: str) -> tuple[bool, str]:
             f"-Enabled False"
         )
 
+    def _make_v6_rule(exe: str) -> None:
+        """Create the separate IPv6 block rule (cannot mix IPv4+IPv6 in one rule).
+        Best-effort: don't fail the whole operation if the IPv6 rule fails."""
+        if not VALVE_CIDRS_V6:
+            return
+        ipv6_cmd = (
+            f"New-NetFirewallRule "
+            f"-DisplayName '{RULE_NAME}_v6' "
+            f"-Direction Outbound "
+            f"-Program '{exe}' "
+            f"-RemoteAddress {','.join(VALVE_CIDRS_V6)} "
+            f"-Action Block -Profile Any "
+            f"-Enabled False"
+        )
+        run_ps(ipv6_cmd)
+
     # Attempt 1: all CIDRs at once (fast path)
     rc, _, err = run_ps(_make_cmd(steam_exe, VALVE_CIDRS))
     if rc == 0:
+        # Also create the IPv6 rule — fw_enable_fast/fw_disable_fast/fw_remove
+        # all reference {RULE_NAME}_v6, so it must exist on the success path too.
+        _make_v6_rule(steam_exe)
         return True, "OK"
 
     # Attempt 2: validate each CIDR individually, retry with valid subset
@@ -911,17 +930,8 @@ def fw_create(steam_exe: str) -> tuple[bool, str]:
     ok = rc2 == 0
 
     # Also create a separate IPv6 rule (cannot mix IPv4+IPv6 in one rule)
-    if ok and VALVE_CIDRS_V6:
-        ipv6_cmd = (
-            f"New-NetFirewallRule "
-            f"-DisplayName '{RULE_NAME}_v6' "
-            f"-Direction Outbound "
-            f"-Program '{steam_exe}' "
-            f"-RemoteAddress {','.join(VALVE_CIDRS_V6)} "
-            f"-Action Block -Profile Any "
-            f"-Enabled False"
-        )
-        run_ps(ipv6_cmd)  # best-effort, don't fail if IPv6 rule fails
+    if ok:
+        _make_v6_rule(steam_exe)
 
     return ok, (note if ok else (err2 or err))
 
@@ -3730,6 +3740,25 @@ if __name__ == "__main__":
                             r = verify(k, did)
                             if r.ok:
                                 save_session(r.session_token, r.token_expires, k, did)
+                                # Store + act on remaining license time reported
+                                # by /verify (task #3). Mirror the heartbeat logic.
+                                rem = getattr(r, "remaining_hours", None)
+                                if rem is not None:
+                                    try:
+                                        rem = float(rem)
+                                    except (TypeError, ValueError):
+                                        rem = None
+                                if rem is not None:
+                                    app._remaining_hours = rem
+                                    if rem <= 0:
+                                        app.after(0, app._on_time_expired)
+                                    elif rem < 2:
+                                        mins = int(rem * 60)
+                                        app.after(0, lambda m=mins: app._log(
+                                            f"⏰ Low time warning: {m}m of "
+                                            f"protection time remaining. Earn "
+                                            f"more via rewards at rivvak.app",
+                                            level="warn"))
                             else:
                                 # Membership lost — shut down gracefully
                                 app.after(0, lambda msg=r.error: (

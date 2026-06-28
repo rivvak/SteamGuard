@@ -41,7 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Request, Depends, Response
+from fastapi import FastAPI, HTTPException, Header, Request, Depends, Response, Body
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,6 +60,25 @@ YOUTUBE_CHANNEL_ID  = os.environ.get("YOUTUBE_CHANNEL_ID", "")  # Your YT channe
 
 MIN_SUPPORTED_VERSION = os.environ.get("MIN_SUPPORTED_VERSION", "1.0.0")
 DISCORD_WEBHOOK_URL   = os.environ.get("DISCORD_WEBHOOK_URL", "")
+
+def _read_app_version() -> str:
+    """Read the app version from version.txt (repo root), falling back gracefully."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        for candidate in (
+            os.path.join(here, "version.txt"),
+            os.path.join(here, "..", "version.txt"),
+        ):
+            if os.path.isfile(candidate):
+                with open(candidate, "r", encoding="utf-8") as fh:
+                    v = fh.read().strip()
+                    if v:
+                        return v
+    except Exception:
+        pass
+    return os.environ.get("APP_VERSION", "unknown")
+
+APP_VERSION = _read_app_version()
 
 # Comma-separated Discord user IDs that may reach the admin dashboard.
 ADMIN_USER_IDS = {
@@ -410,6 +429,7 @@ class GenerateRequest(BaseModel):
     discord_user_id:  str
     note:             str = ""
     days_valid:       int = 36500   # ~100 years = lifetime
+    admin_override:   bool = False  # bypass 1-key-per-user limit
 
 class HeartbeatRequest(BaseModel):
     key:              str
@@ -480,6 +500,63 @@ def _extend_key_expiry(discord_user_id: str, hours: float):
         doc.reference.update({"expires_at": base + timedelta(hours=hours)})
 
 
+def _compute_streak(rewards_data: dict, now: datetime = None) -> int:
+    """
+    Compute the current consecutive-day check-in streak.
+    Tracked via `last_check_in_date` (ISO date) + `current_streak` so we never
+    have to scan the audit log. Returns 0 if the streak has lapsed.
+    """
+    now = now or utcnow()
+    today = now.date()
+    last_date_str = rewards_data.get("last_check_in_date")
+    current = int(rewards_data.get("current_streak", 0) or 0)
+    if not last_date_str:
+        return 0
+    try:
+        last_date = datetime.fromisoformat(last_date_str).date()
+    except Exception:
+        return 0
+    gap = (today - last_date).days
+    # Alive only if the last check-in was today or yesterday.
+    return current if gap <= 1 else 0
+
+
+def _update_check_in_streak(rewards_data: dict, now: datetime = None):
+    """
+    Advance the daily check-in streak for THIS check-in.
+    Returns (new_streak, fields) where fields merge into the rewards doc.
+    Idempotent within the same UTC day.
+    """
+    now = now or utcnow()
+    today = now.date()
+    last_date_str = rewards_data.get("last_check_in_date")
+    current = int(rewards_data.get("current_streak", 0) or 0)
+    last_date = None
+    if last_date_str:
+        try:
+            last_date = datetime.fromisoformat(last_date_str).date()
+        except Exception:
+            last_date = None
+
+    if last_date is None:
+        new_streak = 1
+    else:
+        gap = (today - last_date).days
+        if gap == 0:
+            new_streak = max(current, 1)     # already checked in today
+        elif gap == 1:
+            new_streak = current + 1         # consecutive day
+        else:
+            new_streak = 1                   # streak broken, restart
+
+    longest = max(int(rewards_data.get("longest_streak", 0) or 0), new_streak)
+    return new_streak, {
+        "current_streak":     new_streak,
+        "longest_streak":     longest,
+        "last_check_in_date": today.isoformat(),
+    }
+
+
 def _grant_reward(discord_user_id: str, trigger: str, admin_override: bool = False) -> dict:
     """Grant bonus hours for a reward trigger. Returns result dict."""
     if trigger not in REWARDS:
@@ -514,12 +591,20 @@ def _grant_reward(discord_user_id: str, trigger: str, admin_override: bool = Fal
                     "reason": f"Cooldown active — {remaining}m remaining"}
 
     new_total = total_hours + hours
-    rewards_ref.set({
+    update_fields = {
         trigger_key:          utcnow(),
         count_key:            current_count + 1,
         "total_reward_hours": new_total,
         "last_updated":       utcnow(),
-    }, merge=True)
+    }
+
+    # Streak tracking for daily check-ins.
+    streak_now = int(rewards_data.get("current_streak", 0) or 0)
+    if trigger == "daily_check_in":
+        streak_now, streak_fields = _update_check_in_streak(rewards_data)
+        update_fields.update(streak_fields)
+
+    rewards_ref.set(update_fields, merge=True)
 
     _extend_key_expiry(discord_user_id, hours)
 
@@ -532,13 +617,32 @@ def _grant_reward(discord_user_id: str, trigger: str, admin_override: bool = Fal
     })
 
     LOG.info(f"Reward: {discord_user_id} +{hours}h for {trigger}")
-    return {
+    result = {
         "granted":          True,
         "hours":            hours,
         "description":      description,
         "reason":           f"+{hours}h — {description}",
         "new_total_hours":  new_total,
     }
+
+    # When a daily check-in pushes the streak to a multiple of 7, auto-grant
+    # the weekly_streak reward. admin_override bypasses weekly_streak's 168h
+    # cooldown because the streak counter already enforces "once per 7 days".
+    if trigger == "daily_check_in":
+        result["current_streak"] = streak_now
+        result["streak"] = streak_now
+        if streak_now > 0 and streak_now % 7 == 0:
+            streak_result = _grant_reward(discord_user_id, "weekly_streak",
+                                          admin_override=True)
+            if streak_result.get("granted"):
+                result["streak_bonus"] = streak_result
+                result["new_total_hours"] = streak_result.get(
+                    "new_total_hours", result["new_total_hours"])
+                result["reason"] += (
+                    f" · {streak_now}-day streak! "
+                    f"+{streak_result.get('hours', 0)}h streak bonus"
+                )
+    return result
 
 
 # ── /rewards/grant (admin) ────────────────────────────────────────────────────
@@ -556,37 +660,71 @@ async def grant_reward_endpoint(req: RewardGrantRequest, x_admin_key: str = Head
 
 # ── /rewards/status/{discord_user_id} ────────────────────────────────────────
 
+def _build_reward_triggers(data: dict) -> dict:
+    """
+    Build a clean, FLAT trigger map the frontend can render directly.
+
+    Every value in each trigger entry is a primitive (str / number / bool /
+    null) — there are no nested objects, so the dashboard never renders
+    `[object Object]`. We expose both the absolute next-available ISO string
+    AND a numeric `minutes_until_available` plus convenience booleans
+    (`on_cooldown`, `maxed`, `available`) so the UI needs no extra math.
+    """
+    now = utcnow()
+    triggers = {}
+    for trig, (hrs, desc, cd, mx) in REWARDS.items():
+        last_ts = data.get(f"reward_{trig}")
+        count   = int(data.get(f"reward_{trig}_count", 0) or 0)
+        next_avail_iso = None
+        minutes_until = None
+        if cd > 0 and isinstance(last_ts, datetime):
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            na = last_ts + timedelta(hours=cd)
+            if now < na:
+                next_avail_iso = na.isoformat()
+                minutes_until  = int((na - now).total_seconds() / 60)
+        maxed       = mx != -1 and count >= mx
+        on_cooldown = minutes_until is not None
+        triggers[trig] = {
+            "trigger":        trig,                 # flat: include the key itself
+            "description":    str(desc),            # always a plain string
+            "hours_per_use":  hrs,
+            "times_claimed":  count,
+            "cooldown_hours": cd,
+            "max_per_user":   mx,
+            "next_available": next_avail_iso,       # ISO string or null
+            "minutes_until_available": minutes_until,   # int or null
+            "on_cooldown":    on_cooldown,
+            "maxed":          maxed,
+            "available":      (not on_cooldown) and (not maxed),
+        }
+    return triggers
+
+
 @app.get("/rewards/status/{discord_user_id}")
 async def reward_status(discord_user_id: str):
     if _is_owner(discord_user_id):
         return {"is_owner": True, "total_reward_hours": 999999,
-                "remaining_hours": 999999, "triggers": {}}
-    ref  = db.collection(REWARDS_COL).document(discord_user_id)
-    doc  = ref.get()
-    data = doc.to_dict() if doc.exists else {}
-    total = data.get("total_reward_hours", 0.0)
-    triggers = {}
-    for trig, (hrs, desc, cd, mx) in REWARDS.items():
-        last_ts = data.get(f"reward_{trig}")
-        count   = data.get(f"reward_{trig}_count", 0)
-        # Compute next available time
-        next_avail = None
-        if cd > 0 and last_ts and isinstance(last_ts, datetime):
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            na = last_ts + timedelta(hours=cd)
-            if utcnow() < na:
-                next_avail = na.isoformat()
-        triggers[trig] = {
-            "description":   desc,
-            "hours_per_use": hrs,
-            "times_claimed": count,
-            "cooldown_hours": cd,
-            "max_per_user":  mx,
-            "next_available": next_avail,
+                "remaining_hours": 999999, "current_streak": 0,
+                "longest_streak": 0, "triggers": {}}
+    try:
+        ref  = db.collection(REWARDS_COL).document(discord_user_id)
+        doc  = ref.get()
+        data = doc.to_dict() if doc.exists else {}
+        total = data.get("total_reward_hours", 0.0)
+        triggers = _build_reward_triggers(data)
+        return {
+            "is_owner":           False,
+            "total_reward_hours": total,
+            "remaining_hours":    total,
+            "current_streak":     _compute_streak(data),
+            "longest_streak":     int(data.get("longest_streak", 0) or 0),
+            "triggers":           triggers,
         }
-    return {"is_owner": False, "total_reward_hours": total,
-            "remaining_hours": total, "triggers": triggers}
+    except Exception as e:
+        LOG.warning(f"reward_status failed for {discord_user_id}: {e}")
+        raise HTTPException(status_code=503, detail="Reward service temporarily unavailable")
 
 
 # ── /rewards/check-in ────────────────────────────────────────────────────────
@@ -606,7 +744,12 @@ async def daily_check_in(req: CheckInRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ts": utcnow().isoformat()}
+    return {
+        "status":    "ok",
+        "ts":        utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
+        "version":   APP_VERSION,
+    }
 
 # ── /activate ─────────────────────────────────────────────────────────────────
 
@@ -654,6 +797,23 @@ async def activate(req: ActivateRequest):
         _log_event(key_hash, "discord_role_missing", {"uid": req.discord_user_id})
         raise HTTPException(status_code=403,
             detail="You must be a member of the Discord server with the required role")
+
+    # 4b. Enforce 1-key-per-Discord-user (skip owners).
+    # Catches users trying to share keys by changing their Discord ID.
+    if req.discord_user_id not in [str(x) for x in OWNER_DISCORD_IDS]:
+        existing_for_discord = (db.collection(LICENSES_COL)
+            .where("discord_user_id", "==", req.discord_user_id)
+            .where("revoked", "==", False)
+            .stream())
+
+        for existing_doc in existing_for_discord:
+            if existing_doc.id != key_hash:  # Different key
+                _log_event(key_hash, "duplicate_discord_id", {"uid": req.discord_user_id})
+                raise HTTPException(
+                    status_code=409,
+                    detail="This Discord account is already linked to another active key. "
+                           "Each account may only have one key."
+                )
 
     # 5. Bind HWID + Discord ID, issue session token
     token = _make_session_token(key_hash, req.hwid)
@@ -760,10 +920,18 @@ async def verify(req: VerifyRequest):
         "verify_count":  firestore.Increment(1),
     })
 
+    # Compute remaining license time so the client can warn/stop on expiry.
+    if isinstance(expires_at, datetime):
+        remaining_seconds = (expires_at - utcnow()).total_seconds()
+    else:
+        remaining_seconds = 0.0
+    remaining_hours = max(0.0, remaining_seconds / 3600)
+
     return {
-        "valid":         True,
-        "session_token": token,
-        "token_expires": token_expires.isoformat(),
+        "valid":           True,
+        "session_token":   token,
+        "token_expires":   token_expires.isoformat(),
+        "remaining_hours": remaining_hours,
     }
 
 # ── /revoke (admin) ───────────────────────────────────────────────────────────
@@ -786,6 +954,23 @@ async def revoke(req: RevokeRequest, x_admin_key: str = Header(None)):
 @app.post("/generate")
 async def generate(req: GenerateRequest, x_admin_key: str = Header(None)):
     _require_admin(x_admin_key)
+
+    # Check 1-key-per-user limit (skip for admins/owners and explicit override)
+    if (req.discord_user_id
+            and not req.admin_override
+            and req.discord_user_id not in [str(x) for x in OWNER_DISCORD_IDS]):
+        existing = (db.collection(LICENSES_COL)
+                      .where("discord_user_id", "==", req.discord_user_id)
+                      .where("revoked", "==", False)
+                      .limit(1)
+                      .get())
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"User {req.discord_user_id} already has an active key. "
+                       "Revoke the existing key first, or use admin_override=true to bypass."
+            )
+
     key      = _generate_key()
     key_hash = _key_hash(key)
     expires  = utcnow() + timedelta(days=req.days_valid)
@@ -1017,25 +1202,53 @@ async def key_info_by_discord(discord_user_id: str,
                                x_admin_key: str = Header(None)):
     """Get all keys for a specific Discord user ID."""
     _require_admin(x_admin_key)
-    docs = (db.collection(LICENSES_COL)
-              .where("discord_user_id", "==", discord_user_id)
-              .stream())
-    results = []
+    try:
+        docs = (db.collection(LICENSES_COL)
+                  .where("discord_user_id", "==", discord_user_id)
+                  .stream())
+        results = []
+        for doc in docs:
+            d = doc.to_dict()
+            status = "active"
+            if d.get("revoked"):  status = "revoked"
+            elif d.get("paused"): status = "paused"
+            results.append({
+                "key_hash":      doc.id[:16] + "…",
+                "status":        status,
+                "hwid_bound":    bool(d.get("hwid")),
+                "created_at":    _fmt_dt(d.get("created_at")),
+                "last_verified": _time_ago(d.get("last_verified")),
+                "verify_count":  d.get("verify_count", 0),
+                "pause_reason":  d.get("pause_reason"),
+            })
+        return {"discord_user_id": discord_user_id, "keys": results}
+    except HTTPException:
+        raise
+    except Exception as e:
+        LOG.warning(f"key_info_by_discord failed for {discord_user_id}: {e}")
+        raise HTTPException(status_code=503, detail="License service temporarily unavailable")
+
+# ── /admin/user-keys/{discord_user_id} (admin) ───────────────────────────────
+
+@app.get("/admin/user-keys/{discord_user_id}")
+async def user_keys(discord_user_id: str, x_admin_key: str = Header(None)):
+    """Return all keys (active and revoked) for a Discord user so admins can
+    audit multi-key situations."""
+    _require_admin(x_admin_key)
+    docs = db.collection(LICENSES_COL).where("discord_user_id", "==", discord_user_id).stream()
+    keys = []
     for doc in docs:
         d = doc.to_dict()
-        status = "active"
-        if d.get("revoked"):  status = "revoked"
-        elif d.get("paused"): status = "paused"
-        results.append({
-            "key_hash":      doc.id[:16] + "…",
-            "status":        status,
-            "hwid_bound":    bool(d.get("hwid")),
-            "created_at":    _fmt_dt(d.get("created_at")),
-            "last_verified": _time_ago(d.get("last_verified")),
-            "verify_count":  d.get("verify_count", 0),
-            "pause_reason":  d.get("pause_reason"),
+        keys.append({
+            "key_hash": doc.id,
+            "revoked": d.get("revoked", False),
+            "paused": d.get("paused", False),
+            "created_at": d.get("created_at", "").isoformat() if d.get("created_at") else None,
+            "expires_at": d.get("expires_at", "").isoformat() if d.get("expires_at") else None,
+            "hwid_bound": bool(d.get("hwid")),
+            "note": d.get("note", ""),
         })
-    return {"discord_user_id": discord_user_id, "keys": results}
+    return {"discord_user_id": discord_user_id, "keys": keys}
 
 # ── /youtube/store-token (called by bot after OAuth) ─────────────────────────
 
@@ -1660,6 +1873,32 @@ async def get_leaderboard():
         return {"week": _get_iso_week(), "top10": [], "error": str(e)}
 
 
+# ── GET /leaderboard/rewards ──────────────────────────────────────────────────
+# NOTE: The task asked for `GET /leaderboard` ranked by total_reward_hours, but
+# `GET /leaderboard` already exists (weekly heals). To avoid shadowing that
+# route, the rewards leaderboard is exposed here at /leaderboard/rewards.
+
+@app.get("/leaderboard/rewards")
+async def rewards_leaderboard():
+    """Top 10 users by total_reward_hours (all-time bonus hours earned)."""
+    results = []
+    try:
+        docs = (db.collection(REWARDS_COL)
+                  .order_by("total_reward_hours",
+                            direction=firestore.Query.DESCENDING)
+                  .limit(10).stream())
+        for doc in docs:
+            data = doc.to_dict() or {}
+            results.append({
+                "discord_user_id":    doc.id,
+                "total_reward_hours": data.get("total_reward_hours", 0),
+                "current_streak":     _compute_streak(data),
+            })
+    except Exception as e:
+        LOG.warning(f"Rewards leaderboard read failed: {e}")
+    return {"leaderboard": results}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # WEB DASHBOARD ENDPOINTS
 # Static dashboard (Cloudflare Pages) -> these JSON endpoints (CORS-enabled).
@@ -1916,6 +2155,8 @@ async def me_overview(user=Depends(_get_current_user)):
     else:
         created_iso = None
 
+    current_streak = _compute_streak(rewards_data)
+    streak_goal = 7
     return {
         "discord_user_id": discord_id,
         "tier": tier,
@@ -1927,6 +2168,11 @@ async def me_overview(user=Depends(_get_current_user)):
         "paused": key_doc.get("paused", False),
         "revoked": key_doc.get("revoked", False),
         "current_game": rewards_data.get("current_game") or key_doc.get("current_game"),
+        # Streak data for the overview streak indicator.
+        "current_streak": current_streak,
+        "longest_streak": int(rewards_data.get("longest_streak", 0) or 0),
+        "streak_goal": streak_goal,
+        "streak_progress": min(current_streak, streak_goal) / streak_goal if streak_goal else 0,
     }
 
 
@@ -1937,26 +2183,99 @@ async def me_rewards(user=Depends(_get_current_user)):
     doc = ref.get()
     data = doc.to_dict() if doc.exists else {}
     total = data.get("total_reward_hours", 0.0)
-    result = {"total_reward_hours": total, "triggers": {}}
-    for trigger, (hrs, desc, cd, mx) in REWARDS.items():
-        last_ts = data.get(f"reward_{trigger}")
-        count   = data.get(f"reward_{trigger}_count", 0)
-        next_avail = None
-        if cd > 0 and last_ts and isinstance(last_ts, datetime):
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            na = last_ts + timedelta(hours=cd)
-            if utcnow() < na:
-                next_avail = int((na - utcnow()).total_seconds() / 60)
-        result["triggers"][trigger] = {
-            "description": desc,
-            "hours_per_use": hrs,
-            "times_claimed": count,
-            "cooldown_hours": cd,
-            "max_per_user": mx,
-            "minutes_until_available": next_avail,
+    # Reuse the shared flat builder so the dashboard always gets primitives
+    # (no nested objects -> no `[object Object]`).
+    return {
+        "total_reward_hours": total,
+        "current_streak":     _compute_streak(data),
+        "longest_streak":     int(data.get("longest_streak", 0) or 0),
+        "triggers":           _build_reward_triggers(data),
+    }
+
+
+# Triggers a dashboard user is allowed to self-claim with only a JWT.
+# Anything not listed here must come from a server-side event or an admin
+# (e.g. invite_friend, weekly_streak, server_boost, bug_report, first_heal).
+SELF_CLAIMABLE_TRIGGERS = {"daily_check_in", "youtube_sub", "share_card_post"}
+
+
+@app.post("/me/rewards/claim")
+async def claim_reward(
+    payload: dict = Body(...),
+    current_user = Depends(_get_current_user),
+):
+    """
+    JWT-authenticated reward claim used by the web dashboard (Bearer token,
+    same auth as /me/overview). Replaces the old HMAC /rewards/check-in and the
+    admin-key /rewards/grant calls the dashboard used to make.
+    """
+    trigger = payload.get("trigger")
+    if not trigger:
+        raise HTTPException(status_code=400, detail="trigger required")
+    # The JWT payload carries the Discord id in `sub`.
+    discord_id = current_user.get("sub") or current_user.get("discord_id")
+    if not discord_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if trigger not in SELF_CLAIMABLE_TRIGGERS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"'{trigger}' cannot be self-claimed from the dashboard")
+    return _grant_reward(discord_id, trigger)
+
+
+@app.get("/referral/my-code/{discord_user_id}")
+async def referral_my_code(discord_user_id: str):
+    """
+    Return the user's referral code, auto-creating one on first view.
+    New codes are a random 6-char alphanumeric body prefixed with "RC-".
+    Also returns referral stats (valid / pending / earned hours).
+    """
+    # 1. Look for an existing code owned by this user.
+    code = None
+    code_data = {}
+    try:
+        existing = list(
+            db.collection(REFERRAL_CODES_COL)
+              .where("owner_discord_id", "==", discord_user_id)
+              .limit(1).stream())
+        if existing:
+            code_data = existing[0].to_dict() or {}
+            code = code_data.get("code", existing[0].id)
+    except Exception as e:
+        LOG.warning(f"my-code lookup failed: {e}")
+
+    # 2. Auto-create if none exists.
+    if not code:
+        import string as _string
+        alphabet = _string.ascii_uppercase + _string.digits
+        code = "RC-" + "".join(secrets.choice(alphabet) for _ in range(6))
+        code_data = {
+            "code":              code,
+            "owner_discord_id":  discord_user_id,
+            "valid_referrals":   0,
+            "pending_referrals": 0,
+            "uses_count":        0,
+            "created_at":        utcnow(),
         }
-    return result
+        try:
+            db.collection(REFERRAL_CODES_COL).document(code).set(code_data)
+            _log_event("referral", "referral_code_autocreated", {
+                "owner_discord_id": discord_user_id, "code": code,
+            })
+        except Exception as e:
+            LOG.warning(f"my-code create failed: {e}")
+            raise HTTPException(status_code=500,
+                                detail="Failed to create referral code")
+
+    valid   = int(code_data.get("valid_referrals", code_data.get("uses_count", 0)) or 0)
+    pending = int(code_data.get("pending_referrals", 0) or 0)
+    return {
+        "code":              code,
+        "referral_link":     f"https://discord.gg/RTHM8YhpE?ref={code}",
+        "valid_referrals":   valid,
+        "pending_referrals": pending,
+        "earned_hours":      valid * 3.0,
+    }
 
 
 @app.get("/me/referrals")
@@ -2103,3 +2422,86 @@ async def admin_events(user=Depends(_require_admin_jwt), limit: int = 10):
     except Exception as e:
         LOG.warning(f"admin_events read failed: {e}")
     return {"events": events}
+
+
+# ── Dashboard admin moderation endpoints (JWT-authed) ─────────────────────────
+# The web dashboard authenticates with a Bearer JWT (see _require_admin_jwt),
+# not the legacy x-admin-key header. These endpoints let the admin panel pause,
+# unpause, and revoke a user's keys directly from the Users & Keys table, which
+# only has the Discord user id and the masked/hashed key available client-side.
+
+class AdminPauseByDiscordRequest(BaseModel):
+    discord_user_id: str
+    reason: str = "Suspended by admin"
+
+
+@app.post("/admin/pause-by-discord")
+async def admin_pause_by_discord(req: AdminPauseByDiscordRequest,
+                                 user=Depends(_require_admin_jwt)):
+    """Pause every active (non-revoked) license for a Discord user."""
+    docs = (db.collection(LICENSES_COL)
+              .where("discord_user_id", "==", req.discord_user_id)
+              .where("revoked", "==", False)
+              .stream())
+    count = 0
+    for doc in docs:
+        doc.reference.update({
+            "paused":       True,
+            "pause_reason": req.reason,
+            "paused_at":    utcnow(),
+        })
+        # Kill any active session so the client stops immediately.
+        db.collection(SESSIONS_COL).document(doc.id).delete()
+        _log_event(doc.id, "paused_by_discord", {"reason": req.reason})
+        count += 1
+    return {"paused_count": count}
+
+
+class AdminUnpauseByDiscordRequest(BaseModel):
+    discord_user_id: str
+
+
+@app.post("/admin/unpause-by-discord")
+async def admin_unpause_by_discord(req: AdminUnpauseByDiscordRequest,
+                                   user=Depends(_require_admin_jwt)):
+    """Resume every paused license for a Discord user."""
+    docs = (db.collection(LICENSES_COL)
+              .where("discord_user_id", "==", req.discord_user_id)
+              .where("paused", "==", True)
+              .stream())
+    count = 0
+    for doc in docs:
+        doc.reference.update({
+            "paused":       False,
+            "pause_reason": None,
+            "paused_at":    None,
+        })
+        _log_event(doc.id, "unpaused_by_discord", {})
+        count += 1
+    return {"unpaused_count": count}
+
+
+class AdminRevokeByDiscordRequest(BaseModel):
+    discord_user_id: str
+    reason: str = "Revoked by admin"
+
+
+@app.post("/admin/revoke-by-discord")
+async def admin_revoke_by_discord(req: AdminRevokeByDiscordRequest,
+                                  user=Depends(_require_admin_jwt)):
+    """Permanently revoke every active license for a Discord user."""
+    docs = (db.collection(LICENSES_COL)
+              .where("discord_user_id", "==", req.discord_user_id)
+              .where("revoked", "==", False)
+              .stream())
+    count = 0
+    for doc in docs:
+        doc.reference.update({
+            "revoked":       True,
+            "revoke_reason": req.reason,
+            "revoked_at":    utcnow(),
+        })
+        db.collection(SESSIONS_COL).document(doc.id).delete()
+        _log_event(doc.id, "revoked_by_discord", {"reason": req.reason})
+        count += 1
+    return {"revoked_count": count}

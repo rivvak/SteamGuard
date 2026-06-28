@@ -16,6 +16,25 @@
     /* System font stack — loads instantly, looks great on all platforms */
     :root { --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
     body { font-family: var(--font-sans); }
+
+    /* Check-in streak indicator */
+    .streak-progress-track {
+      width: 100%; height: 8px; border-radius: 999px;
+      background: var(--border, rgba(255,255,255,.12)); overflow: hidden;
+    }
+    .streak-progress-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent, #3da9fc), var(--neon, #6ee7b7));
+      transition: width .5s ease;
+    }
+    .streak-flame { display: inline-block; filter: grayscale(1); opacity: .5;
+      transition: filter .3s ease, opacity .3s ease; }
+    /* Animate the flame once the streak is hot (>= 3 days) */
+    .streak-flame.is-hot { filter: none; opacity: 1; animation: flameFlicker 1.1s ease-in-out infinite; }
+    @keyframes flameFlicker {
+      0%, 100% { transform: scale(1) rotate(-2deg); }
+      50%      { transform: scale(1.18) rotate(2deg); }
+    }
   </style>
 </head>
 <body>
@@ -63,6 +82,16 @@
             <p class="text-muted text-sm mt-0.5" id="welcome-sub">Here's your protection at a glance.</p>
           </header>
 
+          <!-- Real-time protection status banner -->
+          <div id="protection-banner" class="protection-banner disconnected">
+            <div class="pb-icon"><i class="fa-solid fa-shield-halved" id="pb-glyph"></i></div>
+            <div class="flex-1">
+              <div class="pb-title" id="pb-title">Checking protection status…</div>
+              <div class="pb-sub" id="pb-sub">Connecting to the SteamGuard service.</div>
+            </div>
+            <span class="status-dot" id="pb-dot" style="width:12px;height:12px"></span>
+          </div>
+
           <!-- stat cards -->
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="stat-cards">
             <div class="card card-hover p-5">
@@ -95,6 +124,26 @@
                 <i class="fa-solid fa-calendar-day text-muted"></i>
               </div>
               <div class="stat-value text-base" id="stat-since" style="font-size:1.1rem">—</div>
+            </div>
+          </div>
+
+          <!-- check-in streak indicator -->
+          <div id="streak-card" class="card p-5 mb-6">
+            <div class="flex items-center justify-between gap-4 flex-wrap">
+              <div class="flex items-center gap-3">
+                <span id="streak-flame" class="streak-flame text-2xl">🔥</span>
+                <div>
+                  <div class="font-bold" id="streak-title">0-day check-in streak</div>
+                  <div class="text-muted text-xs" id="streak-sub">Check in daily to build your streak toward the 7-day reward.</div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="stat-label">Next reward</div>
+                <div class="font-semibold text-neon" id="streak-goal-label">7-day streak → +5h</div>
+              </div>
+            </div>
+            <div class="streak-progress-track mt-3">
+              <div id="streak-progress-bar" class="streak-progress-fill" style="width:0%"></div>
             </div>
           </div>
 
@@ -167,7 +216,11 @@
           </header>
 
           <div class="card p-5 mb-4">
-            <span class="stat-label">Your Referral Link</span>
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="stat-label">Your Referral Code</span>
+              <span id="ref-code" class="badge badge-premium mono" style="font-size:.85rem;letter-spacing:.08em">—</span>
+            </div>
+            <span class="stat-label block mt-4">Your Referral Link</span>
             <div class="flex flex-col sm:flex-row gap-2 mt-2">
               <input id="ref-link" class="field mono flex-1" readonly value="—" />
               <button id="copy-link" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('ref-link').value, this)">
@@ -321,9 +374,45 @@
       // upgrade banner
       document.getElementById('upgrade-banner').classList.toggle('hidden', isPremium);
 
+      // check-in streak indicator
+      renderStreak(o);
+
       // settings
       document.getElementById('set-discord').textContent = o.discord_user_id || '—';
       document.getElementById('set-tier').textContent = isPremium ? 'Premium' : 'Free';
+    }
+
+    /* ---- streak indicator (overview) ---- */
+    function renderStreak(o) {
+      const streak = Math.max(0, o.current_streak ?? 0);
+      const goal   = o.streak_goal || 7;
+      const titleEl = document.getElementById('streak-title');
+      const subEl   = document.getElementById('streak-sub');
+      const flameEl = document.getElementById('streak-flame');
+      const barEl   = document.getElementById('streak-progress-bar');
+      const goalEl  = document.getElementById('streak-goal-label');
+      if (!titleEl) return;
+
+      titleEl.textContent = `${streak}-day check-in streak`;
+      // Progress toward the 7-day reward (server may also send streak_progress).
+      const withinGoal = streak % goal === 0 && streak > 0 ? goal : streak % goal;
+      const pct = o.streak_progress != null
+        ? Math.min(100, Math.round(o.streak_progress * 100))
+        : Math.min(100, Math.round((withinGoal / goal) * 100));
+      barEl.style.width = `${pct}%`;
+      goalEl.textContent = `${goal}-day streak → +5h`;
+
+      const remaining = (goal - (streak % goal || goal)) % goal;
+      if (streak === 0) {
+        subEl.textContent = 'Check in daily to start your streak toward the 7-day reward.';
+      } else if (remaining === 0) {
+        subEl.textContent = `🎉 ${streak}-day streak — streak reward unlocked! Keep going.`;
+      } else {
+        subEl.textContent = `${remaining} more day${remaining === 1 ? '' : 's'} until your +5h streak reward.`;
+      }
+
+      // Flame animation once the streak is hot (>= 3 days).
+      flameEl.classList.toggle('is-hot', streak >= 3);
     }
 
     // Which triggers users can self-claim from the dashboard
@@ -338,31 +427,46 @@
       server_boost:    null, // admin grants only
     };
 
+    // Format hours into a short label: +30m, +2h, +1h 30m.
+    function rewardAmountLabel(hours) {
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      if (h <= 0) return `+${m}m`;
+      if (m === 0) return `+${h}h`;
+      return `+${h}h ${m}m`;
+    }
+
+    // Format minutes-remaining into "Cooldown: Xh Ym".
+    function cooldownLabel(minutes) {
+      const hrs = Math.floor(minutes / 60), mins = minutes % 60;
+      const t = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+      return `Cooldown: ${t}`;
+    }
+
     function renderRewards(r) {
       if (!r) return;
-      const total = r.total_reward_hours ?? 0;
-      document.getElementById('total-reward-hours').textContent = total ? `Total earned: +${total}h` : '';
+      // Total time earned from rewards — counter at the top of the section.
+      const total = +(r.total_reward_hours ?? 0);
+      document.getElementById('total-reward-hours').textContent =
+        `Total time earned from rewards: +${total.toFixed(1)}h`;
       const grid = document.getElementById('rewards-grid');
       grid.innerHTML = '';
       Object.entries(r.triggers || {}).forEach(([key, t]) => {
         const icon = REWARD_ICONS[key] || 'fa-star';
         const name = REWARD_NAMES[key] || key;
-        // Fix [object Object] — ensure description is a plain string
+        // Backend now sends a plain string; guard anyway so we never render [object Object].
         const desc = typeof t.description === 'string' ? t.description : String(t.description || '');
         const cd = t.minutes_until_available;
-        const onCooldown = cd !== null && cd !== undefined;
-        const maxed = t.max_per_user > 0 && t.times_claimed >= t.max_per_user;
-        const hoursLabel = t.hours_per_use >= 1 ? `+${t.hours_per_use}h` : `+${Math.round(t.hours_per_use * 60)}m`;
+        const onCooldown = (t.on_cooldown === true) || (cd !== null && cd !== undefined);
+        const maxed = (t.maxed === true) || (t.max_per_user > 0 && t.times_claimed >= t.max_per_user);
+        const hoursLabel = rewardAmountLabel(t.hours_per_use);
         const claimLabel = SELF_CLAIM_TRIGGERS[key];
-        const canClaim = claimLabel && !onCooldown && !maxed;
 
         let actionHTML;
         if (maxed) {
-          actionHTML = `<span class="badge badge-active" style="background:rgba(168,85,247,.18);color:#a855f7"><i class="fa-solid fa-trophy"></i> Maxed</span>`;
+          actionHTML = `<span class="badge badge-active" style="background:rgba(168,85,247,.18);color:#a855f7"><i class="fa-solid fa-trophy"></i> Max reached</span>`;
         } else if (onCooldown) {
-          const hrs = Math.floor(cd / 60), mins = cd % 60;
-          const cdText = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
-          actionHTML = `<span class="badge badge-paused"><i class="fa-solid fa-clock"></i> ${cdText}</span>`;
+          actionHTML = `<span class="badge badge-paused"><i class="fa-solid fa-clock"></i> ${cooldownLabel(cd ?? 0)}</span>`;
         } else if (claimLabel) {
           actionHTML = `<button class="btn btn-primary" style="padding:4px 12px;font-size:12px" data-claim="${key}"><i class="fa-solid fa-circle-check"></i> ${claimLabel}</button>`;
         } else {
@@ -370,7 +474,7 @@
         }
 
         const card = document.createElement('div');
-        card.className = 'card card-hover p-5 flex flex-col';
+        card.className = 'card card-hover reward-card p-5 flex flex-col';
         card.innerHTML = `
           <div class="flex items-center justify-between mb-3">
             <div class="rc-logo" style="background:rgba(61,169,252,.14);color:var(--accent)"><i class="fa-solid ${icon}"></i></div>
@@ -385,42 +489,50 @@
         grid.appendChild(card);
       });
 
-      // Wire claim buttons
+      // Wire claim buttons -> POST /me/rewards/claim (JWT Bearer auth).
       grid.querySelectorAll('[data-claim]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const trigger = btn.dataset.claim;
+          const origHTML = btn.innerHTML;
           btn.disabled = true;
-          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+          // Loading spinner on the card while the request is processing.
+          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming…';
           try {
-            let res;
-            if (trigger === 'daily_check_in') {
-              const user = getUser();
-              const key  = localStorage.getItem('sg_key') || '';
-              res = await apiFetch('/rewards/check-in', {
-                method: 'POST',
-                body: JSON.stringify({ discord_user_id: user.discord_user_id, key, sig: '' }),
-              });
-            } else {
-              res = await apiFetch('/rewards/grant', {
-                method: 'POST',
-                body: JSON.stringify({ discord_user_id: getUser().discord_user_id, trigger }),
-              });
-            }
+            const res = await apiFetch('/me/rewards/claim', {
+              method: 'POST',
+              body: JSON.stringify({ trigger }),
+            });
             if (res && res.granted) {
-              showToast(`✅ ${res.reason || 'Reward claimed!'}`, 'success');
-              // Reload rewards after a short delay
+              // Morph the button: spinner -> success checkmark.
+              btn.classList.add('claim-success');
+              btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Claimed!';
+              // Success toast showing the hours/minutes gained.
+              const gained = rewardAmountLabel(res.hours ?? 0);
+              let msg = `🎁 Claimed ${gained}!`;
+              if (res.streak_bonus && res.streak_bonus.granted) {
+                msg += ` 🔥 ${res.current_streak}-day streak bonus +${res.streak_bonus.hours}h!`;
+              } else if (res.current_streak) {
+                msg += ` 🔥 ${res.current_streak}-day streak`;
+              }
+              showToast(msg, 'success');
+              // Reload rewards + overview (for the streak indicator) shortly after.
               setTimeout(async () => {
-                const rw = await apiFetch('/me/rewards');
-                if (rw) renderRewards(rw);
-              }, 800);
+                const [rw, ov] = await Promise.all([
+                  apiFetch('/me/rewards'),
+                  apiFetch('/me/overview'),
+                ]);
+                if (rw) { state.rewards = rw; renderRewards(rw); }
+                if (ov) { state.overview = ov; renderOverview(ov); }
+              }, 1100);
             } else {
-              showToast(res?.reason || 'Could not claim — try later.', 'error');
+              showToast(res?.reason || res?.detail || 'Could not claim — try later.', 'error');
               btn.disabled = false;
-              btn.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${SELF_CLAIM_TRIGGERS[trigger]}`;
+              btn.innerHTML = origHTML;
             }
           } catch (e) {
             showToast('Network error.', 'error');
             btn.disabled = false;
+            btn.innerHTML = origHTML;
           }
         });
       });
@@ -437,6 +549,13 @@
       }
       const link = ref.referral_link || `https://discord.gg/RTHM8YhpE`;
       document.getElementById('ref-link').value = link;
+      // Referral code display — derive from the link if the API didn't send one.
+      let code = ref.code;
+      if (!code && ref.referral_link) {
+        const m = ref.referral_link.match(/[?&](?:ref|code)=([^&]+)/i) || ref.referral_link.match(/\/([^\/?#]+)$/);
+        if (m) code = decodeURIComponent(m[1]);
+      }
+      document.getElementById('ref-code').textContent = code || 'Generating…';
       document.getElementById('ref-valid').textContent = ref.valid_referrals ?? 0;
       document.getElementById('ref-pending').textContent = ref.pending_referrals ?? 0;
       document.getElementById('ref-earned').textContent = `${ref.earned_hours ?? 0}h`;
@@ -474,40 +593,75 @@
       if (st) { state.stats = st;    renderStats(st); }
     }
 
+    /* ---- protection status banner ---- */
+    function setProtectionBanner(connected) {
+      const banner = document.getElementById('protection-banner');
+      const dot    = document.getElementById('pb-dot');
+      const glyph  = document.getElementById('pb-glyph');
+      if (!banner) return;
+      if (connected) {
+        banner.classList.remove('disconnected');
+        banner.classList.add('connected');
+        document.getElementById('pb-title').textContent = 'Protected · Connected';
+        document.getElementById('pb-sub').textContent = 'SteamGuard is online and actively protecting your games.';
+        dot.className = 'status-dot ok';
+        glyph.className = 'fa-solid fa-shield-halved';
+      } else {
+        banner.classList.remove('connected');
+        banner.classList.add('disconnected');
+        document.getElementById('pb-title').textContent = 'Disconnected';
+        document.getElementById('pb-sub').textContent = 'Cannot reach the SteamGuard service. Protection may be paused.';
+        dot.className = 'status-dot err';
+        glyph.className = 'fa-solid fa-shield';
+      }
+    }
+
     /* ---- health poll ---- */
     async function pollHealth() {
+      let ok = false;
       try {
         const res = await fetch(`${API_BASE}/health`);
-        const ok = res.ok;
-        ['dot-firewall', 'dot-heal', 'dot-network'].forEach((id) => {
-          const el = document.getElementById(id);
-          el.className = `status-dot ${ok ? 'ok' : 'err'}`;
-        });
-        if (!ok) {
-          document.getElementById('txt-firewall').textContent = 'Degraded';
-          document.getElementById('txt-network').textContent = 'Unstable';
-        }
+        ok = res.ok;
       } catch {
-        ['dot-firewall', 'dot-heal', 'dot-network'].forEach((id) =>
-          document.getElementById(id).className = 'status-dot err');
+        ok = false;
       }
+      ['dot-firewall', 'dot-heal', 'dot-network'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.className = `status-dot ${ok ? 'ok' : 'err'}`;
+      });
+      if (!ok) {
+        document.getElementById('txt-firewall').textContent = 'Degraded';
+        document.getElementById('txt-network').textContent = 'Unstable';
+      } else {
+        document.getElementById('txt-firewall').textContent = 'Active';
+        document.getElementById('txt-network').textContent = 'Stable';
+      }
+      setProtectionBanner(ok);
     }
 
     /* ---- actions ---- */
     document.getElementById('checkin-btn').addEventListener('click', async (e) => {
       const btn = e.currentTarget; btn.disabled = true;
-      const u = getUser();
-      const res = await apiFetch('/rewards/check-in', {
-        method: 'POST', body: JSON.stringify({ discord_user_id: u.discord_user_id }),
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming…';
+      // Daily check-in now uses the JWT claim endpoint (no HMAC needed).
+      const res = await apiFetch('/me/rewards/claim', {
+        method: 'POST', body: JSON.stringify({ trigger: 'daily_check_in' }),
       });
-      if (res && (res.granted || res.success || res.total_reward_hours !== undefined)) {
-        showToast('Daily check-in claimed! +30m', 'success');
-      } else if (res && res.detail) {
-        showToast(res.detail, 'info');
+      if (res && res.granted) {
+        const gained = rewardAmountLabel(res.hours ?? 0.5);
+        let msg = `Daily check-in claimed! ${gained}`;
+        if (res.streak_bonus && res.streak_bonus.granted) {
+          msg += ` 🔥 ${res.current_streak}-day streak bonus +${res.streak_bonus.hours}h!`;
+        } else if (res.current_streak) {
+          msg += ` 🔥 ${res.current_streak}-day streak`;
+        }
+        showToast(msg, 'success');
       } else {
-        showToast('Check-in not available right now.', 'info');
+        showToast(res?.reason || res?.detail || 'Check-in not available right now.', 'info');
       }
       btn.disabled = false;
+      btn.innerHTML = orig;
       loadAll();
     });
 

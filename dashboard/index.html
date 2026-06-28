@@ -38,8 +38,12 @@
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
 
-  <!-- ambient glow -->
-  <div class="pointer-events-none fixed inset-0 -z-10"></div>
+  <!-- animated ambient background (CSS-only moving gradient blobs) -->
+  <div class="bg-blobs" aria-hidden="true">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+    <span class="blob blob-3"></span>
+  </div>
 
   <main class="w-full max-w-md fade-in">
     <!-- Brand -->
@@ -125,7 +129,11 @@
     });
 
     // Discord OAuth — backend starts the authorization-code flow.
-    document.getElementById('discord-btn').addEventListener('click', () => {
+    const discordBtn = document.getElementById('discord-btn');
+    discordBtn.addEventListener('click', () => {
+      // Loading state while the browser navigates to Discord's OAuth page.
+      discordBtn.disabled = true;
+      discordBtn.innerHTML = '<i class="fa-solid fa-spinner spin"></i> Redirecting to Discord…';
       // The FastAPI service exposes /auth/discord to begin the OAuth handshake.
       window.location.href = `${API_BASE}/auth/discord/start`;
     });

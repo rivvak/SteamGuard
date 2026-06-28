@@ -35,7 +35,15 @@ LOG = logging.getLogger("sg-client")
 
 # ── Server Configuration ──────────────────────────────────────────────────────
 
-_SERVER_URL  = "https://steamguard-775181381055.us-central1.run.app"
+# Primary API endpoint. rivvak.app is the public-facing brand domain, but the
+# license API is served from this Cloud Run URL (per AGENTS.md, this is the live
+# deployment). Override with the SG_SERVER_URL env var if the API moves behind
+# rivvak.app. Do NOT hardcode https://rivvak.app here unless that host is
+# confirmed to route to this API — doing so would break activation/verify.
+_SERVER_URL  = os.environ.get(
+    "SG_SERVER_URL",
+    "https://steamguard-775181381055.us-central1.run.app",
+)
 _HMAC_SECRET = "7e3b9ccf02a09ad3520ebc7ed3f00a48d5eff34ef081900ee9064dba2a74529e"
 
 
@@ -143,10 +151,13 @@ def _post(path: str, payload: dict, timeout: int = 12) -> dict:
 
 @dataclass
 class AuthResult:
-    ok:            bool
-    session_token: str = ""
-    token_expires: str = ""
-    error:         str = ""
+    ok:              bool
+    session_token:   str = ""
+    token_expires:   str = ""
+    error:           str = ""
+    # remaining license time in hours, as reported by the server's /verify
+    # endpoint. None means the server did not provide it (older server).
+    remaining_hours: float | None = None
 
 
 def activate(key: str, discord_user_id: str) -> AuthResult:
@@ -169,7 +180,8 @@ def activate(key: str, discord_user_id: str) -> AuthResult:
         return AuthResult(
             ok=True,
             session_token=data["session_token"],
-            token_expires=data["token_expires"])
+            token_expires=data["token_expires"],
+            remaining_hours=data.get("remaining_hours"))
     err = data.get("error", "Unknown error")
     LOG.warning(f"activate failed: {err}")
     return AuthResult(ok=False, error=err)
@@ -195,7 +207,8 @@ def verify(key: str, discord_user_id: str) -> AuthResult:
         return AuthResult(
             ok=True,
             session_token=data["session_token"],
-            token_expires=data["token_expires"])
+            token_expires=data["token_expires"],
+            remaining_hours=data.get("remaining_hours"))
     err = data.get("error", "Unknown error")
     LOG.warning(f"verify failed: {err}")
     return AuthResult(ok=False, error=err)
