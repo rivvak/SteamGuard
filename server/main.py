@@ -387,7 +387,7 @@ async def download_exe():
     """Redirect any download URL to the public GCS bucket object.
     Keeps Linkvertise links and existing URLs working forever regardless
     of how the binary is rebuilt or where it lives."""
-    raise HTTPException(status_code=404, detail="Not found")
+    return RedirectResponse(LOADER_EXE_URL, status_code=302)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
