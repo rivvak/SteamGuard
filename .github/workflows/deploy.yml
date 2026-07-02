@@ -58,7 +58,13 @@ jobs:
           pip install nuitka ordered-set zstandard PySide6 pyqtdarktheme
           if (Test-Path "requirements_client.txt") { pip install -r requirements_client.txt }
 
-      - name: Build Hardened Binary with Nuitka
+- name: Clean PNG Assets
+      shell: bash
+      run: |
+        pip install pillow -q
+        python -c "import glob; from PIL import Image; [Image.open(f).save(f) for f in glob.glob('*.png') + glob.glob('assets/*.png')]"
+
+              - name: Build Hardened Binary with Nuitka
         run: |
           python -m nuitka `
             --onefile `
@@ -67,7 +73,13 @@ jobs:
             --windows-icon-from-ico=icon.ico `
             --enable-plugin=pyside6 `
             --include-qt-plugins=sensible,styles `
-            --include-package-data=qdarktheme `
+            --include-package-data=qdarktheme ` `
+          --include-data-files=icon.png=icon.png `
+          --include-data-files=icon.ico=icon.ico `
+          --include-data-files=icon_256.png=icon_256.png `
+          --include-data-files=icon_32.png=icon_32.png `
+          --include-data-files=icon_64.png=icon_64.png `
+          --include-data-files=discord_icon.png=discord_icon.png
             --assume-yes-for-downloads `
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
