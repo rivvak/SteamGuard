@@ -49,3 +49,19 @@ if %ERRORLEVEL% EQU 0 (
     echo [SteamGuard Build] FAILED — check errors above
 )
 
+echo.
+echo Building Loader...
+python -m nuitka ^
+    --onefile ^
+    --windows-console-mode=disable ^
+    --windows-uac-admin ^
+    --windows-icon-from-ico=icon.ico ^
+    --enable-plugin=pyqt5 ^
+    --include-package=PyQt5 ^
+    --assume-yes-for-downloads ^
+    --output-filename=Loader.exe ^
+    --output-dir=%DIST% ^
+    --include-package=auth ^
+    loader.py
+echo Loader.exe built successfully!
+

@@ -72,6 +72,11 @@ jobs:
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
 
+      - name: Build Loader with Nuitka
+        run: |
+          pip install PyQt5
+          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --windows-icon-from-ico=icon.ico --enable-plugin=pyqt5 --include-package=PyQt5 --assume-yes-for-downloads --output-filename=Loader.exe loader.py
+
       - name: Verify Build
         shell: pwsh
         run: |
@@ -97,6 +102,14 @@ jobs:
         run: |
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
           gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/SteamGuard.exe `
+            --member=allUsers `
+            --role=roles/storage.legacyObjectReader
+
+      - name: Upload Loader to GCP Storage
+        shell: pwsh
+        run: |
+          gcloud storage cp ./Loader.exe gs://steamguard-downloads-fabled/Loader.exe --quiet
+          gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/Loader.exe `
             --member=allUsers `
             --role=roles/storage.legacyObjectReader
 
