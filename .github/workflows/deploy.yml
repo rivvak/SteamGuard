@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -13,28 +12,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: fabled-mystery-474200-i1
-
       - name: Deploy to Cloud Run
         run: |
           # Deploy with --no-traffic first to avoid version conflict ABORTED error,
           # then explicitly route 100% traffic to the new revision.
           gcloud run deploy steamguard \
-          --source . \
-          --region us-central1 \
-          --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest,JWT_SECRET=JWT_SECRET:latest,DISCORD_CLIENT_ID=DISCORD_CLIENT_ID:latest,DISCORD_CLIENT_SECRET=DISCORD_CLIENT_SECRET:latest,YOUTUBE_CLIENT_ID=YOUTUBE_CLIENT_ID:latest,YOUTUBE_CLIENT_SECRET=YOUTUBE_CLIENT_SECRET:latest,YOUTUBE_CHANNEL_ID=YOUTUBE_CHANNEL_ID:latest \
-          --set-env-vars ADMIN_USER_IDS=1513150836472021074,LICENSE_SERVER_URL=https://rivvak.app,DISCORD_INVITE=https://discord.gg/RTHM8YhpE,OFF_TOPIC_CHANNEL_ID=1513193890117714182,MOD_CHANNEL_ID=1513296463197769770 \
-          --no-traffic \
-          --quiet
+            --source . \
+            --region us-central1 \
+            --set-secrets SECRET_KEY=SECRET_KEY:latest,ADMIN_KEY=ADMIN_KEY:latest,DISCORD_BOT_TOKEN=DISCORD_BOT_TOKEN:latest,DISCORD_GUILD_ID=DISCORD_GUILD_ID:latest,DISCORD_ROLE_ID=DISCORD_ROLE_ID:latest,DISCORD_WEBHOOK_URL=DISCORD_WEBHOOK_URL:latest,MIN_SUPPORTED_VERSION=MIN_SUPPORTED_VERSION:latest,JWT_SECRET=JWT_SECRET:latest,DISCORD_CLIENT_ID=DISCORD_CLIENT_ID:latest,DISCORD_CLIENT_SECRET=DISCORD_CLIENT_SECRET:latest,YOUTUBE_CLIENT_ID=YOUTUBE_CLIENT_ID:latest,YOUTUBE_CLIENT_SECRET=YOUTUBE_CLIENT_SECRET:latest,YOUTUBE_CHANNEL_ID=YOUTUBE_CHANNEL_ID:latest \
+            --set-env-vars ADMIN_USER_IDS=1513150836472021074,LICENSE_SERVER_URL=https://rivvak.app,DISCORD_INVITE=https://discord.gg/RTHM8YhpE,OFF_TOPIC_CHANNEL_ID=1513193890117714182,MOD_CHANNEL_ID=1513296463197769770 \
+            --no-traffic \
+            --quiet
           NEW_REV=$(gcloud run revisions list --service steamguard --region us-central1 --format='value(name)' --sort-by='~createTime' --limit=1)
           gcloud run services update-traffic steamguard --region us-central1 --to-revisions "$NEW_REV=100" --quiet
           echo "Deployed and routed traffic to: $NEW_REV"
@@ -58,13 +54,13 @@ jobs:
           pip install nuitka ordered-set zstandard PySide6 pyqtdarktheme
           if (Test-Path "requirements_client.txt") { pip install -r requirements_client.txt }
 
-        - name: Clean PNG Assets
-          shell: bash
-          run: |
+      - name: Clean PNG Assets
+        shell: bash
+        run: |
           pip install pillow -q
           python -c "import glob; from PIL import Image; [Image.open(f).save(f) for f in glob.glob('*.png') + glob.glob('assets/*.png')]"
 
-              - name: Build Hardened Binary with Nuitka
+      - name: Build Hardened Binary with Nuitka
         run: |
           python -m nuitka `
             --onefile `
@@ -74,12 +70,12 @@ jobs:
             --enable-plugin=pyside6 `
             --include-qt-plugins=sensible,styles `
             --include-package-data=qdarktheme `
-          --include-data-files=icon.png=icon.png `
-          --include-data-files=icon.ico=icon.ico `
-          --include-data-files=icon_256.png=icon_256.png `
-          --include-data-files=icon_32.png=icon_32.png `
-          --include-data-files=icon_64.png=icon_64.png `
-          --include-data-files=discord_icon.png=discord_icon.png
+            --include-data-files=icon.png=icon.png `
+            --include-data-files=icon.ico=icon.ico `
+            --include-data-files=icon_256.png=icon_256.png `
+            --include-data-files=icon_32.png=icon_32.png `
+            --include-data-files=icon_64.png=icon_64.png `
+            --include-data-files=discord_icon.png=discord_icon.png `
             --assume-yes-for-downloads `
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
@@ -92,12 +88,7 @@ jobs:
       - name: Verify Build
         shell: pwsh
         run: |
-          if (Test-Path "SteamGuard.exe") {
-            Write-Host "Build successful! File size:"
-            (Get-Item "SteamGuard.exe").Length / 1MB
-          } else {
-            throw "SteamGuard.exe not found!"
-          }
+          if (Test-Path "SteamGuard.exe") { Write-Host "Build successful! File size:" (Get-Item "SteamGuard.exe").Length / 1MB } else { throw "SteamGuard.exe not found!" }
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -129,90 +120,63 @@ jobs:
         id: changelog
         shell: pwsh
         run: |
-          # Read version from version.txt
           $version = (Get-Content version.txt -Raw).Trim()
-
-          # Get last 5 commit messages (skip merge commits)
           $commits = git log --oneline --no-merges -5 --pretty=format:"%s"
           $lines = $commits -split "`n"
-
-          # Categorize commits into sections
-          $fixes   = @()
+          $fixes = @()
           $features = @()
-          $other   = @()
-
+          $other = @()
           foreach ($line in $lines) {
             $clean = $line -replace '^(fix|feat|chore|refactor|docs|style|perf|ci|build|test)(\(.+?\))?:\s*', ''
-            if ($line -match '^fix') {
-              $fixes += "🔧 $clean"
-            } elseif ($line -match '^feat') {
-              $features += "✨ $clean"
-            } else {
-              $other += "• $clean"
-            }
+            if ($line -match '^fix') { $fixes += "\uD83D\uDD27 $clean" }
+            elseif ($line -match '^feat') { $features += "\u2728 $clean" }
+            else { $other += "\u2022 $clean" }
           }
-
-          # Build changelog string
           $changelog = ""
-          if ($features.Count -gt 0) {
-            $changelog += "**New Features**`n" + ($features -join "`n") + "`n`n"
-          }
-          if ($fixes.Count -gt 0) {
-            $changelog += "**Bug Fixes**`n" + ($fixes -join "`n") + "`n`n"
-          }
-          if ($other.Count -gt 0) {
-            $changelog += "**Other Changes**`n" + ($other -join "`n")
-          }
-          if ($changelog -eq "") {
-            $changelog = "• Maintenance update"
-          }
-
-          # Escape for JSON (backslash-n for newlines, escape quotes)
-          $changelogJson = $changelog.Trim() -replace '\\', '\\\\' -replace '"', '\"' -replace "`r`n", '\n' -replace "`n", '\n'
-          $versionJson   = $version -replace '"', '\"'
-
+          if ($features.Count -gt 0) { $changelog += "**New Features**`n" + ($features -join "`n") + "`n`n" }
+          if ($fixes.Count -gt 0) { $changelog += "**Bug Fixes**`n" + ($fixes -join "`n") + "`n`n" }
+          if ($other.Count -gt 0) { $changelog += "**Other Changes**`n" + ($other -join "`n") }
+          if ($changelog -eq "") { $changelog = "\u2022 Maintenance update" }
+          $changelogJson = $changelog.Trim() -replace '\\', '\\\\' -replace '"', '\\"' -replace "`r`n", '\n' -replace "`n", '\n'
+          $versionJson = $version -replace '"', '\\"'
           echo "VERSION=$versionJson" >> $env:GITHUB_OUTPUT
           echo "CHANGELOG=$changelogJson" >> $env:GITHUB_OUTPUT
 
       - name: Post Embed to Discord
         shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          $version   = '${{ steps.changelog.outputs.VERSION }}'
+          $version = '${{ steps.changelog.outputs.VERSION }}'
           $changelog = '${{ steps.changelog.outputs.CHANGELOG }}'
-          $buildNum  = '${{ github.run_number }}'
-          $sha       = ('${{ github.sha }}').Substring(0,7)
-          $actor     = '${{ github.actor }}'
-          $ts        = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-
-          $title       = "SteamGuard Client Updated - v$version"
+          $buildNum = '${{ github.run_number }}'
+          $sha = ('${{ github.sha }}').Substring(0,7)
+          $actor = '${{ github.actor }}'
+          $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $title = "SteamGuard Client Updated - v$version"
           $description = "Terms of Service and EULA (v1.1) Acceptance Required. This tool is strictly for educational, research, and personal learning purposes."
-          $footer      = "SteamGuard Security - Build #$buildNum - $sha - pushed by $actor"
-          $dlValue     = "[Click here to Download](https://rivvak.app/dashboard/SteamGuard.exe)"
-          $reqValue    = "Member of this server, subscribed to YouTube channel, run as Administrator"
-
+          $footer = "SteamGuard Security - Build #$buildNum - $sha - pushed by $actor"
+          $dlValue = "[Click here to Download](https://rivvak.app/dashboard/SteamGuard.exe)"
+          $reqValue = "Member of this server, subscribed to YouTube channel, run as Administrator"
           $body = [ordered]@{
             embeds = @(
               [ordered]@{
-                title       = $title
+                title = $title
                 description = $description
-                color       = 2450411
-                fields      = @(
-                  [ordered]@{ name = "What is New";    value = $changelog; inline = $false }
-                  [ordered]@{ name = "Requirements";   value = $reqValue;  inline = $false }
-                  [ordered]@{ name = "Download";       value = $dlValue;   inline = $false }
+                color = 2450411
+                fields = @(
+                  [ordered]@{ name = "What is New"; value = $changelog; inline = $false }
+                  [ordered]@{ name = "Requirements"; value = $reqValue; inline = $false }
+                  [ordered]@{ name = "Download"; value = $dlValue; inline = $false }
                 )
-                footer      = [ordered]@{ text = $footer }
-                timestamp   = $ts
+                footer = [ordered]@{ text = $footer }
+                timestamp = $ts
               }
             )
           }
-
           $json = $body | ConvertTo-Json -Depth 10 -Compress
-
           Invoke-WebRequest `
             -Uri $env:DISCORD_WEBHOOK_URL `
             -Method POST `
             -ContentType "application/json" `
             -Body $json
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
