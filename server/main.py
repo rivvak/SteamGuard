@@ -377,8 +377,8 @@ async def root_redirect():
     """Redirect root URL to the dashboard login page."""
     return "/dashboard/index.html"
 
-# GCS public URL for the latest SteamGuard installer
-_GCS_EXE_URL = "https://storage.googleapis.com/steamguard-downloads-fabled/SteamGuard.exe"
+# GCS public URL for the latest Loader installer
+_GCS_EXE_URL = "https://storage.googleapis.com/steamguard-downloads-fabled/Loader.exe"
 
 @app.get("/dashboard/SteamGuard.exe", include_in_schema=False)
 @app.get("/download", include_in_schema=False)
