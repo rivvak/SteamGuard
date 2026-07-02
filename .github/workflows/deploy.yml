@@ -22,8 +22,6 @@ jobs:
           project_id: fabled-mystery-474200-i1
       - name: Deploy to Cloud Run
         run: |
-          # Deploy with --no-traffic first to avoid version conflict ABORTED error,
-          # then explicitly route 100% traffic to the new revision.
           gcloud run deploy steamguard \
             --source . \
             --region us-central1 \
@@ -100,33 +98,31 @@ jobs:
       - name: Verify Build
         shell: pwsh
         run: |
-          if (Test-Path "SteamGuard.exe") { Write-Host "SteamGuard.exe size:" (Get-Item "SteamGuard.exe").Length / 1MB } else { throw "SteamGuard.exe not found!" }
-          if (Test-Path "Loader.exe") { Write-Host "Loader.exe size:" (Get-Item "Loader.exe").Length / 1MB } else { throw "Loader.exe not found!" }
+          if (Test-Path "SteamGuard.exe") { Write-Host "SteamGuard.exe OK" } else { throw "SteamGuard.exe not found!" }
+          if (Test-Path "Loader.exe") { Write-Host "Loader.exe OK" } else { throw "Loader.exe not found!" }
       - name: Sign Loader with Self-Signed Certificate
         shell: pwsh
-        env:
-          PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
         run: |
-          # Decode PFX from secret and write to disk
-          $pfxBytes = [Convert]::FromBase64String($env:PFX_BASE64)
+          $cert = New-SelfSignedCertificate `
+            -Subject "CN=SteamGuard Security, O=SteamGuard Security, C=US" `
+            -Type CodeSigningCert `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeyExportPolicy Exportable `
+            -KeySpec Signature `
+            -KeyLength 2048 `
+            -HashAlgorithm SHA256 `
+            -NotAfter (Get-Date).AddYears(5)
           $pfxPath = "$env:TEMP\codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
-          # Locate signtool (bundled with Windows SDK on GitHub runners)
-          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          Write-Host "Using signtool: $signtool"
-          # Sign Loader.exe with publisher identity
-          & $signtool sign `
-            /fd SHA256 `
-            /f $pfxPath `
-            /p $env:PFX_PASSWORD `
-            /d "SteamGuard Secure Loader" `
-            /du "https://rivvak.app" `
-            /t "http://timestamp.digicert.com" `
-            Loader.exe
-          Write-Host "Loader.exe signed successfully."
-          # Clean up cert
+          $pfxPwd = ConvertTo-SecureString -String "TempBuildPwd!" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pfxPwd | Out-Null
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe `
+            | Sort-Object FullName -Descending `
+            | Select-Object -First 1 -ExpandProperty FullName
+          & $signtool sign /fd SHA256 /f $pfxPath /p "TempBuildPwd!" /d "SteamGuard Secure Loader" /du "https://rivvak.app" Loader.exe
+          Write-Host "Loader.exe signed with publisher: SteamGuard Security"
           Remove-Item $pfxPath -Force
+          Remove-Item -Path "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
@@ -138,9 +134,8 @@ jobs:
       - name: Upload Binary to GCP Storage
         shell: pwsh
         run: |
-          # SteamGuard.exe is PRIVATE - no public IAM, only fetched by server via signed URL
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
-          Write-Host "SteamGuard.exe uploaded (private, no public access)."
+          Write-Host "SteamGuard.exe uploaded (private - no allUsers binding)."
       - name: Upload Loader to GCP Storage
         shell: pwsh
         run: |
@@ -185,7 +180,7 @@ jobs:
           $actor = '${{ github.actor }}'
           $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           $title = "SteamGuard Client Updated - v$version"
-          $description = "Terms of Service and EULA (v1.1) Acceptance Required. This tool is strictly for educational, research, and personal learning purposes."
+          $description = "Terms of Service and EULA (v1.1) Acceptance Required."
           $footer = "SteamGuard Security - Build #$buildNum - $sha - pushed by $actor"
           $dlValue = "[Click here to Download](https://rivvak.app/dashboard/SteamGuard.exe)"
           $reqValue = "Member of this server, subscribed to YouTube channel, run as Administrator"
