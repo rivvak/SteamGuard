@@ -87,6 +87,18 @@ C_WARNING   = "#F59E0B"   # amber
 C_ERROR     = "#EF4444"   # red
 C_TEXT      = "#F1F5F9"   # primary text
 C_TEXT_DIM  = "#94A3B8"   # secondary text
+# ──────────────────────────────────────────────────────────────────
+# Frozen-binary resource helper
+# ──────────────────────────────────────────────────────────────────
+def resource_path(relative: str) -> str:
+    """Return the absolute path to a bundled asset.
+
+    Works both when running as a plain .py script and when compiled
+    with Nuitka --onefile (where files land in sys._MEIPASS).
+    """
+    base = getattr(sys, "_MEIPASS", None) or Path(__file__).parent
+    return str(Path(base) / relative)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App data paths
@@ -1382,7 +1394,7 @@ class SteamGuardWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        icon_path = str(Path(__file__).parent / "icon.png")
+        icon_path = resource_path("icon.png")
         self._title_bar = TitleBar(self, icon_path)
         outer.addWidget(self._title_bar)
         if os.path.exists(icon_path):
