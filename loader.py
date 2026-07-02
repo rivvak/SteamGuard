@@ -68,9 +68,11 @@ BRAND_SITE     = "https://rivvak.app"
 # Default license/API server. The auth API is served under rivvak.app; override
 # via the SG_SERVER_URL env var.
 
-# ── Tool download URLs (served via rivvak.app/get-tool) ──────────────────────
+DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
+
+# ── Tool download (loader fetches SteamGuard.exe via rivvak.app/get-tool) ─────
 STEAMGUARD_DOWNLOAD_URL = f"{DEFAULT_SERVER_URL}/get-tool?tool=steamguard"
-TOOLS_DIR = Path(os.environ.get("APPDATA", ".")) / "SteamGuard" / "tools"
+TOOLS_DIR = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard" / "tools"
 
 def ensure_tools_dir() -> None:
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,7 +81,10 @@ def get_local_tool_path(tool_name: str = "SteamGuard.exe") -> Path:
     """Returns the local cached path for a downloaded tool."""
     return TOOLS_DIR / tool_name
 
-DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
+# Loader identity token — sent with every /get-tool request so the server
+# knows the request came from the official loader, not a browser.
+# The server validates this header before allowing the download.
+LOADER_IDENTITY_TOKEN = "SteamGuard-Loader-Official-v2-Rivvak"
 
 # ── Persistence paths ─────────────────────────────────────────────────────────
 _APPDATA   = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard"
@@ -292,7 +297,10 @@ class DownloadWorker(QThread):
 
     def run(self):
         import urllib.request, ssl
-        headers = {"User-Agent": "SteamGuardLoader/2.0"}
+        headers = {
+            "User-Agent":        "SteamGuardLoader/2.0",
+            "X-Loader-Identity": LOADER_IDENTITY_TOKEN,
+        }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         try:

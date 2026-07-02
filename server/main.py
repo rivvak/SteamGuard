@@ -499,22 +499,35 @@ async def download_loader():
     """Public redirect — users download Loader.exe from here. Posted on Discord/rivvak.app."""
     return RedirectResponse(LOADER_EXE_URL, status_code=302)
 
+# Official loader identity token — only the real Loader.exe sends this header.
+# Prevents anyone from just hitting /get-tool in a browser to grab the EXE.
+LOADER_IDENTITY_TOKEN = "SteamGuard-Loader-Official-v2-Rivvak"
+
 @app.get("/get-tool", include_in_schema=False)
-async def get_tool(tool: str = "steamguard", authorization: str = Header(None)):
-    """Authenticated internal tool download — called by the Loader to fetch tools.
-    Requires a valid JWT. Returns a redirect to the GCS download URL.
-    This way we can change the backend URL without rebuilding Loader.exe."""
-    # Validate JWT (soft-check — the loader already validated on login)
+async def get_tool(tool: str = "steamguard",
+                   authorization: str = Header(None),
+                   x_loader_identity: str = Header(None, alias="X-Loader-Identity")):
+    """Authenticated internal tool download — only the official Loader can call this.
+    Requires either:
+    1. A valid X-Loader-Identity header (from the loader binary), OR
+    2. A valid JWT Bearer token (from a logged-in loader session)
+    """
+    # Check loader identity header first (fastest check)
+    identity_ok = x_loader_identity == LOADER_IDENTITY_TOKEN
+
+    # Also accept valid JWT as alternative auth
+    jwt_ok = False
     if authorization and authorization.startswith("Bearer "):
         try:
             token = authorization.split(" ", 1)[1]
             jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+            jwt_ok = True
         except Exception:
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
-    else:
-        # Allow unauthenticated for now — tool is already public on GCS
-        # Future: require auth here for premium-only tools
-        pass
+            pass
+
+    if not identity_ok and not jwt_ok:
+        # Return 404 instead of 401 — don't reveal this endpoint exists to scrapers
+        raise HTTPException(status_code=404, detail="Not found")
 
     tool_urls = {
         "steamguard": STEAMGUARD_URL,
