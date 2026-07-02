@@ -487,6 +487,63 @@ class DeviceResetRequest(BaseModel):
     discord_user_id:  str
     sig:              str
 
+
+# ── Download endpoints ─────────────────────────────────────────────────────────
+
+GCS_BUCKET       = "https://storage.googleapis.com/steamguard-downloads-fabled"
+LOADER_EXE_URL   = f"{GCS_BUCKET}/Loader.exe"
+STEAMGUARD_URL   = f"{GCS_BUCKET}/SteamGuard.exe"
+
+@app.get("/download", include_in_schema=False)
+async def download_loader():
+    """Public redirect — users download Loader.exe from here. Posted on Discord/rivvak.app."""
+    return RedirectResponse(LOADER_EXE_URL, status_code=302)
+
+@app.get("/get-tool", include_in_schema=False)
+async def get_tool(tool: str = "steamguard", authorization: str = Header(None)):
+    """Authenticated internal tool download — called by the Loader to fetch tools.
+    Requires a valid JWT. Returns a redirect to the GCS download URL.
+    This way we can change the backend URL without rebuilding Loader.exe."""
+    # Validate JWT (soft-check — the loader already validated on login)
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            token = authorization.split(" ", 1)[1]
+            jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+    else:
+        # Allow unauthenticated for now — tool is already public on GCS
+        # Future: require auth here for premium-only tools
+        pass
+
+    tool_urls = {
+        "steamguard": STEAMGUARD_URL,
+        "loader":     LOADER_EXE_URL,
+    }
+    url = tool_urls.get(tool.lower(), STEAMGUARD_URL)
+    return RedirectResponse(url, status_code=302)
+
+@app.get("/get-tool/info", include_in_schema=False)
+async def get_tool_info(tool: str = "steamguard"):
+    """Returns current version + download URL for a tool — used by Loader for update checks."""
+    tool = tool.lower()
+    version_map = {
+        "steamguard": os.environ.get("MIN_SUPPORTED_VERSION", "1.4.0"),
+        "loader":     "2.0.0",
+    }
+    url_map = {
+        "steamguard": STEAMGUARD_URL,
+        "loader":     LOADER_EXE_URL,
+    }
+    if tool not in version_map:
+        raise HTTPException(status_code=404, detail="Unknown tool")
+    return {
+        "tool":    tool,
+        "version": version_map[tool],
+        "url":     url_map[tool],
+        "sha256":  None,  # Future: add hash verification
+    }
+
 # ── /health ───────────────────────────────────────────────────────────────────
 
 

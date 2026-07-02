@@ -67,6 +67,18 @@ BRAND_SITE     = "https://rivvak.app"
 
 # Default license/API server. The auth API is served under rivvak.app; override
 # via the SG_SERVER_URL env var.
+
+# ── Tool download URLs (served via rivvak.app/get-tool) ──────────────────────
+STEAMGUARD_DOWNLOAD_URL = f"{DEFAULT_SERVER_URL}/get-tool?tool=steamguard"
+TOOLS_DIR = Path(os.environ.get("APPDATA", ".")) / "SteamGuard" / "tools"
+
+def ensure_tools_dir() -> None:
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+
+def get_local_tool_path(tool_name: str = "SteamGuard.exe") -> Path:
+    """Returns the local cached path for a downloaded tool."""
+    return TOOLS_DIR / tool_name
+
 DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
 
 # ── Persistence paths ─────────────────────────────────────────────────────────
@@ -261,6 +273,50 @@ def _http_json(url: str, method: str = "GET", payload: dict = None,
         return {"error": "Server timed out. Check your connection."}
     except Exception as e:
         return {"error": f"Network error: {str(e)[:120]}"}
+
+
+
+# ── Download worker with progress ─────────────────────────────────────────────
+
+class DownloadWorker(QThread):
+    """Downloads a file with progress reporting. Used to fetch SteamGuard.exe."""
+    progress = pyqtSignal(int)       # 0-100
+    done     = pyqtSignal(str)       # file path on success, empty string on error
+    error    = pyqtSignal(str)       # error message
+
+    def __init__(self, url: str, dest: Path, token: str = "", parent=None):
+        super().__init__(parent)
+        self.url   = url
+        self.dest  = dest
+        self.token = token
+
+    def run(self):
+        import urllib.request, ssl
+        headers = {"User-Agent": "SteamGuardLoader/2.0"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        try:
+            req = urllib.request.Request(self.url, headers=headers)
+            ctx = ssl.create_default_context()
+            ensure_tools_dir()
+            with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                chunk_size = 65536  # 64KB chunks
+                self.dest.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.progress.emit(int(downloaded / total * 100))
+            self.done.emit(str(self.dest))
+        except Exception as e:
+            self.error.emit(f"Download failed: {str(e)[:120]}")
+            self.done.emit("")
 
 
 class Worker(QThread):
@@ -1316,15 +1372,17 @@ class Dashboard(QWidget):
         return strip
 
     def _find_steamguard(self):
-        """Return path to SteamGuard.exe next to the loader or on PATH."""
-        if getattr(sys, "frozen", False):
-            base = Path(sys.executable).parent
-        else:
-            base = Path(__file__).parent
+        """Look for SteamGuard.exe: local cache first, then same folder, then PATH."""
+        # 1. Local tools cache (%APPDATA%/SteamGuard/tools/)
+        cached = get_local_tool_path("SteamGuard.exe")
+        if cached.exists():
+            return str(cached)
+        # 2. Same folder as the loader
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
         local = base / "SteamGuard.exe"
         if local.exists():
             return str(local)
-        # On PATH
+        # 3. PATH
         import shutil
         found = shutil.which("SteamGuard.exe")
         if found:
@@ -1333,20 +1391,45 @@ class Dashboard(QWidget):
 
     def _on_launch(self):
         exe = self._find_steamguard()
-        if not exe:
-            self._time_lbl.setText("⚠ SteamGuard.exe not found")
-            self._time_lbl.setStyleSheet(f"""
-                QLabel {{ color:{RED}; background:rgba(242,63,67,0.18);
-                          border:1px solid rgba(242,63,67,0.4); border-radius:12px;
-                          padding:4px 14px; font-size:11px; font-weight:700; }}
-            """)
+        if exe:
+            self._launch_exe(exe)
             return
-        try:
-            self._sg_process = subprocess.Popen([exe])
-        except Exception as e:
-            self._time_lbl.setText(f"⚠ Launch failed")
-            return
+        # Not found locally — download from rivvak.app/get-tool
+        self._start_download()
 
+    def _start_download(self):
+        """Download SteamGuard.exe from the server with a progress indicator."""
+        self._sg_card.set_action_label("Downloading...")
+        token = self._token or ""
+        dest  = get_local_tool_path("SteamGuard.exe")
+        self._dl_worker = DownloadWorker(STEAMGUARD_DOWNLOAD_URL, dest, token, self)
+        self._dl_worker.progress.connect(self._on_dl_progress)
+        self._dl_worker.done.connect(self._on_dl_done)
+        self._dl_worker.error.connect(self._on_dl_error)
+        self._workers.append(self._dl_worker)
+        self._dl_worker.start()
+
+    def _on_dl_progress(self, pct: int):
+        self._sg_card.set_action_label(f"Downloading {pct}%")
+
+    def _on_dl_done(self, path: str):
+        self._sg_card.reset_action("PLAY", ACCENT)
+        if path:
+            self._launch_exe(path)
+        else:
+            self._time_lbl.setText("⚠ Download failed — check connection")
+
+    def _on_dl_error(self, msg: str):
+        self._sg_card.reset_action("PLAY", ACCENT)
+        self._time_lbl.setText(f"⚠ {msg[:60]}")
+
+    def _launch_exe(self, exe):
+        """Launch SteamGuard.exe and start monitoring the process."""
+        try:
+            self._sg_process = subprocess.Popen([str(exe)])
+        except Exception as e:
+            self._time_lbl.setText("⚠ Launch failed")
+            return
         self._sg_card.set_action_running()
         self._proc_timer.start(1000)
 
