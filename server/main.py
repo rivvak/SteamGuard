@@ -387,7 +387,7 @@ async def download_exe():
     """Redirect any download URL to the public GCS bucket object.
     Keeps Linkvertise links and existing URLs working forever regardless
     of how the binary is rebuilt or where it lives."""
-    return RedirectResponse(_GCS_EXE_URL, status_code=302)
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -529,12 +529,18 @@ async def get_tool(tool: str = "steamguard",
         # Return 404 instead of 401 — don't reveal this endpoint exists to scrapers
         raise HTTPException(status_code=404, detail="Not found")
 
-    tool_urls = {
-        "steamguard": STEAMGUARD_URL,
-        "loader":     LOADER_EXE_URL,
-    }
-    url = tool_urls.get(tool.lower(), STEAMGUARD_URL)
-    return RedirectResponse(url, status_code=302)
+    # Generate a short-lived GCS signed URL — SteamGuard.exe is private, never public
+    from datetime import timedelta
+    from google.cloud import storage as _gcs_storage
+    _gcs_client = _gcs_storage.Client()
+    _bucket = _gcs_client.bucket("steamguard-downloads-fabled")
+    _blob = _bucket.blob("SteamGuard.exe")
+    signed_url = _blob.generate_signed_url(
+              expiration=timedelta(seconds=60),
+              method="GET",
+              version="v4",
+          )
+    return RedirectResponse(signed_url, status_code=302)
 
 @app.get("/get-tool/info", include_in_schema=False)
 async def get_tool_info(tool: str = "steamguard"):
