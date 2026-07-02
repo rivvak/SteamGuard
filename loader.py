@@ -1,14 +1,15 @@
 """
 SteamGuard Loader
 =================
-A polished PyQt5 front-end for the SteamGuard client. Handles license login,
-credential persistence (DPAPI / XOR fallback), an animated login screen, and a
-full dashboard (Protection / Rewards / Referrals / Settings) that launches the
-main SteamGuard.exe client.
+A premium PyQt5 front-end for the SteamGuard client, styled after modern gaming
+launchers (MY.GAMES). Handles license login, credential persistence
+(DPAPI / XOR fallback), a glassmorphism login screen, and a game-launcher style
+dashboard (My Tools / Rewards / Referrals / Settings) that launches the main
+SteamGuard.exe client.
 
 All networking runs on QThread workers — the UI thread is never blocked.
 
-Backend: rivvak.app (override with the SG_SERVER_URL env var or Settings tab).
+Backend: rivvak.app (override with the SG_SERVER_URL env var).
 """
 
 import sys
@@ -24,30 +25,36 @@ import urllib.error
 from pathlib import Path
 
 from PyQt5.QtCore import (
-    Qt, QSize, QTimer, QThread, pyqtSignal, QPoint, QRectF, QPropertyAnimation,
-    QEasingCurve, pyqtProperty, QObject,
+    Qt, QSize, QTimer, QThread, pyqtSignal, QPoint, QRectF, QRect,
+    QPropertyAnimation, QEasingCurve, pyqtProperty, QObject,
 )
 from PyQt5.QtGui import (
     QColor, QPainter, QPen, QBrush, QPolygonF, QFont, QFontMetrics, QIcon,
-    QLinearGradient, QPainterPath,
+    QLinearGradient, QRadialGradient, QPainterPath, QPixmap, QImage,
 )
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout,
-    QHBoxLayout, QCheckBox, QFrame, QGraphicsOpacityEffect, QStackedWidget,
-    QScrollArea, QComboBox, QSizePolicy, QGraphicsDropShadowEffect,
+    QHBoxLayout, QGridLayout, QCheckBox, QFrame, QGraphicsOpacityEffect,
+    QStackedWidget, QScrollArea, QComboBox, QSizePolicy,
+    QGraphicsDropShadowEffect,
 )
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-BG       = "#0D1117"
-SURFACE  = "#161B22"
-CARD     = "#1C2128"
+BG       = "#080B10"
+SURFACE  = "#0D1117"
+CARD     = "#161B22"
 BORDER   = "#30363D"
 ACCENT   = "#23A559"   # green
-ACCENT2  = "#58A6FF"   # blue for links
+ACCENT2  = "#58A6FF"   # blue for links / coming-soon
 RED      = "#F23F43"
 YELLOW   = "#F0B232"
 TEXT     = "#E6EDF3"
-MUTED    = "#8B949E"
+MUTED    = "#6E7681"
+MUTED2   = "#8B949E"
+
+# Discord / YouTube brand colours
+DISCORD_BLURPLE = "#5865F2"
+YOUTUBE_RED     = "#FF0000"
 
 # Derived shades
 ACCENT_HOVER = "#2FBF6B"
@@ -59,7 +66,7 @@ DISCORD_INVITE = "https://discord.gg/RTHM8YhpE"
 BRAND_SITE     = "https://rivvak.app"
 
 # Default license/API server. The auth API is served under rivvak.app; override
-# via the SG_SERVER_URL env var or the Settings tab.
+# via the SG_SERVER_URL env var.
 DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
 
 # ── Persistence paths ─────────────────────────────────────────────────────────
@@ -70,6 +77,36 @@ _SETTINGS_FILE = _APPDATA / "loader_settings.json"
 
 # XOR fallback key (only used when DPAPI is unavailable, e.g. non-Windows/dev).
 _XOR_KEY = b"RivvakSteamGuardLoader-v2-fallback-key-2026"
+
+# ── Brand PNG icons (base64) ──────────────────────────────────────────────────
+_DISCORD_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAABdklEQVR4nM2UP0tcQRTFf7PEP0mj"
+    "roIYm6hVCrENFtoEYSH4ENIlVoKktFC7FCEQ+A38EFaSIlEEWwOCWKxdlKxJQFwRN/4s3hTPYVx"
+    "BG08199x7zlzu3PfgsSOkhNoBTAHTwHoIYSfJvwJqwHdgM4RwmTVUu4CPwFugP9J7wC4wEOMGMA"
+    "G8jPEJsAYshhAu0s5WvD+WUrNhtfkAwzN1CKASPT8AT9uPuy2eRQ+C2g38AnofYAjwB3heAWYyZ"
+    "i1gC/idETZirpXwVeA16mpmJrMAalWtl/hDtRpzbzK6L6jbCXlcvlb9fENwM3eUaH9UgLGk9R61"
+    "rxSPlM4vSmZ9mVGNobYyrX9Ta+qyelXiryz2taZuZHTnQTUz+PvifwVoJuRfik/qLjSAfwnXfAK"
+    "8B1Ypnh2KdfgK1IFJYBwYjLlj4CewDYwCC8kF8wCo/fE1T+Ms9tXO21pTO9WDWHuqfjKuU1rYq8"
+    "5Z/KLaQp1U36k9d9U+LlwDVADD06LIUmQAAAAASUVORK5CYII="
+)
+_YOUTUBE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAA+klEQVR4nOXSzSqFYRiF4ev9mCj/"
+    "P1MpmZqaKOUcnIADoQydFAZImZkSMpEQysBPexmwS7H39+0YKPfoHazn7mk9L3+d0n4kmcMsxjG"
+    "IIfR3mGvhHo+4xkkp5bgtGk6yk5+zlWRIko1fkLVZr7D4ixUuVpiuCR32IJypMFkTWsAqLhsIJy"
+    "R56VZKO5n3420meeoSf5Kk1UT4Sbyc5LlDvNXLhgNJ1pI81m14VydMspLkrFvug9t+3GCkU8tJt"
+    "rHU4CBwW+GiJtRUBucVdnsYqGNPkrEkBw36qWM/yWiBJAXzmMEURtGHsW+2CO7wigdc4RRHpZQv"
+    "3+wf8AbPBCBqSpXODwAAAABJRU5ErkJggg=="
+)
+
+
+def _png_pixmap(b64: str) -> QPixmap:
+    """Decode a base64 PNG string into a QPixmap. Returns an empty pixmap on failure."""
+    pm = QPixmap()
+    try:
+        pm.loadFromData(base64.b64decode(b64), "PNG")
+    except Exception:
+        pass
+    return pm
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -169,7 +206,6 @@ def load_settings() -> dict:
         "launch_on_startup": False,
         "auto_launch_steamguard": False,
         "theme": "Dark",
-        "server_url": DEFAULT_SERVER_URL,
     }
     try:
         if _SETTINGS_FILE.exists():
@@ -262,79 +298,39 @@ class LoginWorker(QThread):
         self.done.emit(result)
 
 
+class GetJsonWorker(QThread):
+    done = pyqtSignal(dict)
+
+    def __init__(self, url, token, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.token = token
+
+    def run(self):
+        self.done.emit(_http_json(self.url, "GET", None, self.token))
+
+
+class PostJsonWorker(QThread):
+    done = pyqtSignal(dict)
+
+    def __init__(self, url, token, payload=None, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.token = token
+        self.payload = payload or {}
+
+    def run(self):
+        self.done.emit(_http_json(self.url, "POST", self.payload, self.token))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Custom-drawn widgets
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TitleBar(QFrame):
-    """36px custom title bar with RC logo, title, version, minimize + close."""
+class RCLogo(QWidget):
+    """RC logo — white 'RC' letters in a rounded green square. QPainter drawn."""
 
-    def __init__(self, window, title="SteamGuard", version=APP_VERSION, parent=None):
-        super().__init__(parent)
-        self._win = window
-        self._drag_pos = None
-        self.setFixedHeight(36)
-        self.setStyleSheet(f"background:{SURFACE};")
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 0, 6, 0)
-        lay.setSpacing(8)
-
-        self._logo = LogoWidget(size=20)
-        lay.addWidget(self._logo)
-
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color:{TEXT}; font-weight:600; font-size:12px;")
-        lay.addWidget(title_lbl)
-
-        ver_lbl = QLabel(version)
-        ver_lbl.setStyleSheet(f"color:{MUTED}; font-size:10px;")
-        lay.addWidget(ver_lbl)
-
-        lay.addStretch(1)
-
-        self._min_btn = self._mk_btn("—", self._minimize)
-        self._close_btn = self._mk_btn("✕", self._close, hover=RED)
-        lay.addWidget(self._min_btn)
-        lay.addWidget(self._close_btn)
-
-    def _mk_btn(self, text, slot, hover=BORDER):
-        b = QPushButton(text)
-        b.setCursor(Qt.PointingHandCursor)
-        b.setFixedSize(28, 24)
-        b.setStyleSheet(f"""
-            QPushButton {{ background:transparent; color:{MUTED};
-                           border:none; font-size:13px; border-radius:4px; }}
-            QPushButton:hover {{ background:{hover}; color:{TEXT}; }}
-        """)
-        b.clicked.connect(slot)
-        return b
-
-    def _minimize(self):
-        self._win.showMinimized()
-
-    def _close(self):
-        self._win.close()
-
-    # Dragging
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self._drag_pos = e.globalPos() - self._win.frameGeometry().topLeft()
-            e.accept()
-
-    def mouseMoveEvent(self, e):
-        if self._drag_pos is not None and e.buttons() & Qt.LeftButton:
-            self._win.move(e.globalPos() - self._drag_pos)
-            e.accept()
-
-    def mouseReleaseEvent(self, e):
-        self._drag_pos = None
-
-
-class LogoWidget(QWidget):
-    """Small RC hexagon/shield logo drawn with QPainter."""
-
-    def __init__(self, size=20, parent=None):
+    def __init__(self, size=60, parent=None):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self._size = size
@@ -343,97 +339,47 @@ class LogoWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         s = self._size
-        # Hexagon shield
-        poly = QPolygonF([
-            QPoint(int(s * 0.5), int(s * 0.05)),
-            QPoint(int(s * 0.95), int(s * 0.28)),
-            QPoint(int(s * 0.95), int(s * 0.72)),
-            QPoint(int(s * 0.5), int(s * 0.95)),
-            QPoint(int(s * 0.05), int(s * 0.72)),
-            QPoint(int(s * 0.05), int(s * 0.28)),
-        ])
+        rect = QRectF(1, 1, s - 2, s - 2)
         grad = QLinearGradient(0, 0, s, s)
-        grad.setColorAt(0, QColor(ACCENT))
+        grad.setColorAt(0, QColor(ACCENT_HOVER))
         grad.setColorAt(1, QColor(ACCENT_DIM))
         p.setBrush(QBrush(grad))
         p.setPen(Qt.NoPen)
-        p.drawPolygon(poly)
+        radius = s * 0.28
+        p.drawRoundedRect(rect, radius, radius)
         # RC text
         p.setPen(QColor("white"))
-        f = QFont("Segoe UI", int(s * 0.32))
+        f = QFont("Segoe UI", int(s * 0.34))
         f.setBold(True)
         p.setFont(f)
         p.drawText(self.rect(), Qt.AlignCenter, "RC")
         p.end()
 
 
-class PulsingShield(QWidget):
-    """Large animated green pulsing shield with 'RC' text (login hero)."""
+class SmallLogo(QWidget):
+    """Compact RC logo for the title bar (rounded square)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, size=28, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(120)
-        self.setMinimumWidth(120)
-        self._scale = 1.0
-        self._anim = QPropertyAnimation(self, b"scaleFactor")
-        self._anim.setStartValue(1.0)
-        self._anim.setKeyValueAt(0.5, 1.05)
-        self._anim.setEndValue(1.0)
-        self._anim.setDuration(2000)
-        self._anim.setLoopCount(-1)
-        self._anim.setEasingCurve(QEasingCurve.InOutSine)
-        self._anim.start()
-
-    def getScale(self):
-        return self._scale
-
-    def setScale(self, v):
-        self._scale = v
-        self.update()
-
-    scaleFactor = pyqtProperty(float, fget=getScale, fset=setScale)
+        self.setFixedSize(size, size)
+        self._size = size
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        cx = self.width() / 2
-        cy = self.height() / 2
-        base = 46.0
-        r = base * self._scale
-
-        # Outer glow ring
-        glow_alpha = int(60 * (1.0 - (self._scale - 1.0) / 0.05 * 0.5))
-        glow = QColor(ACCENT)
-        glow.setAlpha(max(20, min(80, glow_alpha)))
-        p.setPen(Qt.NoPen)
-        p.setBrush(glow)
-        p.drawEllipse(QRectF(cx - r * 1.35, cy - r * 1.35, r * 2.7, r * 2.7))
-
-        # Shield shape
-        path = QPainterPath()
-        top = cy - r
-        path.moveTo(cx, top)
-        path.lineTo(cx + r, top + r * 0.45)
-        path.lineTo(cx + r, cy + r * 0.25)
-        path.quadTo(cx + r, cy + r * 0.9, cx, cy + r * 1.15)
-        path.quadTo(cx - r, cy + r * 0.9, cx - r, cy + r * 0.25)
-        path.lineTo(cx - r, top + r * 0.45)
-        path.closeSubpath()
-
-        grad = QLinearGradient(cx, top, cx, cy + r)
+        s = self._size
+        rect = QRectF(1, 1, s - 2, s - 2)
+        grad = QLinearGradient(0, 0, s, s)
         grad.setColorAt(0, QColor(ACCENT_HOVER))
         grad.setColorAt(1, QColor(ACCENT_DIM))
         p.setBrush(QBrush(grad))
-        p.setPen(QPen(QColor(ACCENT), 2))
-        p.drawPath(path)
-
-        # RC text
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(rect, s * 0.28, s * 0.28)
         p.setPen(QColor("white"))
-        f = QFont("Segoe UI", 20)
+        f = QFont("Segoe UI", int(s * 0.34))
         f.setBold(True)
         p.setFont(f)
-        p.drawText(QRectF(cx - r, cy - r * 0.4, r * 2, r * 1.2),
-                   Qt.AlignCenter, "RC")
+        p.drawText(self.rect(), Qt.AlignCenter, "RC")
         p.end()
 
 
@@ -470,49 +416,10 @@ class Spinner(QWidget):
         p.end()
 
 
-class StatusDot(QWidget):
-    """A small coloured status dot with a label (e.g. FIREWALL ●)."""
-
-    def __init__(self, label, color=MUTED, parent=None):
-        super().__init__(parent)
-        self._label = label
-        self._color = color
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(5)
-        self._text = QLabel(label)
-        self._text.setStyleSheet(f"color:{MUTED}; font-size:10px; font-weight:600;")
-        self._dot = _Dot(color)
-        lay.addWidget(self._text)
-        lay.addWidget(self._dot)
-
-    def set_color(self, color):
-        self._dot.set_color(color)
-
-
-class _Dot(QWidget):
-    def __init__(self, color, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(10, 10)
-        self._color = color
-
-    def set_color(self, color):
-        self._color = color
-        self.update()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(self._color))
-        p.drawEllipse(1, 1, 8, 8)
-        p.end()
-
-
 class Avatar(QWidget):
     """Circular avatar with the first letter of the username."""
 
-    def __init__(self, letter="?", size=44, parent=None):
+    def __init__(self, letter="?", size=32, parent=None):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self._letter = (letter or "?")[0].upper()
@@ -532,10 +439,334 @@ class Avatar(QWidget):
         p.setBrush(QBrush(grad))
         p.drawEllipse(0, 0, self._size, self._size)
         p.setPen(QColor("white"))
-        f = QFont("Segoe UI", int(self._size * 0.4))
+        f = QFont("Segoe UI", int(self._size * 0.42))
         f.setBold(True)
         p.setFont(f)
         p.drawText(self.rect(), Qt.AlignCenter, self._letter)
+        p.end()
+
+
+# ── Sidebar icon buttons (QPainter geometric icons) ────────────────────────────
+
+class SideIconButton(QPushButton):
+    """A 44px circular icon-only nav button. Icons drawn with QPainter."""
+
+    def __init__(self, kind, tooltip="", accent=ACCENT, parent=None):
+        super().__init__(parent)
+        self._kind = kind
+        self._accent = accent
+        self._active = False
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(48, 48)
+        self.setToolTip(tooltip)
+        self.setStyleSheet("QPushButton { background:transparent; border:none; }")
+        self._hover = False
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+
+    def setChecked(self, val):
+        super().setChecked(val)
+        self._active = val
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        d = 44
+        cx, cy = w / 2, h / 2
+        circ = QRectF(cx - d / 2, cy - d / 2, d, d)
+
+        # Circle background
+        if self._active:
+            p.setBrush(QColor(self._accent))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(circ)
+            icon_color = QColor("white")
+        elif self._hover:
+            bg = QColor(255, 255, 255, 22)
+            p.setBrush(bg)
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(circ)
+            icon_color = QColor(TEXT)
+        else:
+            icon_color = QColor(MUTED2)
+
+        self._draw_icon(p, cx, cy, icon_color)
+        p.end()
+
+    def _draw_icon(self, p, cx, cy, color):
+        kind = self._kind
+        pen = QPen(color, 2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+
+        if kind == "shield":
+            r = 11
+            path = QPainterPath()
+            top = cy - r
+            path.moveTo(cx, top)
+            path.lineTo(cx + r, top + r * 0.45)
+            path.lineTo(cx + r, cy + r * 0.2)
+            path.quadTo(cx + r, cy + r * 0.85, cx, cy + r * 1.1)
+            path.quadTo(cx - r, cy + r * 0.85, cx - r, cy + r * 0.2)
+            path.lineTo(cx - r, top + r * 0.45)
+            path.closeSubpath()
+            p.setBrush(color)
+            p.setPen(Qt.NoPen)
+            p.drawPath(path)
+
+        elif kind == "gift":
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            box = QRectF(cx - 10, cy - 4, 20, 14)
+            p.drawRoundedRect(box, 2, 2)
+            # lid
+            lid = QRectF(cx - 11, cy - 9, 22, 6)
+            p.drawRoundedRect(lid, 2, 2)
+            # vertical ribbon
+            p.drawLine(int(cx), int(cy - 9), int(cx), int(cy + 10))
+            # bow lines
+            p.drawLine(int(cx), int(cy - 9), int(cx - 6), int(cy - 13))
+            p.drawLine(int(cx), int(cy - 9), int(cx + 6), int(cy - 13))
+
+        elif kind == "chain":
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QRectF(cx - 11, cy - 4, 12, 12))
+            p.drawEllipse(QRectF(cx - 1, cy - 8, 12, 12))
+
+        elif kind == "gear":
+            p.setBrush(color)
+            p.setPen(Qt.NoPen)
+            teeth = QPolygonF()
+            outer, inner = 12.0, 8.5
+            for i in range(12):
+                ang = math.pi * i / 6.0
+                rad = outer if i % 2 == 0 else inner
+                teeth.append(QPoint(int(cx + rad * math.cos(ang)),
+                                    int(cy + rad * math.sin(ang))))
+            p.drawPolygon(teeth)
+            # hub hole
+            p.setBrush(QColor(SURFACE) if not self._active else QColor(ACCENT))
+            hole_col = QColor(8, 11, 16) if not self._active else QColor("white")
+            p.setBrush(hole_col)
+            p.drawEllipse(QRectF(cx - 4, cy - 4, 8, 8))
+
+        elif kind == "logout":
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            # door frame (open right side)
+            p.drawLine(int(cx - 8), int(cy - 9), int(cx - 8), int(cy + 9))
+            p.drawLine(int(cx - 8), int(cy - 9), int(cx + 1), int(cy - 9))
+            p.drawLine(int(cx - 8), int(cy + 9), int(cx + 1), int(cy + 9))
+            # arrow shaft
+            p.drawLine(int(cx - 2), int(cy), int(cx + 10), int(cy))
+            # arrow head
+            p.drawLine(int(cx + 10), int(cy), int(cx + 5), int(cy - 5))
+            p.drawLine(int(cx + 10), int(cy), int(cx + 5), int(cy + 5))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Game cards (QPainter gradient backgrounds)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class GameCard(QFrame):
+    """A MY.GAMES style game card with a painted gradient art background, a dark
+    bottom overlay, title/subtitle text, and an action button pill."""
+
+    def __init__(self, title, subtitle, grad_top, grad_bottom, border_color,
+                 border_hover, action_text, action_color, action_enabled=True,
+                 on_action=None, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._subtitle = subtitle
+        self._grad_top = QColor(grad_top)
+        self._grad_bottom = QColor(grad_bottom)
+        self._border_color = QColor(border_color)
+        self._border_hover = QColor(border_hover)
+        self._hovered = False
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background:transparent;")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 18, 18, 16)
+        lay.setSpacing(0)
+        lay.addStretch(1)
+
+        # Bottom row: text block on the left, action button on the right
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(8)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        self._title_lbl = QLabel(title.upper())
+        self._title_lbl.setStyleSheet(
+            f"color:{TEXT}; font-size:14px; font-weight:800; letter-spacing:1px; background:transparent;")
+        sub_lbl = QLabel(subtitle)
+        sub_lbl.setStyleSheet(f"color:{MUTED2}; font-size:10px; background:transparent;")
+        text_col.addWidget(self._title_lbl)
+        text_col.addWidget(sub_lbl)
+        bottom.addLayout(text_col)
+        bottom.addStretch(1)
+
+        self.action_btn = QPushButton(action_text)
+        self.action_btn.setCursor(Qt.PointingHandCursor)
+        self.action_btn.setFixedSize(120, 32)
+        self._action_color = action_color
+        self._style_action(action_color, action_enabled)
+        if action_enabled and on_action is not None:
+            self.action_btn.clicked.connect(on_action)
+        if not action_enabled:
+            self.action_btn.setDisabled(True)
+        bottom.addWidget(self.action_btn, alignment=Qt.AlignBottom)
+
+        lay.addLayout(bottom)
+
+    def _style_action(self, color, enabled):
+        if enabled:
+            self.action_btn.setStyleSheet(f"""
+                QPushButton {{ background:{color}; color:white; border:none;
+                               border-radius:16px; font-weight:800; font-size:11px;
+                               letter-spacing:1px; }}
+                QPushButton:hover {{ background:{ACCENT_HOVER}; }}
+            """)
+        else:
+            self.action_btn.setStyleSheet(f"""
+                QPushButton {{ background:rgba(88,166,255,0.25); color:{ACCENT2};
+                               border:1px solid rgba(88,166,255,0.4);
+                               border-radius:16px; font-weight:800; font-size:10px;
+                               letter-spacing:1px; }}
+            """)
+
+    def set_action_running(self):
+        self.action_btn.setText("RUNNING ●")
+        self.action_btn.setDisabled(True)
+        self.action_btn.setStyleSheet(f"""
+            QPushButton {{ background:{ACCENT_DIM}; color:white; border:none;
+                           border-radius:16px; font-weight:800; font-size:11px;
+                           letter-spacing:1px; }}
+        """)
+
+    def reset_action(self, text, color):
+        self.action_btn.setText(text)
+        self.action_btn.setDisabled(False)
+        self._style_action(color, True)
+
+    def enterEvent(self, e):
+        self._hovered = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hovered = False
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        radius = 12
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        p.setClipPath(path)
+
+        # Art gradient background
+        grad = QLinearGradient(0, 0, self.width(), self.height())
+        grad.setColorAt(0, self._grad_top)
+        grad.setColorAt(1, self._grad_bottom)
+        p.fillRect(self.rect(), QBrush(grad))
+
+        # Dark gradient overlay at bottom 80px
+        oh = min(90, self.height())
+        overlay = QLinearGradient(0, self.height() - oh, 0, self.height())
+        overlay.setColorAt(0, QColor(0, 0, 0, 0))
+        overlay.setColorAt(1, QColor(0, 0, 0, 200))
+        p.fillRect(QRectF(0, self.height() - oh, self.width(), oh), QBrush(overlay))
+
+        p.setClipping(False)
+        # Border
+        bcol = self._border_hover if self._hovered else self._border_color
+        pen = QPen(bcol, 1.5 if self._hovered else 1)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect, radius, radius)
+        p.end()
+
+
+class ComingSoonCard(QFrame):
+    """Full-width coming-soon card: painted grey gradient, centered lock icon,
+    'COMING SOON' text and subtitle. Dashed border feel."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background:transparent;")
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        radius = 12
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        p.setClipPath(path)
+        grad = QLinearGradient(0, 0, self.width(), self.height())
+        grad.setColorAt(0, QColor("#1a1a1a"))
+        grad.setColorAt(1, QColor("#0d1117"))
+        p.fillRect(self.rect(), QBrush(grad))
+        p.setClipping(False)
+
+        # Dashed border
+        pen = QPen(QColor(255, 255, 255, 40), 1.4)
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect, radius, radius)
+
+        cx = self.width() / 2
+        cy = self.height() / 2 - 20
+
+        # Lock icon: rounded shackle + body with keyhole
+        lock_col = QColor(MUTED2)
+        pen2 = QPen(lock_col, 3)
+        pen2.setCapStyle(Qt.RoundCap)
+        p.setPen(pen2)
+        p.setBrush(Qt.NoBrush)
+        # shackle
+        p.drawArc(QRectF(cx - 12, cy - 26, 24, 26), 0, 180 * 16)
+        # body
+        p.setPen(Qt.NoPen)
+        p.setBrush(lock_col)
+        body = QRectF(cx - 16, cy - 10, 32, 24)
+        p.drawRoundedRect(body, 4, 4)
+        # keyhole
+        p.setBrush(QColor("#1a1a1a"))
+        p.drawEllipse(QRectF(cx - 3, cy - 3, 6, 6))
+        p.drawRect(QRectF(cx - 1.5, cy, 3, 8))
+
+        # Texts
+        p.setPen(QColor(TEXT))
+        f = QFont("Segoe UI", 13)
+        f.setBold(True)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 2)
+        p.setFont(f)
+        p.drawText(QRectF(0, cy + 26, self.width(), 26), Qt.AlignCenter, "COMING SOON")
+
+        p.setPen(QColor(MUTED2))
+        f2 = QFont("Segoe UI", 9)
+        p.setFont(f2)
+        p.drawText(QRectF(0, cy + 52, self.width(), 20), Qt.AlignCenter,
+                   "New tool in development — stay tuned")
         p.end()
 
 
@@ -546,24 +777,24 @@ class Avatar(QWidget):
 def make_input(placeholder, password=False):
     e = QLineEdit()
     e.setPlaceholderText(placeholder)
-    e.setFixedHeight(42)
+    e.setFixedHeight(44)
     if password:
         e.setEchoMode(QLineEdit.Password)
     e.setStyleSheet(f"""
         QLineEdit {{
-            background:{BG};
+            background:rgba(255,255,255,0.04);
             color:{TEXT};
-            border:1px solid {BORDER};
-            border-radius:8px;
-            padding:0 12px;
+            border:1px solid rgba(255,255,255,0.10);
+            border-radius:10px;
+            padding:0 14px;
             font-size:13px;
         }}
-        QLineEdit:focus {{ border:1px solid {ACCENT}; }}
+        QLineEdit:focus {{ border:1px solid {ACCENT}; background:rgba(255,255,255,0.06); }}
     """)
     return e
 
 
-def make_primary_button(text, height=44):
+def make_primary_button(text, height=48):
     b = QPushButton(text)
     b.setCursor(Qt.PointingHandCursor)
     b.setFixedHeight(height)
@@ -572,9 +803,10 @@ def make_primary_button(text, height=44):
             background:{ACCENT};
             color:white;
             border:none;
-            border-radius:8px;
-            font-weight:700;
-            font-size:14px;
+            border-radius:10px;
+            font-weight:800;
+            font-size:13px;
+            letter-spacing:1px;
         }}
         QPushButton:hover {{ background:{ACCENT_HOVER}; }}
         QPushButton:disabled {{ background:{BORDER}; color:{MUTED}; }}
@@ -594,11 +826,91 @@ def make_link(text, color=ACCENT2):
     return b
 
 
+class GradientBackground(QWidget):
+    """A widget painting the dark radial gradient (#1a2040 center → #080B10 edges)."""
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        cx, cy = self.width() / 2, self.height() / 2
+        radius = max(self.width(), self.height()) * 0.75
+        grad = QRadialGradient(cx, cy, radius)
+        grad.setColorAt(0, QColor("#1a2040"))
+        grad.setColorAt(1, QColor("#080B10"))
+        p.fillRect(self.rect(), QBrush(grad))
+        p.end()
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  Screen 1 — Login
+#  Custom title bar
 # ══════════════════════════════════════════════════════════════════════════════
 
-class LoginScreen(QWidget):
+class TitleBar(QFrame):
+    """40px custom title bar with RC logo, title, minimize + close circles."""
+
+    def __init__(self, window, title="SteamGuard", parent=None):
+        super().__init__(parent)
+        self._win = window
+        self._drag_pos = None
+        self.setFixedHeight(40)
+        self.setStyleSheet("background:rgba(0,0,0,0.6);")
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 10, 0)
+        lay.setSpacing(10)
+
+        self._logo = SmallLogo(size=26)
+        lay.addWidget(self._logo)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"color:{TEXT}; font-weight:700; font-size:13px; background:transparent;")
+        lay.addWidget(title_lbl)
+
+        lay.addStretch(1)
+
+        self._min_btn = self._mk_btn("—", self._minimize)
+        self._close_btn = self._mk_btn("✕", self._close, hover=RED)
+        lay.addWidget(self._min_btn)
+        lay.addWidget(self._close_btn)
+
+    def _mk_btn(self, text, slot, hover="rgba(255,255,255,0.14)"):
+        b = QPushButton(text)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setFixedSize(26, 26)
+        b.setStyleSheet(f"""
+            QPushButton {{ background:rgba(255,255,255,0.06); color:{MUTED2};
+                           border:none; font-size:12px; border-radius:13px; }}
+            QPushButton:hover {{ background:{hover}; color:white; }}
+        """)
+        b.clicked.connect(slot)
+        return b
+
+    def _minimize(self):
+        self._win.showMinimized()
+
+    def _close(self):
+        self._win.close()
+
+    # Dragging
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag_pos = e.globalPos() - self._win.frameGeometry().topLeft()
+            e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos is not None and e.buttons() & Qt.LeftButton:
+            self._win.move(e.globalPos() - self._drag_pos)
+            e.accept()
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Screen 1 — Login (glassmorphism card over radial gradient)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class LoginScreen(GradientBackground):
     login_success = pyqtSignal(dict)   # emits {token, discord_username, tier, ...}
 
     def __init__(self, window, parent=None):
@@ -606,101 +918,119 @@ class LoginScreen(QWidget):
         self._win = window
         self._worker = None
         self._settings = load_settings()
+        self._drag_pos = None
         self._build()
 
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        root.setAlignment(Qt.AlignCenter)
 
-        root.addWidget(TitleBar(self._win, "SteamGuard", APP_VERSION))
+        # Center glass card
+        card = QFrame()
+        card.setFixedWidth(380)
+        card.setStyleSheet("""
+            QFrame {
+                background:rgba(13,17,23,0.88);
+                border:1px solid rgba(255,255,255,0.08);
+                border-radius:16px;
+            }
+        """)
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        card.setGraphicsEffect(shadow)
 
-        body = QVBoxLayout()
-        body.setContentsMargins(36, 12, 36, 20)
-        body.setSpacing(6)
-        body.setAlignment(Qt.AlignTop)
+        c = QVBoxLayout(card)
+        c.setContentsMargins(36, 36, 36, 36)
+        c.setSpacing(6)
 
-        # Hero shield
-        self._shield = PulsingShield()
-        body.addWidget(self._shield, alignment=Qt.AlignHCenter)
+        # 1. RC Logo (60x60)
+        logo = RCLogo(60)
+        c.addWidget(logo, alignment=Qt.AlignHCenter)
+        c.addSpacing(10)
 
+        # 2. Community label
         community = QLabel("R I V V A K   C O M M U N I T Y")
         community.setAlignment(Qt.AlignCenter)
-        community.setStyleSheet(f"color:{MUTED}; font-size:10px; letter-spacing:2px;")
-        body.addWidget(community)
+        community.setStyleSheet(
+            f"color:{MUTED}; font-size:11px; letter-spacing:2px; background:transparent;")
+        c.addWidget(community)
 
-        title = QLabel("SteamGuard Loader")
+        # 3. Title
+        title = QLabel("SteamGuard")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(f"color:{TEXT}; font-size:18px; font-weight:700;")
-        body.addWidget(title)
+        title.setStyleSheet(f"color:{TEXT}; font-size:24px; font-weight:800; background:transparent;")
+        c.addWidget(title)
 
-        badge = QLabel(APP_VERSION)
+        # 4. Version subtitle
+        badge = QLabel(f"Loader {APP_VERSION}")
         badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(f"color:{ACCENT}; font-size:11px; font-weight:700;")
-        body.addWidget(badge)
+        badge.setStyleSheet(f"color:{ACCENT}; font-size:10px; font-weight:700; background:transparent;")
+        c.addWidget(badge)
 
-        body.addSpacing(10)
+        c.addSpacing(20)
 
-        # Inputs
+        # 6/7. Inputs
         self._discord = make_input("Discord User ID")
         self._key = make_input("License Key", password=True)
-        body.addWidget(self._discord)
-        body.addWidget(self._key)
+        c.addWidget(self._discord)
+        c.addWidget(self._key)
 
-        # Remember me
+        # 8. Remember me
         self._remember = QCheckBox("Remember me")
         self._remember.setCursor(Qt.PointingHandCursor)
         self._remember.setStyleSheet(f"""
-            QCheckBox {{ color:{MUTED}; font-size:12px; spacing:8px; }}
+            QCheckBox {{ color:{MUTED2}; font-size:12px; spacing:8px; background:transparent; }}
             QCheckBox::indicator {{ width:16px; height:16px; border-radius:4px;
-                                    border:1px solid {BORDER}; background:{BG}; }}
+                                    border:1px solid {BORDER}; background:rgba(255,255,255,0.04); }}
             QCheckBox::indicator:checked {{ background:{ACCENT}; border:1px solid {ACCENT}; }}
         """)
-        body.addWidget(self._remember)
+        c.addWidget(self._remember)
 
-        body.addSpacing(4)
+        c.addSpacing(4)
 
-        # Login button
-        self._login_btn = make_primary_button("LOGIN")
+        # 9. Login button
+        self._login_btn = make_primary_button("LOGIN", 48)
         self._login_btn.clicked.connect(self._on_login)
-        body.addWidget(self._login_btn)
+        c.addWidget(self._login_btn)
 
-        # Spinner (hidden by default)
+        # 10. Spinner (hidden by default)
         self._spinner = Spinner(26)
         self._spinner.hide()
         spin_row = QHBoxLayout()
         spin_row.addStretch(1)
         spin_row.addWidget(self._spinner)
         spin_row.addStretch(1)
-        body.addLayout(spin_row)
+        c.addLayout(spin_row)
 
-        # Error label (hidden by default)
+        # 11. Error label (hidden)
         self._error = QLabel("")
         self._error.setAlignment(Qt.AlignCenter)
         self._error.setWordWrap(True)
-        self._error.setStyleSheet(f"color:{RED}; font-size:11px;")
+        self._error.setStyleSheet(f"color:{RED}; font-size:11px; background:transparent;")
         self._error.hide()
-        body.addWidget(self._error)
+        c.addWidget(self._error)
 
-        body.addStretch(1)
+        # 12. gap
+        c.addSpacing(16)
 
-        # Bottom links
-        links = QHBoxLayout()
-        links.setSpacing(4)
-        get_key = make_link("Get a Key", ACCENT2)
-        get_key.clicked.connect(lambda: webbrowser.open(DISCORD_INVITE))
-        sep = QLabel("|")
-        sep.setStyleSheet(f"color:{BORDER}; font-size:11px;")
-        site = make_link("rivvak.app", MUTED)
-        site.clicked.connect(lambda: webbrowser.open(BRAND_SITE))
-        links.addStretch(1)
-        links.addWidget(get_key)
-        links.addWidget(sep)
-        links.addWidget(site)
-        links.addStretch(1)
-        body.addLayout(links)
+        # 13. Social row
+        social = QHBoxLayout()
+        social.setSpacing(10)
+        discord_btn = self._social_btn(
+            "Join Discord", DISCORD_BLURPLE, _png_pixmap(_DISCORD_PNG_B64),
+            lambda: webbrowser.open(DISCORD_INVITE))
+        youtube_btn = self._social_btn(
+            "YouTube", YOUTUBE_RED, _png_pixmap(_YOUTUBE_PNG_B64),
+            lambda: webbrowser.open(BRAND_SITE))
+        social.addWidget(discord_btn)
+        social.addWidget(youtube_btn)
+        c.addLayout(social)
 
-        root.addLayout(body)
+        root.addWidget(card, alignment=Qt.AlignCenter)
 
         # Prefill saved creds
         creds = load_creds()
@@ -708,6 +1038,36 @@ class LoginScreen(QWidget):
             self._discord.setText(creds.get("discord_user_id", ""))
             self._key.setText(creds.get("key", ""))
             self._remember.setChecked(True)
+
+    def _social_btn(self, text, color, pixmap, slot):
+        b = QPushButton(text)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setFixedHeight(40)
+        if not pixmap.isNull():
+            b.setIcon(QIcon(pixmap))
+            b.setIconSize(QSize(18, 18))
+        b.setStyleSheet(f"""
+            QPushButton {{ background:{color}; color:white; border:none;
+                           border-radius:10px; font-size:12px; font-weight:700;
+                           padding-left:6px; }}
+            QPushButton:hover {{ background:{color}; }}
+        """)
+        b.clicked.connect(slot)
+        return b
+
+    # Allow dragging the frameless window from anywhere on the login screen
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag_pos = e.globalPos() - self._win.frameGeometry().topLeft()
+            e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos is not None and e.buttons() & Qt.LeftButton:
+            self._win.move(e.globalPos() - self._drag_pos)
+            e.accept()
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
 
     def try_auto_login(self):
         """Called on startup — auto-login if saved creds + token exist."""
@@ -739,7 +1099,7 @@ class LoginScreen(QWidget):
             return
 
         self._set_busy(True)
-        server = self._settings.get("server_url", DEFAULT_SERVER_URL)
+        server = DEFAULT_SERVER_URL
         self._worker = LoginWorker(server, discord_id, key)
         self._worker.done.connect(lambda r: self._on_login_done(r, discord_id, key))
         self._worker.start()
@@ -768,62 +1128,13 @@ class LoginScreen(QWidget):
             "discord_username": result.get("discord_username")
             or result.get("username") or f"User {discord_id[:6]}",
             "tier": (result.get("tier") or ("PREMIUM" if result.get("premium") else "FREE")).upper(),
-            "server_url": self._settings.get("server_url", DEFAULT_SERVER_URL),
+            "server_url": DEFAULT_SERVER_URL,
         }
         self.login_success.emit(session)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Dashboard — nav items
-# ══════════════════════════════════════════════════════════════════════════════
-
-class NavItem(QPushButton):
-    def __init__(self, icon, label, parent=None):
-        super().__init__(f"  {icon}  {label}", parent)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setCheckable(True)
-        self.setFixedHeight(38)
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background:transparent; color:{MUTED}; border:none;
-                text-align:left; padding-left:10px; font-size:12px;
-                border-radius:6px;
-            }}
-            QPushButton:hover {{ background:{CARD}; color:{TEXT}; }}
-            QPushButton:checked {{ background:{CARD}; color:{TEXT};
-                                   font-weight:700; border-left:3px solid {ACCENT}; }}
-        """)
-
-
-# ── Rewards / Referrals data workers ────────────────────────────────────────
-
-class GetJsonWorker(QThread):
-    done = pyqtSignal(dict)
-
-    def __init__(self, url, token, parent=None):
-        super().__init__(parent)
-        self.url = url
-        self.token = token
-
-    def run(self):
-        self.done.emit(_http_json(self.url, "GET", None, self.token))
-
-
-class PostJsonWorker(QThread):
-    done = pyqtSignal(dict)
-
-    def __init__(self, url, token, payload=None, parent=None):
-        super().__init__(parent)
-        self.url = url
-        self.token = token
-        self.payload = payload or {}
-
-    def run(self):
-        self.done.emit(_http_json(self.url, "POST", self.payload, self.token))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Screen 2 — Dashboard
+#  Screen 2 — Dashboard (MY.GAMES launcher style)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class Dashboard(QWidget):
@@ -834,12 +1145,13 @@ class Dashboard(QWidget):
         self._win = window
         self._session = session
         self._token = session.get("token", "")
-        self._server = session.get("server_url", DEFAULT_SERVER_URL).rstrip("/")
+        self._server = DEFAULT_SERVER_URL.rstrip("/")
         self._settings = load_settings()
         self._sg_process = None
         self._proc_timer = QTimer(self)
         self._proc_timer.timeout.connect(self._check_process)
         self._workers = []   # keep references alive
+        self._referral_ensured = False
         self._build()
         self._load_overview()
 
@@ -848,7 +1160,7 @@ class Dashboard(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(TitleBar(self._win, "SteamGuard", APP_VERSION))
+        root.addWidget(TitleBar(self._win, "SteamGuard"))
 
         main = QHBoxLayout()
         main.setContentsMargins(0, 0, 0, 0)
@@ -856,7 +1168,7 @@ class Dashboard(QWidget):
         main.addWidget(self._build_sidebar())
 
         self._stack = QStackedWidget()
-        self._stack.setStyleSheet(f"background:{CARD};")
+        self._stack.setStyleSheet("background:transparent;")
         self._stack.addWidget(self._build_protection_tab())   # 0
         self._stack.addWidget(self._build_rewards_tab())       # 1
         self._stack.addWidget(self._build_referrals_tab())     # 2
@@ -867,68 +1179,32 @@ class Dashboard(QWidget):
 
     def _build_sidebar(self):
         bar = QFrame()
-        bar.setFixedWidth(140)
-        bar.setStyleSheet(f"background:{SURFACE};")
+        bar.setFixedWidth(72)
+        bar.setStyleSheet("background:rgba(8,11,16,0.85);")
         lay = QVBoxLayout(bar)
-        lay.setContentsMargins(10, 14, 10, 12)
-        lay.setSpacing(8)
+        lay.setContentsMargins(12, 16, 12, 14)
+        lay.setSpacing(10)
+        lay.setAlignment(Qt.AlignHCenter)
 
-        username = self._session.get("discord_username", "User")
-        self._avatar = Avatar(username[0] if username else "?", 44)
-        lay.addWidget(self._avatar, alignment=Qt.AlignHCenter)
-
-        name_lbl = QLabel(username if len(username) <= 14 else username[:13] + "…")
-        name_lbl.setAlignment(Qt.AlignCenter)
-        name_lbl.setStyleSheet(f"color:{TEXT}; font-size:12px; font-weight:600;")
-        lay.addWidget(name_lbl)
-
-        tier = self._session.get("tier", "FREE")
-        tier_color = YELLOW if tier == "PREMIUM" else MUTED
-        self._tier_lbl = QLabel(tier)
-        self._tier_lbl.setAlignment(Qt.AlignCenter)
-        self._tier_lbl.setStyleSheet(f"""
-            QLabel {{ color:{'#1C2128' if tier=='PREMIUM' else TEXT};
-                      background:{tier_color}; border-radius:9px;
-                      padding:2px 10px; font-size:9px; font-weight:700; }}
-        """)
-        tier_row = QHBoxLayout()
-        tier_row.addStretch(1)
-        tier_row.addWidget(self._tier_lbl)
-        tier_row.addStretch(1)
-        lay.addLayout(tier_row)
-
-        sep = QFrame()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background:{BORDER};")
-        lay.addWidget(sep)
-
-        # Nav
         self._nav = []
-        for icon, label, idx in [
-            ("🛡", "Protection", 0),
-            ("🎁", "Rewards", 1),
-            ("🔗", "Referrals", 2),
-            ("⚙️", "Settings", 3),
+        for kind, tip, idx in [
+            ("shield", "My Tools", 0),
+            ("gift", "Rewards", 1),
+            ("chain", "Referrals", 2),
+            ("gear", "Settings", 3),
         ]:
-            item = NavItem(icon, label)
+            item = SideIconButton(kind, tip)
             item.clicked.connect(lambda _=False, i=idx: self._switch_tab(i))
-            lay.addWidget(item)
+            lay.addWidget(item, alignment=Qt.AlignHCenter)
             self._nav.append(item)
         self._nav[0].setChecked(True)
 
         lay.addStretch(1)
 
-        logout_btn = QPushButton("  ⎋  Logout")
-        logout_btn.setCursor(Qt.PointingHandCursor)
-        logout_btn.setFixedHeight(34)
-        logout_btn.setStyleSheet(f"""
-            QPushButton {{ background:transparent; color:{RED}; border:none;
-                           text-align:left; padding-left:10px; font-size:12px;
-                           border-radius:6px; }}
-            QPushButton:hover {{ background:{CARD}; }}
-        """)
+        logout_btn = SideIconButton("logout", "Logout", accent=RED)
+        logout_btn.setCheckable(False)
         logout_btn.clicked.connect(self._on_logout)
-        lay.addWidget(logout_btn)
+        lay.addWidget(logout_btn, alignment=Qt.AlignHCenter)
         return bar
 
     def _switch_tab(self, idx):
@@ -940,91 +1216,104 @@ class Dashboard(QWidget):
         elif idx == 2:
             self._load_referrals()
 
-    # ── Protection tab ──────────────────────────────────────────────────────
-    def _build_protection_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(12)
+    def _content_page(self):
+        """A gradient-background page with a vertical layout, returns (widget, layout)."""
+        page = GradientBackground()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(28, 22, 28, 18)
+        lay.setSpacing(16)
+        return page, lay
 
-        heading = QLabel("Protection")
-        heading.setStyleSheet(f"color:{TEXT}; font-size:16px; font-weight:700;")
+    def _header(self, text):
+        h = QLabel(text)
+        h.setStyleSheet(f"color:{TEXT}; font-size:18px; font-weight:800; background:transparent;")
+        return h
+
+    # ── Protection tab ("My Tools") ─────────────────────────────────────────
+    def _build_protection_tab(self):
+        page, lay = self._content_page()
+
+        heading = QLabel("My Tools")
+        heading.setAlignment(Qt.AlignCenter)
+        heading.setStyleSheet(f"color:{TEXT}; font-size:18px; font-weight:800; background:transparent;")
         lay.addWidget(heading)
 
-        self._launch_btn = QPushButton("LAUNCH STEAMGUARD")
-        self._launch_btn.setCursor(Qt.PointingHandCursor)
-        self._launch_btn.setFixedHeight(60)
-        self._launch_btn.setStyleSheet(f"""
-            QPushButton {{ background:{ACCENT}; color:white; border:none;
-                           border-radius:10px; font-size:16px; font-weight:700; }}
-            QPushButton:hover {{ background:{ACCENT_HOVER}; }}
-            QPushButton:disabled {{ background:{BORDER}; color:{MUTED}; }}
+        # Cards grid (2 columns)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+
+        # Card 1 — SteamGuard
+        self._sg_card = GameCard(
+            "SteamGuard", "Family Sharing Protection",
+            grad_top="#1a3a2a", grad_bottom="#0d1117",
+            border_color="rgba(35,165,89,0.3)", border_hover="rgba(35,165,89,0.8)",
+            action_text="PLAY", action_color=ACCENT,
+            action_enabled=True, on_action=self._on_launch,
+        )
+        self._sg_card.setMinimumHeight(240)
+        grid.addWidget(self._sg_card, 0, 0)
+
+        # Card 2 — Roblox Tool
+        self._roblox_card = GameCard(
+            "Roblox Tool", "Auto-Farm & Utilities",
+            grad_top="#1a1a3a", grad_bottom="#0d1117",
+            border_color="rgba(88,166,255,0.3)", border_hover="rgba(88,166,255,0.8)",
+            action_text="COMING SOON", action_color=ACCENT2,
+            action_enabled=False,
+        )
+        self._roblox_card.setMinimumHeight(240)
+        grid.addWidget(self._roblox_card, 0, 1)
+
+        # Card 3 — Coming Soon (full width)
+        coming = ComingSoonCard()
+        coming.setMinimumHeight(200)
+        grid.addWidget(coming, 1, 0, 1, 2)
+
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid, 1)
+
+        # User info strip
+        lay.addWidget(self._build_user_strip())
+        return page
+
+    def _build_user_strip(self):
+        strip = QFrame()
+        strip.setFixedHeight(48)
+        strip.setStyleSheet("background:rgba(0,0,0,0.4); border-radius:10px;")
+        h = QHBoxLayout(strip)
+        h.setContentsMargins(12, 6, 12, 6)
+        h.setSpacing(10)
+
+        username = self._session.get("discord_username", "User")
+        self._avatar = Avatar(username[0] if username else "?", 32)
+        h.addWidget(self._avatar)
+
+        name_lbl = QLabel(username if len(username) <= 18 else username[:17] + "…")
+        name_lbl.setStyleSheet(f"color:{TEXT}; font-size:12px; font-weight:700; background:transparent;")
+        h.addWidget(name_lbl)
+
+        tier = self._session.get("tier", "FREE")
+        tier_color = YELLOW if tier == "PREMIUM" else BORDER
+        self._tier_lbl = QLabel(tier)
+        self._tier_lbl.setStyleSheet(f"""
+            QLabel {{ color:{'#1C2128' if tier=='PREMIUM' else TEXT};
+                      background:{tier_color}; border-radius:9px;
+                      padding:2px 10px; font-size:9px; font-weight:800; }}
         """)
-        self._launch_btn.clicked.connect(self._on_launch)
-        lay.addWidget(self._launch_btn)
+        h.addWidget(self._tier_lbl)
 
-        # Status dots row
-        status_row = QHBoxLayout()
-        status_row.setSpacing(16)
-        self._dot_firewall = StatusDot("FIREWALL", MUTED)
-        self._dot_network = StatusDot("NETWORK", ACCENT)
-        self._dot_library = StatusDot("LIBRARY", MUTED)
-        status_row.addWidget(self._dot_firewall)
-        status_row.addWidget(self._dot_network)
-        status_row.addWidget(self._dot_library)
-        status_row.addStretch(1)
-        lay.addLayout(status_row)
+        h.addStretch(1)
 
-        # Time remaining card
-        self._time_card = QFrame()
-        self._time_card.setStyleSheet(f"background:{SURFACE}; border-radius:8px;")
-        tc_lay = QHBoxLayout(self._time_card)
-        tc_lay.setContentsMargins(14, 12, 14, 12)
-        self._time_lbl = QLabel("⏰  Time Remaining: —")
-        self._time_lbl.setStyleSheet(f"color:{TEXT}; font-size:13px; font-weight:600;")
-        tc_lay.addWidget(self._time_lbl)
-        tc_lay.addStretch(1)
-        lay.addWidget(self._time_card)
-
-        # Recent activity
-        act_lbl = QLabel("Recent Activity")
-        act_lbl.setStyleSheet(f"color:{MUTED}; font-size:11px; font-weight:600;")
-        lay.addWidget(act_lbl)
-
-        self._activity = QScrollArea()
-        self._activity.setWidgetResizable(True)
-        self._activity.setStyleSheet(f"""
-            QScrollArea {{ background:{SURFACE}; border:1px solid {BORDER};
-                           border-radius:8px; }}
+        self._time_lbl = QLabel("⏰ —")
+        self._time_lbl.setStyleSheet(f"""
+            QLabel {{ color:{TEXT}; background:rgba(35,165,89,0.18);
+                      border:1px solid rgba(35,165,89,0.4); border-radius:12px;
+                      padding:4px 14px; font-size:11px; font-weight:700; }}
         """)
-        self._activity_inner = QWidget()
-        self._activity_inner.setStyleSheet(f"background:{SURFACE};")
-        self._activity_lay = QVBoxLayout(self._activity_inner)
-        self._activity_lay.setContentsMargins(10, 8, 10, 8)
-        self._activity_lay.setSpacing(3)
-        self._activity_lay.setAlignment(Qt.AlignTop)
-        self._activity.setWidget(self._activity_inner)
-        lay.addWidget(self._activity, 1)
-
-        self._set_activity([
-            "Loader initialized.",
-            "Session token loaded.",
-            "Awaiting launch…",
-        ])
-        return w
-
-    def _set_activity(self, lines):
-        # clear
-        while self._activity_lay.count():
-            item = self._activity_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        for line in lines[-5:]:
-            lbl = QLabel(line)
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet(
-                f"color:{MUTED}; font-family:Consolas,monospace; font-size:11px;")
-            self._activity_lay.addWidget(lbl)
+        h.addWidget(self._time_lbl)
+        return strip
 
     def _find_steamguard(self):
         """Return path to SteamGuard.exe next to the loader or on PATH."""
@@ -1045,27 +1334,20 @@ class Dashboard(QWidget):
     def _on_launch(self):
         exe = self._find_steamguard()
         if not exe:
-            self._set_activity([
-                "ERROR: SteamGuard.exe not found in the same folder",
-            ])
-            self._time_lbl.setText("⚠  SteamGuard.exe not found in the same folder")
-            self._time_lbl.setStyleSheet(f"color:{RED}; font-size:13px; font-weight:600;")
+            self._time_lbl.setText("⚠ SteamGuard.exe not found")
+            self._time_lbl.setStyleSheet(f"""
+                QLabel {{ color:{RED}; background:rgba(242,63,67,0.18);
+                          border:1px solid rgba(242,63,67,0.4); border-radius:12px;
+                          padding:4px 14px; font-size:11px; font-weight:700; }}
+            """)
             return
         try:
             self._sg_process = subprocess.Popen([exe])
         except Exception as e:
-            self._set_activity([f"ERROR launching SteamGuard: {e}"])
+            self._time_lbl.setText(f"⚠ Launch failed")
             return
 
-        self._launch_btn.setText("✓ RUNNING")
-        self._launch_btn.setDisabled(True)
-        self._dot_firewall.set_color(ACCENT)
-        self._dot_library.set_color(ACCENT)
-        self._set_activity([
-            "Launching SteamGuard.exe…",
-            "Process started.",
-            "Firewall protection engaged.",
-        ])
+        self._sg_card.set_action_running()
         self._proc_timer.start(1000)
 
     def _check_process(self):
@@ -1076,11 +1358,7 @@ class Dashboard(QWidget):
             # Process exited — re-enable button
             self._proc_timer.stop()
             self._sg_process = None
-            self._launch_btn.setText("LAUNCH STEAMGUARD")
-            self._launch_btn.setDisabled(False)
-            self._dot_firewall.set_color(MUTED)
-            self._dot_library.set_color(MUTED)
-            self._set_activity(["SteamGuard exited.", "Ready to relaunch."])
+            self._sg_card.reset_action("PLAY", ACCENT)
 
     def _load_overview(self):
         if not self._token:
@@ -1100,34 +1378,26 @@ class Dashboard(QWidget):
             try:
                 total_min = int(float(remaining) * 60)
                 h, m = divmod(total_min, 60)
-                self._time_lbl.setText(f"⏰  Time Remaining: {h}h {m}m")
+                self._time_lbl.setText(f"⏰ {h}h {m}m remaining")
             except Exception:
                 pass
-        logs = data.get("recent_activity") or data.get("logs")
-        if isinstance(logs, list) and logs:
-            self._set_activity([str(x) for x in logs])
         # Auto-launch if enabled
         if self._settings.get("auto_launch_steamguard"):
             QTimer.singleShot(500, self._on_launch)
 
     # ── Rewards tab ───────────────────────────────────────────────────────
     def _build_rewards_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(10)
+        page, lay = self._content_page()
 
         top = QHBoxLayout()
-        heading = QLabel("Rewards")
-        heading.setStyleSheet(f"color:{TEXT}; font-size:16px; font-weight:700;")
-        top.addWidget(heading)
+        top.addWidget(self._header("Rewards"))
         top.addStretch(1)
         daily = QPushButton("Claim Daily")
         daily.setCursor(Qt.PointingHandCursor)
-        daily.setFixedHeight(30)
+        daily.setFixedHeight(32)
         daily.setStyleSheet(f"""
             QPushButton {{ background:{ACCENT}; color:white; border:none;
-                           border-radius:6px; padding:0 14px; font-weight:700;
+                           border-radius:6px; padding:0 16px; font-weight:700;
                            font-size:11px; }}
             QPushButton:hover {{ background:{ACCENT_HOVER}; }}
         """)
@@ -1137,19 +1407,22 @@ class Dashboard(QWidget):
 
         self._rewards_scroll = QScrollArea()
         self._rewards_scroll.setWidgetResizable(True)
-        self._rewards_scroll.setStyleSheet("QScrollArea { border:none; }")
+        self._rewards_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        self._rewards_scroll.viewport().setStyleSheet("background:transparent;")
         self._rewards_inner = QWidget()
-        self._rewards_lay = QVBoxLayout(self._rewards_inner)
+        self._rewards_inner.setStyleSheet("background:transparent;")
+        self._rewards_lay = QGridLayout(self._rewards_inner)
         self._rewards_lay.setContentsMargins(0, 0, 0, 0)
-        self._rewards_lay.setSpacing(8)
+        self._rewards_lay.setHorizontalSpacing(12)
+        self._rewards_lay.setVerticalSpacing(12)
         self._rewards_lay.setAlignment(Qt.AlignTop)
         self._rewards_scroll.setWidget(self._rewards_inner)
         lay.addWidget(self._rewards_scroll, 1)
 
         self._rewards_msg = QLabel("Loading rewards…")
-        self._rewards_msg.setStyleSheet(f"color:{MUTED}; font-size:12px;")
-        self._rewards_lay.addWidget(self._rewards_msg)
-        return w
+        self._rewards_msg.setStyleSheet(f"color:{MUTED2}; font-size:12px; background:transparent;")
+        self._rewards_lay.addWidget(self._rewards_msg, 0, 0)
+        return page
 
     def _load_rewards(self):
         if not self._token:
@@ -1170,38 +1443,41 @@ class Dashboard(QWidget):
         self._clear_layout(self._rewards_lay)
         if not isinstance(data, dict) or data.get("error"):
             msg = QLabel((data or {}).get("error", "Could not load rewards."))
-            msg.setStyleSheet(f"color:{MUTED}; font-size:12px;")
-            self._rewards_lay.addWidget(msg)
+            msg.setStyleSheet(f"color:{MUTED2}; font-size:12px; background:transparent;")
+            self._rewards_lay.addWidget(msg, 0, 0)
             return
         rewards = data.get("rewards") or data.get("items") or []
         if not rewards:
             msg = QLabel("No rewards available right now.")
-            msg.setStyleSheet(f"color:{MUTED}; font-size:12px;")
-            self._rewards_lay.addWidget(msg)
+            msg.setStyleSheet(f"color:{MUTED2}; font-size:12px; background:transparent;")
+            self._rewards_lay.addWidget(msg, 0, 0)
             return
-        for r in rewards:
-            self._rewards_lay.addWidget(self._reward_card(r))
+        for i, r in enumerate(rewards):
+            row, col = divmod(i, 2)
+            self._rewards_lay.addWidget(self._reward_card(r), row, col)
 
     def _reward_card(self, r):
         card = QFrame()
-        card.setStyleSheet(f"background:{SURFACE}; border:1px solid {BORDER}; border-radius:8px;")
+        card.setStyleSheet("""
+            QFrame {
+                background:rgba(255,255,255,0.04);
+                border:1px solid rgba(255,255,255,0.08);
+                border-radius:10px;
+            }
+        """)
         lay = QHBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(10)
-
-        icon = QLabel(r.get("icon", "🎁"))
-        icon.setStyleSheet("font-size:20px;")
-        lay.addWidget(icon)
 
         info = QVBoxLayout()
         info.setSpacing(2)
         name = QLabel(str(r.get("name", "Reward")))
-        name.setStyleSheet(f"color:{TEXT}; font-size:13px; font-weight:600;")
+        name.setStyleSheet(f"color:{TEXT}; font-size:13px; font-weight:700; background:transparent;")
         info.addWidget(name)
         hours = r.get("hours") or r.get("reward_hours")
         if hours:
             badge = QLabel(f"+{hours}h")
-            badge.setStyleSheet(f"color:{ACCENT}; font-size:11px; font-weight:700;")
+            badge.setStyleSheet(f"color:{ACCENT}; font-size:11px; font-weight:800; background:transparent;")
             info.addWidget(badge)
         lay.addLayout(info)
         lay.addStretch(1)
@@ -1214,7 +1490,7 @@ class Dashboard(QWidget):
             btn.setFixedHeight(28)
             btn.setStyleSheet(f"""
                 QPushButton {{ background:{ACCENT}; color:white; border:none;
-                               border-radius:6px; padding:0 14px; font-weight:700;
+                               border-radius:6px; padding:0 16px; font-weight:700;
                                font-size:11px; }}
                 QPushButton:hover {{ background:{ACCENT_HOVER}; }}
             """)
@@ -1222,8 +1498,12 @@ class Dashboard(QWidget):
             btn.clicked.connect(lambda _=False, i=rid: self._claim_reward(i))
             lay.addWidget(btn)
         else:
-            cd = QLabel(f"{cooldown}m cooldown" if cooldown else "Unavailable")
-            cd.setStyleSheet(f"color:{MUTED}; font-size:11px;")
+            cd = QLabel(f"{cooldown}m" if cooldown else "Locked")
+            cd.setStyleSheet(f"""
+                QLabel {{ color:{MUTED2}; background:rgba(255,255,255,0.06);
+                          border-radius:12px; padding:4px 12px; font-size:10px;
+                          font-weight:700; }}
+            """)
             lay.addWidget(cd)
         return card
 
@@ -1242,43 +1522,30 @@ class Dashboard(QWidget):
 
     # ── Referrals tab ─────────────────────────────────────────────────────
     def _build_referrals_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(12)
-
-        heading = QLabel("Referrals")
-        heading.setStyleSheet(f"color:{TEXT}; font-size:16px; font-weight:700;")
-        lay.addWidget(heading)
+        page, lay = self._content_page()
+        lay.addWidget(self._header("Referrals"))
 
         link_lbl = QLabel("Your referral link")
-        link_lbl.setStyleSheet(f"color:{MUTED}; font-size:11px; font-weight:600;")
+        link_lbl.setStyleSheet(f"color:{MUTED2}; font-size:11px; font-weight:700; background:transparent;")
         lay.addWidget(link_lbl)
 
         link_row = QHBoxLayout()
         self._ref_link = QLineEdit("Loading…")
         self._ref_link.setReadOnly(True)
-        self._ref_link.setFixedHeight(38)
+        self._ref_link.setFixedHeight(40)
         self._ref_link.setStyleSheet(f"""
-            QLineEdit {{ background:{BG}; color:{ACCENT2}; border:1px solid {BORDER};
-                         border-radius:8px; padding:0 12px; font-size:12px; }}
+            QLineEdit {{ background:rgba(255,255,255,0.04); color:{ACCENT2};
+                         border:1px solid rgba(255,255,255,0.08);
+                         border-radius:10px; padding:0 14px; font-size:12px; }}
         """)
         link_row.addWidget(self._ref_link, 1)
-        copy_link = QPushButton("Copy")
-        copy_link.setCursor(Qt.PointingHandCursor)
-        copy_link.setFixedHeight(38)
-        copy_link.setStyleSheet(f"""
-            QPushButton {{ background:{SURFACE}; color:{TEXT}; border:1px solid {BORDER};
-                           border-radius:8px; padding:0 16px; font-size:11px; }}
-            QPushButton:hover {{ border:1px solid {ACCENT}; }}
-        """)
-        copy_link.clicked.connect(lambda: self._copy(self._ref_link.text()))
+        copy_link = self._copy_button(lambda: self._copy(self._ref_link.text()))
         link_row.addWidget(copy_link)
         lay.addLayout(link_row)
 
         # Stats
         stats_row = QHBoxLayout()
-        stats_row.setSpacing(10)
+        stats_row.setSpacing(12)
         self._stat_valid = self._stat_card("Valid", "0")
         self._stat_pending = self._stat_card("Pending", "0")
         self._stat_earned = self._stat_card("Earned (h)", "0")
@@ -1289,45 +1556,58 @@ class Dashboard(QWidget):
 
         # Invite message
         msg_lbl = QLabel("Invite message")
-        msg_lbl.setStyleSheet(f"color:{MUTED}; font-size:11px; font-weight:600;")
+        msg_lbl.setStyleSheet(f"color:{MUTED2}; font-size:11px; font-weight:700; background:transparent;")
         lay.addWidget(msg_lbl)
 
         msg_row = QHBoxLayout()
-        self._invite_msg = QLineEdit("Join SteamGuard — the Steam Family Sharing unlocker! " + DISCORD_INVITE)
+        self._invite_msg = QLineEdit(
+            "Join SteamGuard — the Steam Family Sharing unlocker! " + DISCORD_INVITE)
         self._invite_msg.setReadOnly(True)
-        self._invite_msg.setFixedHeight(38)
+        self._invite_msg.setFixedHeight(40)
         self._invite_msg.setStyleSheet(f"""
-            QLineEdit {{ background:{BG}; color:{TEXT}; border:1px solid {BORDER};
-                         border-radius:8px; padding:0 12px; font-size:11px; }}
+            QLineEdit {{ background:rgba(255,255,255,0.04); color:{TEXT};
+                         border:1px solid rgba(255,255,255,0.08);
+                         border-radius:10px; padding:0 14px; font-size:11px; }}
         """)
         msg_row.addWidget(self._invite_msg, 1)
-        copy_msg = QPushButton("Copy")
-        copy_msg.setCursor(Qt.PointingHandCursor)
-        copy_msg.setFixedHeight(38)
-        copy_msg.setStyleSheet(f"""
-            QPushButton {{ background:{SURFACE}; color:{TEXT}; border:1px solid {BORDER};
-                           border-radius:8px; padding:0 16px; font-size:11px; }}
-            QPushButton:hover {{ border:1px solid {ACCENT}; }}
-        """)
-        copy_msg.clicked.connect(lambda: self._copy(self._invite_msg.text()))
+        copy_msg = self._copy_button(lambda: self._copy(self._invite_msg.text()))
         msg_row.addWidget(copy_msg)
         lay.addLayout(msg_row)
 
         lay.addStretch(1)
-        return w
+        return page
+
+    def _copy_button(self, slot):
+        b = QPushButton("Copy")
+        b.setCursor(Qt.PointingHandCursor)
+        b.setFixedHeight(40)
+        b.setStyleSheet(f"""
+            QPushButton {{ background:rgba(255,255,255,0.06); color:{TEXT};
+                           border:1px solid rgba(255,255,255,0.10);
+                           border-radius:10px; padding:0 18px; font-size:11px; }}
+            QPushButton:hover {{ border:1px solid {ACCENT}; }}
+        """)
+        b.clicked.connect(slot)
+        return b
 
     def _stat_card(self, label, value):
         card = QFrame()
-        card.setStyleSheet(f"background:{SURFACE}; border:1px solid {BORDER}; border-radius:8px;")
+        card.setStyleSheet("""
+            QFrame {
+                background:rgba(255,255,255,0.04);
+                border:1px solid rgba(255,255,255,0.08);
+                border-radius:10px;
+            }
+        """)
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 12, 10, 12)
+        v.setContentsMargins(10, 14, 10, 14)
         v.setSpacing(2)
         val_lbl = QLabel(value)
         val_lbl.setAlignment(Qt.AlignCenter)
-        val_lbl.setStyleSheet(f"color:{ACCENT}; font-size:20px; font-weight:700;")
+        val_lbl.setStyleSheet(f"color:{ACCENT}; font-size:22px; font-weight:800; background:transparent;")
         name_lbl = QLabel(label)
         name_lbl.setAlignment(Qt.AlignCenter)
-        name_lbl.setStyleSheet(f"color:{MUTED}; font-size:10px;")
+        name_lbl.setStyleSheet(f"color:{MUTED2}; font-size:10px; background:transparent;")
         v.addWidget(val_lbl)
         v.addWidget(name_lbl)
         return card, val_lbl
@@ -1335,6 +1615,17 @@ class Dashboard(QWidget):
     def _load_referrals(self):
         if not self._token:
             return
+        # Fix: always ensure a referral code exists before showing.
+        if not self._referral_ensured:
+            self._referral_ensured = True
+            worker = PostJsonWorker(self._server + "/me/referral/create", self._token, {})
+            worker.done.connect(lambda _r: self._fetch_referrals())
+            self._workers.append(worker)
+            worker.start()
+        else:
+            self._fetch_referrals()
+
+    def _fetch_referrals(self):
         worker = GetJsonWorker(self._server + "/me/referrals", self._token)
         worker.done.connect(self._render_referrals)
         self._workers.append(worker)
@@ -1359,14 +1650,8 @@ class Dashboard(QWidget):
 
     # ── Settings tab ──────────────────────────────────────────────────────
     def _build_settings_tab(self):
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(14)
-
-        heading = QLabel("Settings")
-        heading.setStyleSheet(f"color:{TEXT}; font-size:16px; font-weight:700;")
-        lay.addWidget(heading)
+        page, lay = self._content_page()
+        lay.addWidget(self._header("Settings"))
 
         # Toggles
         self._toggle_startup = self._make_toggle(
@@ -1377,75 +1662,53 @@ class Dashboard(QWidget):
             "Auto-launch SteamGuard", self._settings.get("auto_launch_steamguard", False))
         lay.addWidget(self._toggle_autolaunch[0])
 
-        # Theme selector
-        theme_row = QHBoxLayout()
-        theme_lbl = QLabel("Theme")
-        theme_lbl.setStyleSheet(f"color:{TEXT}; font-size:13px;")
-        theme_row.addWidget(theme_lbl)
-        theme_row.addStretch(1)
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["Dark", "Darker"])
-        self._theme_combo.setCurrentText(self._settings.get("theme", "Dark"))
-        self._theme_combo.setFixedWidth(120)
-        self._theme_combo.setStyleSheet(f"""
-            QComboBox {{ background:{BG}; color:{TEXT}; border:1px solid {BORDER};
-                         border-radius:6px; padding:4px 8px; font-size:12px; }}
-            QComboBox QAbstractItemView {{ background:{SURFACE}; color:{TEXT};
-                         selection-background-color:{ACCENT}; }}
-        """)
-        theme_row.addWidget(self._theme_combo)
-        lay.addLayout(theme_row)
-
-        # Server URL
-        url_lbl = QLabel("Server URL (advanced)")
-        url_lbl.setStyleSheet(f"color:{MUTED}; font-size:11px; font-weight:600;")
-        lay.addWidget(url_lbl)
-        self._server_input = QLineEdit(self._settings.get("server_url", DEFAULT_SERVER_URL))
-        self._server_input.setFixedHeight(38)
-        self._server_input.setStyleSheet(f"""
-            QLineEdit {{ background:{BG}; color:{TEXT}; border:1px solid {BORDER};
-                         border-radius:8px; padding:0 12px; font-size:12px; }}
-            QLineEdit:focus {{ border:1px solid {ACCENT}; }}
-        """)
-        lay.addWidget(self._server_input)
-
         # Save button
-        save_btn = make_primary_button("Save Settings", height=38)
+        save_btn = make_primary_button("Save Settings", height=44)
         save_btn.clicked.connect(self._save_settings)
         lay.addWidget(save_btn)
 
-        # Reset credentials
+        # Reset credentials (red)
         reset_btn = QPushButton("Reset saved credentials")
         reset_btn.setCursor(Qt.PointingHandCursor)
-        reset_btn.setFixedHeight = 38
+        reset_btn.setFixedHeight(44)
         reset_btn.setStyleSheet(f"""
             QPushButton {{ background:transparent; color:{RED};
-                           border:1px solid {RED}; border-radius:8px;
-                           padding:8px; font-size:12px; }}
+                           border:1px solid {RED}; border-radius:10px;
+                           padding:8px; font-size:12px; font-weight:700; }}
             QPushButton:hover {{ background:{RED}; color:white; }}
         """)
         reset_btn.clicked.connect(self._reset_creds)
         lay.addWidget(reset_btn)
 
         self._settings_msg = QLabel("")
-        self._settings_msg.setStyleSheet(f"color:{ACCENT}; font-size:11px;")
+        self._settings_msg.setStyleSheet(f"color:{ACCENT}; font-size:11px; background:transparent;")
         lay.addWidget(self._settings_msg)
 
         lay.addStretch(1)
-        return w
+
+        ver = QLabel(f"SteamGuard Loader {APP_VERSION}")
+        ver.setStyleSheet(f"color:{MUTED}; font-size:10px; background:transparent;")
+        lay.addWidget(ver)
+        return page
 
     def _make_toggle(self, label, checked):
-        row = QWidget()
+        row = QFrame()
+        row.setStyleSheet("""
+            QFrame { background:rgba(255,255,255,0.04);
+                     border:1px solid rgba(255,255,255,0.08);
+                     border-radius:10px; }
+        """)
         h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
+        h.setContentsMargins(14, 10, 14, 10)
         lbl = QLabel(label)
-        lbl.setStyleSheet(f"color:{TEXT}; font-size:13px;")
+        lbl.setStyleSheet(f"color:{TEXT}; font-size:13px; background:transparent;")
         h.addWidget(lbl)
         h.addStretch(1)
         chk = QCheckBox()
         chk.setChecked(checked)
         chk.setCursor(Qt.PointingHandCursor)
         chk.setStyleSheet(f"""
+            QCheckBox {{ background:transparent; }}
             QCheckBox::indicator {{ width:40px; height:20px; border-radius:10px;
                                     background:{BORDER}; }}
             QCheckBox::indicator:checked {{ background:{ACCENT}; }}
@@ -1456,8 +1719,6 @@ class Dashboard(QWidget):
     def _save_settings(self):
         self._settings["launch_on_startup"] = self._toggle_startup[1].isChecked()
         self._settings["auto_launch_steamguard"] = self._toggle_autolaunch[1].isChecked()
-        self._settings["theme"] = self._theme_combo.currentText()
-        self._settings["server_url"] = self._server_input.text().strip() or DEFAULT_SERVER_URL
         save_settings(self._settings)
         self._apply_startup(self._settings["launch_on_startup"])
         self._settings_msg.setText("✓ Settings saved.")
@@ -1500,9 +1761,8 @@ class LoaderWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setFixedSize(440, 560)
+        self.setFixedSize(1100, 720)
         self.setStyleSheet(f"background:{BG};")
-        # Rounded / bordered container feel
         self.setAttribute(Qt.WA_TranslucentBackground, False)
 
         try:
