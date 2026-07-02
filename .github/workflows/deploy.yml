@@ -34,7 +34,6 @@ jobs:
           NEW_REV=$(gcloud run revisions list --service steamguard --region us-central1 --format='value(name)' --sort-by='~createTime' --limit=1)
           gcloud run services update-traffic steamguard --region us-central1 --to-revisions "$NEW_REV=100" --quiet
           echo "Deployed and routed traffic to: $NEW_REV"
-
   build-windows-client:
     runs-on: windows-latest
     permissions:
@@ -42,24 +41,20 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install nuitka ordered-set zstandard PySide6 pyqtdarktheme
           if (Test-Path "requirements_client.txt") { pip install -r requirements_client.txt }
-
       - name: Clean PNG Assets
         shell: bash
         run: |
           pip install pillow -q
           python -c "import glob; from PIL import Image; [Image.open(f).save(f) for f in glob.glob('*.png') + glob.glob('assets/*.png')]"
-
       - name: Build Hardened Binary with Nuitka
         run: |
           python -m nuitka `
@@ -77,37 +72,75 @@ jobs:
             --include-data-files=icon_64.png=icon_64.png `
             --include-data-files=discord_icon.png=discord_icon.png `
             --assume-yes-for-downloads `
+            --company-name="SteamGuard Security" `
+            --product-name="SteamGuard" `
+            --file-description="SteamGuard Security Client" `
+            --file-version="1.0.0.0" `
+            --product-version="1.0.0.0" `
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
-
       - name: Build Loader with Nuitka
         run: |
           pip install PyQt5
-          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --windows-icon-from-ico=icon.ico --enable-plugin=pyqt5 --include-package=PyQt5 --assume-yes-for-downloads --output-filename=Loader.exe loader.py
-
+          python -m nuitka `
+            --onefile `
+            --windows-console-mode=disable `
+            --windows-uac-admin `
+            --windows-icon-from-ico=icon.ico `
+            --enable-plugin=pyqt5 `
+            --include-package=PyQt5 `
+            --assume-yes-for-downloads `
+            --company-name="SteamGuard Security" `
+            --product-name="SteamGuard Loader" `
+            --file-description="SteamGuard Secure Loader" `
+            --file-version="1.0.0.0" `
+            --product-version="1.0.0.0" `
+            --output-filename=Loader.exe `
+            loader.py
       - name: Verify Build
         shell: pwsh
         run: |
-          if (Test-Path "SteamGuard.exe") { Write-Host "Build successful! File size:" (Get-Item "SteamGuard.exe").Length / 1MB } else { throw "SteamGuard.exe not found!" }
-
+          if (Test-Path "SteamGuard.exe") { Write-Host "SteamGuard.exe size:" (Get-Item "SteamGuard.exe").Length / 1MB } else { throw "SteamGuard.exe not found!" }
+          if (Test-Path "Loader.exe") { Write-Host "Loader.exe size:" (Get-Item "Loader.exe").Length / 1MB } else { throw "Loader.exe not found!" }
+      - name: Sign Loader with Self-Signed Certificate
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: |
+          # Decode PFX from secret and write to disk
+          $pfxBytes = [Convert]::FromBase64String($env:PFX_BASE64)
+          $pfxPath = "$env:TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+          # Locate signtool (bundled with Windows SDK on GitHub runners)
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "Using signtool: $signtool"
+          # Sign Loader.exe with publisher identity
+          & $signtool sign `
+            /fd SHA256 `
+            /f $pfxPath `
+            /p $env:PFX_PASSWORD `
+            /d "SteamGuard Secure Loader" `
+            /du "https://rivvak.app" `
+            /t "http://timestamp.digicert.com" `
+            Loader.exe
+          Write-Host "Loader.exe signed successfully."
+          # Clean up cert
+          Remove-Item $pfxPath -Force
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: fabled-mystery-474200-i1
-
       - name: Upload Binary to GCP Storage
         shell: pwsh
         run: |
+          # SteamGuard.exe is PRIVATE - no public IAM, only fetched by server via signed URL
           gcloud storage cp ./SteamGuard.exe gs://steamguard-downloads-fabled/SteamGuard.exe --quiet
-          gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/SteamGuard.exe `
-            --member=allUsers `
-            --role=roles/storage.legacyObjectReader
-
+          Write-Host "SteamGuard.exe uploaded (private, no public access)."
       - name: Upload Loader to GCP Storage
         shell: pwsh
         run: |
@@ -115,7 +148,6 @@ jobs:
           gcloud storage objects add-iam-policy-binding gs://steamguard-downloads-fabled/Loader.exe `
             --member=allUsers `
             --role=roles/storage.legacyObjectReader
-
       - name: Build Changelog
         id: changelog
         shell: pwsh
@@ -141,7 +173,6 @@ jobs:
           $versionJson = $version -replace '"', '\\"'
           echo "VERSION=$versionJson" >> $env:GITHUB_OUTPUT
           echo "CHANGELOG=$changelogJson" >> $env:GITHUB_OUTPUT
-
       - name: Post Embed to Discord
         shell: pwsh
         env:
