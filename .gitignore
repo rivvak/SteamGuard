@@ -35,3 +35,7 @@ run_output.log
 # OS
 Thumbs.db
 .DS_Store
+
+node_modules/
+*.log
+.env
