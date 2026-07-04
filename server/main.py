@@ -381,13 +381,17 @@ async def root_redirect():
 _GCS_EXE_URL = "https://storage.googleapis.com/steamguard-downloads-fabled/SteamGuard.exe"
 
 @app.get("/dashboard/SteamGuard.exe", include_in_schema=False)
-@app.get("/download", include_in_schema=False)
 @app.get("/SteamGuard.exe", include_in_schema=False)
-async def download_exe():
-    """Redirect any download URL to the public GCS bucket object.
-    Keeps Linkvertise links and existing URLs working forever regardless
-    of how the binary is rebuilt or where it lives."""
+async def download_steamguard_direct():
+    """Direct SteamGuard.exe download (legacy/internal URLs)."""
     return RedirectResponse(_GCS_EXE_URL, status_code=302)
+
+@app.get("/download", include_in_schema=False)
+async def download_loader_public():
+    """Public download link — always serves Loader.exe.
+    This is what Discord, rivvak.app, and Linkvertise point to."""
+    _loader_url = "https://storage.googleapis.com/steamguard-downloads-fabled/Loader.exe"
+    return RedirectResponse(_loader_url, status_code=302)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
