@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" type="image/x-icon" href="/dashboard/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/dashboard/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/dashboard/favicon-256.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SteamGuard · Dashboard</title>
+  <!-- Local vendor assets — no external CDN dependencies -->
+  <link rel="stylesheet" href="/dashboard/css/vendor/fontawesome.min.css" />
+  <script src="/dashboard/js/vendor/tailwind.min.js"></script>
+  <script src="/dashboard/js/vendor/chart.min.js"></script>
+  <link rel="stylesheet" href="/dashboard/css/style.css" />
+  <style>
+    /* System font stack — loads instantly, looks great on all platforms */
+    :root { --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { font-family: var(--font-sans); }
+
+    /* Check-in streak indicator */
+    .streak-progress-track {
+      width: 100%; height: 8px; border-radius: 999px;
+      background: var(--border, rgba(255,255,255,.12)); overflow: hidden;
+    }
+    .streak-progress-fill {
+      height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent, #3da9fc), var(--neon, #6ee7b7));
+      transition: width .5s ease;
+    }
+    .streak-flame { display: inline-block; filter: grayscale(1); opacity: .5;
+      transition: filter .3s ease, opacity .3s ease; }
+    /* Animate the flame once the streak is hot (>= 3 days) */
+    .streak-flame.is-hot { filter: none; opacity: 1; animation: flameFlicker 1.1s ease-in-out infinite; }
+    @keyframes flameFlicker {
+      0%, 100% { transform: scale(1) rotate(-2deg); }
+      50%      { transform: scale(1.18) rotate(2deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="flex items-center gap-2.5 px-1 mb-6">
+        <div class="rc-logo">RC</div>
+        <div>
+          <div class="font-extrabold leading-tight">SteamGuard</div>
+          <div class="text-muted text-[11px] font-semibold">Rivvak Community</div>
+        </div>
+      </div>
+
+      <nav class="flex-1">
+        <a class="nav-link" data-section="overview"><i class="fa-solid fa-gauge-high"></i> Overview</a>
+        <a class="nav-link" data-section="rewards"><i class="fa-solid fa-gift"></i> Rewards</a>
+        <a class="nav-link" data-section="referrals"><i class="fa-solid fa-user-group"></i> Referrals</a>
+        <a class="nav-link" data-section="stats"><i class="fa-solid fa-chart-line"></i> Stats</a>
+        <a class="nav-link" data-section="settings"><i class="fa-solid fa-gear"></i> Settings</a>
+      </nav>
+
+      <button onclick="logout()" class="nav-link" style="color:var(--error)">
+        <i class="fa-solid fa-right-from-bracket"></i> Logout
+      </button>
+    </aside>
+    <div id="nav-overlay" class="nav-overlay"></div>
+
+    <!-- Main -->
+    <div class="flex-1 min-w-0 flex flex-col">
+      <!-- Mobile top bar -->
+      <div class="mobile-bar">
+        <button id="mobile-menu-btn" class="btn btn-ghost btn-sm"><i class="fa-solid fa-bars"></i></button>
+        <div class="rc-logo" style="width:30px;height:30px;font-size:12px;">RC</div>
+        <span class="font-bold">SteamGuard</span>
+      </div>
+
+      <main class="main">
+
+        <!-- ============ OVERVIEW ============ -->
+        <section id="section-overview" class="section">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Welcome back</h1>
+            <p class="text-muted text-sm mt-0.5" id="welcome-sub">Here's your protection at a glance.</p>
+          </header>
+
+          <!-- Real-time protection status banner -->
+          <div id="protection-banner" class="protection-banner disconnected">
+            <div class="pb-icon"><i class="fa-solid fa-shield-halved" id="pb-glyph"></i></div>
+            <div class="flex-1">
+              <div class="pb-title" id="pb-title">Checking protection status…</div>
+              <div class="pb-sub" id="pb-sub">Connecting to the SteamGuard service.</div>
+            </div>
+            <span class="status-dot" id="pb-dot" style="width:12px;height:12px"></span>
+          </div>
+
+          <!-- stat cards -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="stat-cards">
+            <div class="card card-hover p-5">
+              <div class="flex items-center justify-between mb-3">
+                <span class="stat-label">Time Remaining</span>
+                <i class="fa-solid fa-hourglass-half text-neon"></i>
+              </div>
+              <div class="stat-value" id="stat-time">—</div>
+              <div class="text-muted text-xs mt-1" id="stat-time-sub">&nbsp;</div>
+            </div>
+            <div class="card card-hover p-5">
+              <div class="flex items-center justify-between mb-3">
+                <span class="stat-label">Protection Heals</span>
+                <i class="fa-solid fa-bolt text-accent"></i>
+              </div>
+              <div class="stat-value text-accent" id="stat-heals">—</div>
+              <div class="text-muted text-xs mt-1">lifetime auto-heals</div>
+            </div>
+            <div class="card card-hover p-5">
+              <div class="flex items-center justify-between mb-3">
+                <span class="stat-label">Current Tier</span>
+                <i class="fa-solid fa-crown text-purple"></i>
+              </div>
+              <div class="mt-1" id="stat-tier"><span class="badge badge-free">—</span></div>
+              <div class="text-muted text-xs mt-2" id="stat-reward-hours">&nbsp;</div>
+            </div>
+            <div class="card card-hover p-5">
+              <div class="flex items-center justify-between mb-3">
+                <span class="stat-label">Member Since</span>
+                <i class="fa-solid fa-calendar-day text-muted"></i>
+              </div>
+              <div class="stat-value text-base" id="stat-since" style="font-size:1.1rem">—</div>
+            </div>
+          </div>
+
+          <!-- check-in streak indicator -->
+          <div id="streak-card" class="card p-5 mb-6">
+            <div class="flex items-center justify-between gap-4 flex-wrap">
+              <div class="flex items-center gap-3">
+                <span id="streak-flame" class="streak-flame text-2xl">🔥</span>
+                <div>
+                  <div class="font-bold" id="streak-title">0-day check-in streak</div>
+                  <div class="text-muted text-xs" id="streak-sub">Check in daily to build your streak toward the 7-day reward.</div>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="stat-label">Next reward</div>
+                <div class="font-semibold text-neon" id="streak-goal-label">7-day streak → +5h</div>
+              </div>
+            </div>
+            <div class="streak-progress-track mt-3">
+              <div id="streak-progress-bar" class="streak-progress-fill" style="width:0%"></div>
+            </div>
+          </div>
+
+          <!-- upgrade banner -->
+          <div id="upgrade-banner" class="upgrade-banner p-5 mb-6 hidden">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+              <div>
+                <h3 class="font-bold text-lg flex items-center gap-2"><i class="fa-solid fa-crown text-purple"></i> Upgrade to Premium</h3>
+                <p class="text-muted text-sm mt-1">Unlimited protection time, priority heals, and an exclusive badge.</p>
+              </div>
+              <a href="https://discord.gg/RTHM8YhpE" target="_blank" rel="noopener" class="btn btn-purple">
+                <i class="fa-solid fa-bolt"></i> Get Premium
+              </a>
+            </div>
+          </div>
+
+          <div class="grid lg:grid-cols-3 gap-4">
+            <!-- currently playing -->
+            <div class="card p-5 lg:col-span-2">
+              <span class="stat-label">Currently Playing</span>
+              <div id="game-card" class="flex items-center gap-4 mt-3">
+                <div class="rc-logo" style="background:var(--border);color:var(--muted)"><i class="fa-solid fa-gamepad"></i></div>
+                <div>
+                  <div class="font-bold" id="game-name">No game detected</div>
+                  <div class="text-muted text-xs" id="game-sub">Launch a game and SteamGuard will protect it automatically.</div>
+                </div>
+              </div>
+            </div>
+            <!-- server status -->
+            <div class="card p-5">
+              <span class="stat-label">Server Status</span>
+              <div class="space-y-3 mt-3 text-sm">
+                <div class="flex items-center justify-between">
+                  <span><span class="status-dot ok" id="dot-firewall"></span> FIREWALL</span>
+                  <span class="text-muted text-xs" id="txt-firewall">Active</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span><span class="status-dot ok" id="dot-heal"></span> AUTO-HEAL</span>
+                  <span class="text-muted text-xs" id="txt-heal">Active</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span><span class="status-dot ok" id="dot-network"></span> NETWORK</span>
+                  <span class="text-muted text-xs" id="txt-network">Stable</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ REWARDS ============ -->
+        <section id="section-rewards" class="section hidden">
+          <header class="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+            <div>
+              <h1 class="text-2xl font-extrabold tracking-tight">Rewards</h1>
+              <p class="text-muted text-sm mt-0.5">Earn extra protection time. <span id="total-reward-hours" class="text-neon font-semibold"></span></p>
+            </div>
+            <div class="flex gap-2">
+              <button id="checkin-btn" class="btn btn-primary"><i class="fa-solid fa-calendar-check"></i> Claim Daily</button>
+              <button id="share-btn" class="btn btn-ghost"><i class="fa-solid fa-share-nodes"></i> Share Stats Card</button>
+            </div>
+          </header>
+          <div id="rewards-grid" class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
+        </section>
+
+        <!-- ============ REFERRALS ============ -->
+        <section id="section-referrals" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Referrals</h1>
+            <p class="text-muted text-sm mt-0.5">Invite friends and earn +3h for each who joins.</p>
+          </header>
+
+          <div class="card p-5 mb-4">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="stat-label">Your Referral Code</span>
+              <span id="ref-code" class="badge badge-premium mono" style="font-size:.85rem;letter-spacing:.08em">—</span>
+            </div>
+            <span class="stat-label block mt-4">Your Referral Link</span>
+            <div class="flex flex-col sm:flex-row gap-2 mt-2">
+              <input id="ref-link" class="field mono flex-1" readonly value="—" />
+              <button id="copy-link" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('ref-link').value, this)">
+                <i class="fa-solid fa-copy"></i> Copy
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-4 mb-4">
+            <div class="card card-hover p-5 text-center">
+              <div class="stat-value text-neon" id="ref-valid">—</div>
+              <div class="stat-label mt-1">Valid Referrals</div>
+            </div>
+            <div class="card card-hover p-5 text-center">
+              <div class="stat-value text-warning" style="color:var(--warning)" id="ref-pending">—</div>
+              <div class="stat-label mt-1">Pending</div>
+            </div>
+            <div class="card card-hover p-5 text-center">
+              <div class="stat-value text-accent" id="ref-earned">—</div>
+              <div class="stat-label mt-1">Hours Earned</div>
+            </div>
+          </div>
+
+          <div class="card p-5 mb-4">
+            <span class="stat-label">Pre-written Invite Message</span>
+            <p id="invite-msg" class="text-sm mt-2 leading-relaxed" style="color:var(--text)"></p>
+            <button id="copy-msg" class="btn btn-ghost btn-sm mt-3"><i class="fa-solid fa-copy"></i> Copy message</button>
+          </div>
+
+          <div class="card p-5">
+            <span class="stat-label mb-4 block">How it works</span>
+            <div class="grid sm:grid-cols-3 gap-4">
+              <div class="text-center">
+                <div class="rc-logo mx-auto mb-2"><i class="fa-solid fa-share"></i></div>
+                <div class="font-semibold text-sm">1. Share your link</div>
+                <p class="text-muted text-xs mt-1">Post it in chat or DMs.</p>
+              </div>
+              <div class="text-center">
+                <div class="rc-logo mx-auto mb-2" style="background:linear-gradient(135deg,var(--accent),var(--purple))"><i class="fa-solid fa-user-check"></i></div>
+                <div class="font-semibold text-sm">2. Friend joins</div>
+                <p class="text-muted text-xs mt-1">They activate SteamGuard.</p>
+              </div>
+              <div class="text-center">
+                <div class="rc-logo mx-auto mb-2" style="background:linear-gradient(135deg,var(--purple),var(--neon))"><i class="fa-solid fa-gift"></i></div>
+                <div class="font-semibold text-sm">3. You earn +3h</div>
+                <p class="text-muted text-xs mt-1">Added automatically.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ STATS ============ -->
+        <section id="section-stats" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Stats</h1>
+            <p class="text-muted text-sm mt-0.5">Your protection activity.</p>
+          </header>
+
+          <div class="grid lg:grid-cols-3 gap-4 mb-4">
+            <div class="card p-5">
+              <span class="stat-label">Protection Uptime</span>
+              <div class="relative mx-auto mt-3" style="height:180px;max-width:200px">
+                <canvas id="uptime-gauge"></canvas>
+              </div>
+            </div>
+            <div class="card p-5 lg:col-span-2">
+              <span class="stat-label">Heals — Last 7 Days</span>
+              <div class="mt-3" style="height:220px"><canvas id="heals-chart"></canvas></div>
+            </div>
+          </div>
+
+          <div class="card p-5">
+            <span class="stat-label mb-3 block">Recent Sessions</span>
+            <div class="overflow-x-auto">
+              <table class="tbl">
+                <thead><tr><th>Started</th><th>Game</th><th>Heals</th><th>Status</th></tr></thead>
+                <tbody id="sessions-body">
+                  <tr><td colspan="4" class="text-muted text-center py-4">No recent sessions.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ SETTINGS ============ -->
+        <section id="section-settings" class="section hidden">
+          <header class="mb-6">
+            <h1 class="text-2xl font-extrabold tracking-tight">Settings</h1>
+            <p class="text-muted text-sm mt-0.5">Account &amp; session.</p>
+          </header>
+          <div class="card p-5 max-w-lg space-y-4">
+            <div class="flex items-center justify-between">
+              <div><div class="font-semibold text-sm">Discord User ID</div><div class="text-muted text-xs mono" id="set-discord">—</div></div>
+            </div>
+            <div class="flex items-center justify-between border-t pt-4" style="border-color:var(--border)">
+              <div><div class="font-semibold text-sm">Tier</div><div class="text-muted text-xs" id="set-tier">—</div></div>
+            </div>
+            <div class="flex items-center justify-between border-t pt-4" style="border-color:var(--border)">
+              <div><div class="font-semibold text-sm">Sign out</div><div class="text-muted text-xs">End your dashboard session.</div></div>
+              <button onclick="logout()" class="btn btn-ghost btn-sm" style="color:var(--error)"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <script src="/dashboard/js/app.js"></script>
+  <script src="/dashboard/js/charts.js"></script>
+  <script>
+    if (!requireAuth(false)) { throw new Error('redirecting'); }
+
+    initNav();
+    initMobileNav();
+
+    let state = { overview: null, rewards: null, referrals: null, stats: null };
+
+    /* ---- renderers ---- */
+    function renderOverview(o) {
+      if (!o) return;
+      const isPremium = o.tier === 'premium' || (o.remaining_hours !== null && o.remaining_hours >= 999);
+      // time
+      const timeEl = document.getElementById('stat-time');
+      const subEl  = document.getElementById('stat-time-sub');
+      if (isPremium) {
+        timeEl.innerHTML = '<span class="text-purple">PREMIUM ∞</span>';
+        subEl.textContent = 'Unlimited protection';
+      } else {
+        timeEl.innerHTML = `<span class="text-neon">${formatDuration(o.remaining_hours)}</span>`;
+        const expSoon = o.remaining_hours !== null && o.remaining_hours < 24;
+        subEl.textContent = o.remaining_hours === null ? 'No active key'
+          : expSoon ? '⚠ Expiring soon' : 'until expiry';
+      }
+      document.getElementById('stat-heals').textContent = (o.total_heals ?? 0).toLocaleString();
+      document.getElementById('stat-tier').innerHTML = isPremium
+        ? '<span class="badge badge-premium"><i class="fa-solid fa-crown"></i> Premium</span>'
+        : '<span class="badge badge-free">Free</span>';
+      const rh = o.total_reward_hours ?? 0;
+      document.getElementById('stat-reward-hours').textContent = rh ? `+${rh}h from rewards` : '';
+      document.getElementById('stat-since').textContent = formatDate(o.created_at);
+
+      // game
+      const gn = document.getElementById('game-name');
+      const gs = document.getElementById('game-sub');
+      if (o.current_game) {
+        gn.textContent = o.current_game;
+        gs.textContent = 'Protected · SteamGuard active';
+      }
+
+      // upgrade banner
+      document.getElementById('upgrade-banner').classList.toggle('hidden', isPremium);
+
+      // check-in streak indicator
+      renderStreak(o);
+
+      // settings
+      document.getElementById('set-discord').textContent = o.discord_user_id || '—';
+      document.getElementById('set-tier').textContent = isPremium ? 'Premium' : 'Free';
+    }
+
+    /* ---- streak indicator (overview) ---- */
+    function renderStreak(o) {
+      const streak = Math.max(0, o.current_streak ?? 0);
+      const goal   = o.streak_goal || 7;
+      const titleEl = document.getElementById('streak-title');
+      const subEl   = document.getElementById('streak-sub');
+      const flameEl = document.getElementById('streak-flame');
+      const barEl   = document.getElementById('streak-progress-bar');
+      const goalEl  = document.getElementById('streak-goal-label');
+      if (!titleEl) return;
+
+      titleEl.textContent = `${streak}-day check-in streak`;
+      // Progress toward the 7-day reward (server may also send streak_progress).
+      const withinGoal = streak % goal === 0 && streak > 0 ? goal : streak % goal;
+      const pct = o.streak_progress != null
+        ? Math.min(100, Math.round(o.streak_progress * 100))
+        : Math.min(100, Math.round((withinGoal / goal) * 100));
+      barEl.style.width = `${pct}%`;
+      goalEl.textContent = `${goal}-day streak → +5h`;
+
+      const remaining = (goal - (streak % goal || goal)) % goal;
+      if (streak === 0) {
+        subEl.textContent = 'Check in daily to start your streak toward the 7-day reward.';
+      } else if (remaining === 0) {
+        subEl.textContent = `🎉 ${streak}-day streak — streak reward unlocked! Keep going.`;
+      } else {
+        subEl.textContent = `${remaining} more day${remaining === 1 ? '' : 's'} until your +5h streak reward.`;
+      }
+
+      // Flame animation once the streak is hot (>= 3 days).
+      flameEl.classList.toggle('is-hot', streak >= 3);
+    }
+
+    // Which triggers users can self-claim from the dashboard
+    const SELF_CLAIM_TRIGGERS = {
+      daily_check_in:  'Claim +30m',
+      invite_friend:   null, // auto-granted via referral
+      weekly_streak:   null, // auto-granted server-side
+      first_heal:      null, // auto-granted on first heal
+      youtube_sub:     'Verify Sub',
+      share_card_post: 'Claim +1h',
+      bug_report:      null, // admin grants only
+      server_boost:    null, // admin grants only
+    };
+
+    // Format hours into a short label: +30m, +2h, +1h 30m.
+    function rewardAmountLabel(hours) {
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      if (h <= 0) return `+${m}m`;
+      if (m === 0) return `+${h}h`;
+      return `+${h}h ${m}m`;
+    }
+
+    // Format minutes-remaining into "Cooldown: Xh Ym".
+    function cooldownLabel(minutes) {
+      const hrs = Math.floor(minutes / 60), mins = minutes % 60;
+      const t = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+      return `Cooldown: ${t}`;
+    }
+
+    function renderRewards(r) {
+      if (!r) return;
+      // Total time earned from rewards — counter at the top of the section.
+      const total = +(r.total_reward_hours ?? 0);
+      document.getElementById('total-reward-hours').textContent =
+        `Total time earned from rewards: +${total.toFixed(1)}h`;
+      const grid = document.getElementById('rewards-grid');
+      grid.innerHTML = '';
+      Object.entries(r.triggers || {}).forEach(([key, t]) => {
+        const icon = REWARD_ICONS[key] || 'fa-star';
+        const name = REWARD_NAMES[key] || key;
+        // Backend now sends a plain string; guard anyway so we never render [object Object].
+        const desc = typeof t.description === 'string' ? t.description : String(t.description || '');
+        const cd = t.minutes_until_available;
+        const onCooldown = (t.on_cooldown === true) || (cd !== null && cd !== undefined);
+        const maxed = (t.maxed === true) || (t.max_per_user > 0 && t.times_claimed >= t.max_per_user);
+        const hoursLabel = rewardAmountLabel(t.hours_per_use);
+        const claimLabel = SELF_CLAIM_TRIGGERS[key];
+
+        let actionHTML;
+        if (maxed) {
+          actionHTML = `<span class="badge badge-active" style="background:rgba(168,85,247,.18);color:#a855f7"><i class="fa-solid fa-trophy"></i> Max reached</span>`;
+        } else if (onCooldown) {
+          actionHTML = `<span class="badge badge-paused"><i class="fa-solid fa-clock"></i> ${cooldownLabel(cd ?? 0)}</span>`;
+        } else if (claimLabel) {
+          actionHTML = `<button class="btn btn-primary" style="padding:4px 12px;font-size:12px" data-claim="${key}"><i class="fa-solid fa-circle-check"></i> ${claimLabel}</button>`;
+        } else {
+          actionHTML = `<span class="badge badge-active"><i class="fa-solid fa-circle-check"></i> Available</span>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'card card-hover reward-card p-5 flex flex-col';
+        card.innerHTML = `
+          <div class="flex items-center justify-between mb-3">
+            <div class="rc-logo" style="background:rgba(61,169,252,.14);color:var(--accent)"><i class="fa-solid ${icon}"></i></div>
+            <span class="badge badge-time">${hoursLabel}</span>
+          </div>
+          <div class="font-bold">${name}</div>
+          <p class="text-muted text-xs mt-1 flex-1">${desc}</p>
+          <div class="flex items-center justify-between mt-3 pt-3" style="border-top:1px solid var(--border)">
+            <span class="text-muted text-xs">Claimed ${t.times_claimed}×</span>
+            ${actionHTML}
+          </div>`;
+        grid.appendChild(card);
+      });
+
+      // Wire claim buttons -> POST /me/rewards/claim (JWT Bearer auth).
+      grid.querySelectorAll('[data-claim]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const trigger = btn.dataset.claim;
+          const origHTML = btn.innerHTML;
+          btn.disabled = true;
+          // Loading spinner on the card while the request is processing.
+          btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming…';
+          try {
+            const res = await apiFetch('/me/rewards/claim', {
+              method: 'POST',
+              body: JSON.stringify({ trigger }),
+            });
+            if (res && res.granted) {
+              // Morph the button: spinner -> success checkmark.
+              btn.classList.add('claim-success');
+              btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Claimed!';
+              // Success toast showing the hours/minutes gained.
+              const gained = rewardAmountLabel(res.hours ?? 0);
+              let msg = `🎁 Claimed ${gained}!`;
+              if (res.streak_bonus && res.streak_bonus.granted) {
+                msg += ` 🔥 ${res.current_streak}-day streak bonus +${res.streak_bonus.hours}h!`;
+              } else if (res.current_streak) {
+                msg += ` 🔥 ${res.current_streak}-day streak`;
+              }
+              showToast(msg, 'success');
+              // Reload rewards + overview (for the streak indicator) shortly after.
+              setTimeout(async () => {
+                const [rw, ov] = await Promise.all([
+                  apiFetch('/me/rewards'),
+                  apiFetch('/me/overview'),
+                ]);
+                if (rw) { state.rewards = rw; renderRewards(rw); }
+                if (ov) { state.overview = ov; renderOverview(ov); }
+              }, 1100);
+            } else {
+              showToast(res?.reason || res?.detail || 'Could not claim — try later.', 'error');
+              btn.disabled = false;
+              btn.innerHTML = origHTML;
+            }
+          } catch (e) {
+            showToast('Network error.', 'error');
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+          }
+        });
+      });
+    }
+
+    async function renderReferrals(r) {
+      if (!r) return;
+      // Auto-create referral code if user doesn't have one yet
+      let ref = r;
+      if (!ref.code || !ref.referral_link) {
+        const user = getUser();
+        const created = await apiFetch('/me/referral/create', { method: 'POST', body: '{}' });
+        if (created && created.code) ref = { ...ref, ...created };
+      }
+      const link = ref.referral_link || `https://discord.gg/RTHM8YhpE`;
+      document.getElementById('ref-link').value = link;
+      // Referral code display — derive from the link if the API didn't send one.
+      let code = ref.code;
+      if (!code && ref.referral_link) {
+        const m = ref.referral_link.match(/[?&](?:ref|code)=([^&]+)/i) || ref.referral_link.match(/\/([^\/?#]+)$/);
+        if (m) code = decodeURIComponent(m[1]);
+      }
+      document.getElementById('ref-code').textContent = code || 'Generating…';
+      document.getElementById('ref-valid').textContent = ref.valid_referrals ?? 0;
+      document.getElementById('ref-pending').textContent = ref.pending_referrals ?? 0;
+      document.getElementById('ref-earned').textContent = `${ref.earned_hours ?? 0}h`;
+      document.getElementById('invite-msg').textContent =
+        `🛡️ Hey! I've been using SteamGuard from Rivvak Community — it keeps you in Steam games when family sharing kicks you out. It's free! Join here: https://discord.gg/RTHM8YhpE and use my referral link to get started: ${link}`;
+    }
+
+    function renderStats(s) {
+      if (!s) return;
+      createHealsChart('heals-chart', s.heals_7d || []);
+      createUptimeGauge('uptime-gauge', s.uptime_pct ?? 0);
+      const body = document.getElementById('sessions-body');
+      if (s.sessions && s.sessions.length) {
+        body.innerHTML = s.sessions.map((se) => `
+          <tr>
+            <td>${formatDate(se.started_at || se.created_at) }</td>
+            <td>${se.game || '—'}</td>
+            <td>${se.heal_count ?? se.heals ?? 0}</td>
+            <td><span class="badge badge-active">OK</span></td>
+          </tr>`).join('');
+      }
+    }
+
+    /* ---- data load ---- */
+    async function loadAll(initial = false) {
+      const [o, rw, rf, st] = await Promise.all([
+        apiFetch('/me/overview'),
+        apiFetch('/me/rewards'),
+        apiFetch('/me/referrals'),
+        apiFetch('/me/stats'),
+      ]);
+      if (o)  { state.overview = o;  renderOverview(o); }
+      if (rw) { state.rewards = rw;  renderRewards(rw); }
+      if (rf) { state.referrals = rf; renderReferrals(rf); }
+      if (st) { state.stats = st;    renderStats(st); }
+    }
+
+    /* ---- protection status banner ---- */
+    function setProtectionBanner(connected) {
+      const banner = document.getElementById('protection-banner');
+      const dot    = document.getElementById('pb-dot');
+      const glyph  = document.getElementById('pb-glyph');
+      if (!banner) return;
+      if (connected) {
+        banner.classList.remove('disconnected');
+        banner.classList.add('connected');
+        document.getElementById('pb-title').textContent = 'Protected · Connected';
+        document.getElementById('pb-sub').textContent = 'SteamGuard is online and actively protecting your games.';
+        dot.className = 'status-dot ok';
+        glyph.className = 'fa-solid fa-shield-halved';
+      } else {
+        banner.classList.remove('connected');
+        banner.classList.add('disconnected');
+        document.getElementById('pb-title').textContent = 'Disconnected';
+        document.getElementById('pb-sub').textContent = 'Cannot reach the SteamGuard service. Protection may be paused.';
+        dot.className = 'status-dot err';
+        glyph.className = 'fa-solid fa-shield';
+      }
+    }
+
+    /* ---- health poll ---- */
+    async function pollHealth() {
+      let ok = false;
+      try {
+        const res = await fetch(`${API_BASE}/health`);
+        ok = res.ok;
+      } catch {
+        ok = false;
+      }
+      ['dot-firewall', 'dot-heal', 'dot-network'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.className = `status-dot ${ok ? 'ok' : 'err'}`;
+      });
+      if (!ok) {
+        document.getElementById('txt-firewall').textContent = 'Degraded';
+        document.getElementById('txt-network').textContent = 'Unstable';
+      } else {
+        document.getElementById('txt-firewall').textContent = 'Active';
+        document.getElementById('txt-network').textContent = 'Stable';
+      }
+      setProtectionBanner(ok);
+    }
+
+    /* ---- actions ---- */
+    document.getElementById('checkin-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Claiming…';
+      // Daily check-in now uses the JWT claim endpoint (no HMAC needed).
+      const res = await apiFetch('/me/rewards/claim', {
+        method: 'POST', body: JSON.stringify({ trigger: 'daily_check_in' }),
+      });
+      if (res && res.granted) {
+        const gained = rewardAmountLabel(res.hours ?? 0.5);
+        let msg = `Daily check-in claimed! ${gained}`;
+        if (res.streak_bonus && res.streak_bonus.granted) {
+          msg += ` 🔥 ${res.current_streak}-day streak bonus +${res.streak_bonus.hours}h!`;
+        } else if (res.current_streak) {
+          msg += ` 🔥 ${res.current_streak}-day streak`;
+        }
+        showToast(msg, 'success');
+      } else {
+        showToast(res?.reason || res?.detail || 'Check-in not available right now.', 'info');
+      }
+      btn.disabled = false;
+      btn.innerHTML = orig;
+      loadAll();
+    });
+
+    document.getElementById('share-btn').addEventListener('click', () => {
+      const o = state.overview || {};
+      const txt = `🛡️ My SteamGuard stats: ${o.total_heals ?? 0} heals protected, tier ${o.tier || 'free'}. Stay protected with Rivvak Community! discord.gg/RTHM8YhpE`;
+      copyToClipboard(txt, document.getElementById('share-btn'));
+      showToast('Stats card copied to clipboard!', 'success');
+    });
+
+    document.getElementById('copy-msg').addEventListener('click', (e) => {
+      copyToClipboard(document.getElementById('invite-msg').textContent, e.currentTarget);
+    });
+
+    /* ---- boot ---- */
+    document.getElementById('welcome-sub').textContent = `Signed in as ${getUser().discord_user_id || 'user'}.`;
+    loadAll(true);
+    pollHealth();
+    setInterval(() => { loadAll(); pollHealth(); }, 30000);
+  </script>
+</body>
+</html>

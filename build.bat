@@ -18,6 +18,7 @@ python -m nuitka ^
     --windows-icon-from-ico=icon.ico ^
     --enable-plugin=pyside6 ^
     --include-qt-plugins=sensible,styles ^
+    --include-package-data=qdarktheme ^
     --output-filename=SteamGuard.exe ^
     --output-dir=%DIST% ^
     --include-package=auth ^
@@ -55,7 +56,8 @@ python -m nuitka ^
     --windows-console-mode=disable ^
     --windows-uac-admin ^
     --windows-icon-from-ico=icon.ico ^
-    --enable-plugin=pyside6 ^
+    --enable-plugin=pyqt5 ^
+    --include-package=PyQt5 ^
     --assume-yes-for-downloads ^
     --output-filename=Loader.exe ^
     --output-dir=%DIST% ^

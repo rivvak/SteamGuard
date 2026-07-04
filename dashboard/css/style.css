@@ -1,0 +1,400 @@
+/* ============================================================================
+   SteamGuard Dashboard — custom styles (beyond Tailwind CDN)
+   Rivvak Community · high-end dark gaming aesthetic
+   ----------------------------------------------------------------------------
+   Overhauled: deep dark base, purple/blue gradient accents, glass-morphism,
+   smooth transitions, glowing status indicators, shimmer rewards, animated
+   login background. Legacy variable names are aliased onto the new palette so
+   existing markup (admin.html / user.html / index.html) keeps working.
+   ========================================================================== */
+
+:root {
+  /* ---- New design tokens (Rivvak brand) ---- */
+  --bg-base:      #0B0F1A;
+  --bg-surface:   #131929;
+  --bg-card:      #1A2238;
+  --bg-hover:     #1E2A42;
+  --accent:       #7C5CFC;
+  --accent-2:     #5B8AF0;
+  --accent-glow:  rgba(124,92,252,0.30);
+  --success:      #22D3A5;
+  --warning:      #F59E0B;
+  --error:        #EF4444;
+  --text-pri:     #F1F5F9;
+  --text-sec:     #94A3B8;
+  --text-muted:   #64748B;
+  --border:       rgba(255,255,255,0.06);
+  --border-hover: rgba(255,255,255,0.12);
+  --glass:        rgba(26,34,56,0.80);
+
+  /* ---- Legacy aliases (kept so existing class/style refs still resolve) ---- */
+  --canvas:       var(--bg-base);
+  --surface:      var(--bg-surface);
+  --surface-2:    var(--bg-hover);
+  --neon:         #36F1CD;
+  --purple:       #A855F7;
+  --text:         var(--text-pri);
+  --muted:        var(--text-sec);
+
+  --sidebar-w:    224px;
+  --radius:       16px;
+  --radius-sm:    11px;
+
+  --grad-accent:  linear-gradient(135deg, var(--accent), var(--accent-2));
+  --grad-brand:   linear-gradient(135deg, #7C5CFC, #5B8AF0 55%, #36F1CD);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-pri);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-image:
+    radial-gradient(1000px circle at 12% -12%, rgba(124,92,252,0.14), transparent 55%),
+    radial-gradient(900px  circle at 96% 2%,   rgba(91,138,240,0.12), transparent 52%),
+    radial-gradient(800px  circle at 50% 120%, rgba(54,241,205,0.06), transparent 60%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* ---- Typography hierarchy ---- */
+h1 { letter-spacing: -0.02em; }
+h2, h3 { letter-spacing: -0.01em; }
+.text-neon   { color: var(--neon); }
+.text-accent { color: var(--accent-2); }
+.text-purple { color: var(--accent); }
+.text-muted  { color: var(--text-sec); }
+.text-dim    { color: var(--text-muted); }
+
+/* --- Brand logo mark ------------------------------------------------------ */
+.rc-logo {
+  width: 38px; height: 38px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: 11px;
+  font-weight: 800; font-size: 15px; letter-spacing: -0.5px;
+  color: #fff;
+  background: var(--grad-accent);
+  box-shadow: 0 6px 22px var(--accent-glow);
+}
+.rc-logo.lg { width: 60px; height: 60px; font-size: 24px; border-radius: 17px; }
+
+/* --- Glass / surface cards ------------------------------------------------ */
+.card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(26,34,56,0.82), rgba(19,25,41,0.82));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  transition: transform .25s cubic-bezier(.2,.8,.2,1),
+              border-color .25s ease, box-shadow .25s ease;
+}
+/* gradient border-glow on hover via pseudo-element */
+.card-hover { isolation: isolate; }
+.card-hover::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  padding: 1px; pointer-events: none; z-index: -1; opacity: 0;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2), transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  transition: opacity .25s ease;
+}
+.card-hover:hover {
+  transform: translateY(-4px);
+  border-color: var(--border-hover);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.50), 0 0 28px -8px var(--accent-glow);
+}
+.card-hover:hover::before { opacity: 1; }
+
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* --- Stat values ---------------------------------------------------------- */
+.stat-value {
+  font-size: 1.95rem; font-weight: 800; letter-spacing: -0.5px; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--text-sec); font-weight: 600;
+}
+
+/* --- Status dots (glowing pulse) ----------------------------------------- */
+.status-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--text-muted); position: relative; flex: 0 0 auto;
+}
+.status-dot.ok   { background: var(--success); box-shadow: 0 0 8px rgba(34,211,165,0.7); animation: pulse-ok 2s infinite; }
+.status-dot.warn { background: var(--warning); box-shadow: 0 0 8px rgba(245,158,11,0.6); }
+.status-dot.err  { background: var(--error);   box-shadow: 0 0 8px rgba(239,68,68,0.7);  animation: pulse-err 2s infinite; }
+@keyframes pulse-ok  { 0%{box-shadow:0 0 0 0 rgba(34,211,165,0.55),0 0 8px rgba(34,211,165,0.7);} 70%{box-shadow:0 0 0 8px rgba(34,211,165,0),0 0 8px rgba(34,211,165,0.7);} 100%{box-shadow:0 0 0 0 rgba(34,211,165,0),0 0 8px rgba(34,211,165,0.7);} }
+@keyframes pulse-err { 0%{box-shadow:0 0 0 0 rgba(239,68,68,0.55),0 0 8px rgba(239,68,68,0.7);} 70%{box-shadow:0 0 0 8px rgba(239,68,68,0),0 0 8px rgba(239,68,68,0.7);} 100%{box-shadow:0 0 0 0 rgba(239,68,68,0),0 0 8px rgba(239,68,68,0.7);} }
+
+/* --- Badges / chips ------------------------------------------------------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+  border: 1px solid transparent;
+}
+.badge-free    { background: rgba(148,163,184,0.14); color: var(--text-sec); border-color: rgba(148,163,184,0.25); }
+.badge-premium { background: rgba(124,92,252,0.18);  color: #c4b5fd; border-color: rgba(124,92,252,0.50); }
+.badge-active  { background: rgba(34,211,165,0.14);  color: #6ee7c4; border-color: rgba(34,211,165,0.35); }
+.badge-paused  { background: rgba(245,158,11,0.14);  color: #fcd34d; border-color: rgba(245,158,11,0.35); }
+.badge-revoked { background: rgba(239,68,68,0.14);   color: #fca5a5; border-color: rgba(239,68,68,0.35); }
+.badge-time    { background: rgba(54,241,205,0.14);  color: var(--neon); border-color: rgba(54,241,205,0.35); }
+
+/* --- Buttons -------------------------------------------------------------- */
+.btn {
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 11px 18px; border-radius: var(--radius-sm);
+  font-weight: 700; font-size: .9rem; cursor: pointer; border: 1px solid transparent;
+  transition: transform .15s ease, filter .2s ease, background .2s ease,
+              border-color .2s ease, box-shadow .25s ease;
+  white-space: nowrap; min-height: 44px;
+}
+.btn:active { transform: scale(.97); }
+.btn-primary { background: var(--grad-accent); color: #fff; box-shadow: 0 4px 16px -4px var(--accent-glow); }
+.btn-primary:hover { filter: brightness(1.08); box-shadow: 0 8px 26px -4px var(--accent-glow); }
+.btn-discord { background: #5865F2; color: #fff; }
+.btn-discord:hover { filter: brightness(1.06); box-shadow: 0 8px 28px rgba(88,101,242,0.55); }
+.btn-ghost { background: rgba(148,163,184,0.06); color: var(--text-pri); border-color: var(--border); }
+.btn-ghost:hover { border-color: var(--border-hover); background: var(--bg-hover); color: var(--accent-2); }
+.btn-purple { background: var(--accent); color: #fff; }
+.btn-purple:hover { filter: brightness(1.1); box-shadow: 0 8px 26px var(--accent-glow); }
+.btn.copied { background: var(--success); color: #04140a; }
+.btn:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-sm { padding: 6px 12px; min-height: 34px; font-size: .8rem; }
+/* success flash state used by the claim flow */
+.btn.btn-success { background: var(--success); color: #04140a; border-color: transparent; }
+
+/* --- Inputs --------------------------------------------------------------- */
+.field {
+  width: 100%; padding: 12px 14px; border-radius: var(--radius-sm);
+  background: rgba(11,15,26,0.7); color: var(--text-pri);
+  border: 1px solid var(--border); font-size: .92rem; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.field:focus { border-color: var(--accent); background: rgba(11,15,26,0.95); box-shadow: 0 0 0 3px var(--accent-glow); }
+.field::placeholder { color: var(--text-muted); }
+
+/* --- Sidebar -------------------------------------------------------------- */
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar {
+  width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
+  background: linear-gradient(180deg, rgba(13,18,29,0.92), rgba(11,15,26,0.92));
+  border-right: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+  padding: 18px 14px;
+}
+.nav-link {
+  position: relative;
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 13px; border-radius: var(--radius-sm);
+  color: var(--text-sec); font-weight: 600; font-size: .9rem;
+  transition: background .18s ease, color .18s ease, transform .12s ease;
+  cursor: pointer; margin-bottom: 3px;
+}
+.nav-link i { width: 18px; text-align: center; font-size: .95rem; transition: transform .18s ease; }
+.nav-link:hover { background: var(--bg-hover); color: var(--text-pri); }
+.nav-link:hover i { transform: scale(1.12); }
+.nav-link.active {
+  background: linear-gradient(90deg, rgba(124,92,252,0.22), rgba(91,138,240,0.06));
+  color: var(--text-pri);
+}
+.nav-link.active::before {
+  content: ''; position: absolute; left: 0; top: 18%; bottom: 18%;
+  width: 3px; border-radius: 3px; background: var(--grad-accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.main { flex: 1; min-width: 0; padding: 26px clamp(16px, 3vw, 40px) 60px; }
+
+/* --- Progress / circular -------------------------------------------------- */
+.progress-track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+.progress-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--neon));
+  background-size: 200% 100%;
+  transition: width .7s cubic-bezier(.2,.8,.2,1);
+  animation: progress-flow 3s linear infinite;
+}
+@keyframes progress-flow { 0%{background-position:0 0;} 100%{background-position:200% 0;} }
+
+/* --- Skeleton loaders ----------------------------------------------------- */
+.skeleton {
+  display: inline-block; border-radius: 8px;
+  background: linear-gradient(90deg, rgba(148,163,184,0.06) 25%, rgba(148,163,184,0.16) 37%, rgba(148,163,184,0.06) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+.skeleton-text  { height: 0.9em; vertical-align: middle; }
+.skeleton-block { display: block; height: 100%; width: 100%; border-radius: var(--radius-sm); min-height: 60px; }
+@keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* --- Tables --------------------------------------------------------------- */
+.tbl { width: 100%; border-collapse: collapse; font-size: .86rem; }
+.tbl th {
+  text-align: left; padding: 10px 12px; color: var(--text-sec);
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  border-bottom: 1px solid var(--border); font-weight: 700;
+}
+.tbl td { padding: 11px 12px; border-bottom: 1px solid var(--border); transition: background .15s ease; }
+.tbl tbody tr { transition: background .15s ease; }
+.tbl tbody tr:hover td { background: rgba(124,92,252,0.07); }
+.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .82rem; }
+
+/* --- Rank badges (leaderboard) ------------------------------------------- */
+.rank { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-weight: 800; font-size: .82rem; }
+.rank-1 { background: linear-gradient(135deg,#FFD700,#B8860B); color:#3a2c00; }
+.rank-2 { background: linear-gradient(135deg,#E2E8F0,#94A3B8); color:#1a2230; }
+.rank-3 { background: linear-gradient(135deg,#CD7F32,#8B4513); color:#fff; }
+.rank-n { background: rgba(255,255,255,0.07); color: var(--text-sec); }
+
+/* --- Toasts (slide-in) ---------------------------------------------------- */
+.toast-host { position: fixed; right: 18px; bottom: 18px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
+.toast {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-radius: var(--radius-sm);
+  background: var(--glass); border: 1px solid var(--border-hover);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  color: var(--text-pri); font-size: .88rem; font-weight: 600;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+  transform: translateX(120%); opacity: 0;
+  transition: transform .35s cubic-bezier(.2,.9,.2,1), opacity .35s ease;
+}
+.toast.show { transform: translateX(0); opacity: 1; }
+.toast-success { border-left: 3px solid var(--success); }
+.toast-error   { border-left: 3px solid var(--error); }
+.toast-info    { border-left: 3px solid var(--accent-2); }
+.toast-success i { color: var(--success); }
+.toast-error i   { color: var(--error); }
+.toast-info i    { color: var(--accent-2); }
+
+/* --- Premium / upgrade banner --------------------------------------------- */
+.upgrade-banner {
+  background: linear-gradient(120deg, rgba(124,92,252,0.24), rgba(91,138,240,0.12));
+  border: 1px solid rgba(124,92,252,0.4);
+  border-radius: var(--radius);
+  position: relative; overflow: hidden;
+}
+.upgrade-banner::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(420px circle at 90% 20%, rgba(124,92,252,0.28), transparent 60%);
+  pointer-events: none;
+}
+
+/* --- Protection-status banner (user.html) -------------------------------- */
+.protection-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px; border-radius: var(--radius);
+  border: 1px solid var(--border); margin-bottom: 24px;
+  background: linear-gradient(180deg, rgba(26,34,56,0.7), rgba(19,25,41,0.7));
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  transition: border-color .3s ease, box-shadow .3s ease, background .3s ease;
+}
+.protection-banner .pb-icon {
+  width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+  font-size: 1.1rem; flex: 0 0 auto; transition: background .3s ease, color .3s ease;
+}
+.protection-banner .pb-title { font-weight: 800; font-size: .98rem; line-height: 1.1; }
+.protection-banner .pb-sub   { color: var(--text-sec); font-size: .78rem; margin-top: 2px; }
+/* connected (green) */
+.protection-banner.connected {
+  border-color: rgba(34,211,165,0.4);
+  box-shadow: 0 0 30px -10px rgba(34,211,165,0.5);
+  background: linear-gradient(120deg, rgba(34,211,165,0.12), rgba(19,25,41,0.7));
+}
+.protection-banner.connected .pb-icon { background: rgba(34,211,165,0.16); color: var(--success); }
+.protection-banner.connected .pb-title { color: var(--success); }
+/* disconnected (grey) */
+.protection-banner.disconnected { border-color: var(--border); }
+.protection-banner.disconnected .pb-icon { background: rgba(148,163,184,0.12); color: var(--text-sec); }
+.protection-banner.disconnected .pb-title { color: var(--text-sec); }
+
+/* --- Reward card shimmer (hover) ----------------------------------------- */
+.reward-card { position: relative; overflow: hidden; }
+.reward-card::after {
+  content: ''; position: absolute; top: 0; left: -150%; width: 60%; height: 100%;
+  background: linear-gradient(105deg, transparent, rgba(255,255,255,0.14), transparent);
+  transform: skewX(-18deg); pointer-events: none; transition: none;
+}
+.reward-card:hover::after { animation: reward-shimmer 0.9s ease; }
+@keyframes reward-shimmer { from { left: -150%; } to { left: 150%; } }
+
+/* --- Claim button success morph ------------------------------------------ */
+.claim-success { background: var(--success) !important; color: #04140a !important; }
+
+/* --- Mobile nav (drawer animation) --------------------------------------- */
+.mobile-bar { display: none; }
+.nav-overlay { display: none; }
+
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed; left: 0; top: 0; z-index: 60;
+    transform: translateX(-100%);
+    transition: transform .3s cubic-bezier(.2,.8,.2,1);
+    box-shadow: 0 0 50px rgba(0,0,0,0.7);
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  .nav-overlay {
+    display: block; position: fixed; inset: 0; z-index: 50;
+    background: rgba(0,0,0,0.6); opacity: 0; pointer-events: none;
+    transition: opacity .3s ease; backdrop-filter: blur(2px);
+  }
+  body.nav-open .nav-overlay { opacity: 1; pointer-events: auto; }
+  .mobile-bar {
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 40;
+    padding: 12px 16px; background: rgba(11,15,26,0.92);
+    border-bottom: 1px solid var(--border); backdrop-filter: blur(12px);
+  }
+  .main { padding: 16px; }
+}
+
+/* --- Login page animated background blobs (CSS-only) --------------------- */
+.bg-blobs { position: fixed; inset: 0; z-index: -10; overflow: hidden; pointer-events: none; }
+.bg-blobs .blob {
+  position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.5;
+  will-change: transform;
+}
+.bg-blobs .blob-1 { width: 460px; height: 460px; top: -120px; left: -100px;
+  background: radial-gradient(circle, rgba(124,92,252,0.55), transparent 70%); animation: blob-float-1 18s ease-in-out infinite; }
+.bg-blobs .blob-2 { width: 520px; height: 520px; bottom: -160px; right: -120px;
+  background: radial-gradient(circle, rgba(91,138,240,0.50), transparent 70%); animation: blob-float-2 22s ease-in-out infinite; }
+.bg-blobs .blob-3 { width: 360px; height: 360px; top: 40%; left: 55%;
+  background: radial-gradient(circle, rgba(54,241,205,0.30), transparent 70%); animation: blob-float-3 26s ease-in-out infinite; }
+@keyframes blob-float-1 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(80px,60px) scale(1.12);} }
+@keyframes blob-float-2 { 0%,100%{transform:translate(0,0) scale(1);} 50%{transform:translate(-70px,-50px) scale(1.08);} }
+@keyframes blob-float-3 { 0%,100%{transform:translate(0,0) scale(1);} 33%{transform:translate(-60px,40px) scale(1.1);} 66%{transform:translate(50px,-30px) scale(0.95);} }
+
+/* --- Utility -------------------------------------------------------------- */
+.hidden { display: none !important; }
+.fade-in { animation: fadeIn .45s ease both; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Reduced motion ------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .status-dot, .progress-fill, .bg-blobs .blob,
+  .reward-card:hover::after { animation: none !important; }
+  * { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

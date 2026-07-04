@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" type="image/x-icon" href="/dashboard/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/dashboard/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/dashboard/favicon-256.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SteamGuard · Sign in</title>
+  <meta name="description" content="SteamGuard dashboard login — Rivvak Community" />
+  <!-- Local vendor assets — no external CDN dependencies -->
+  <link rel="stylesheet" href="/dashboard/css/vendor/fontawesome.min.css" />
+  <script src="/dashboard/js/vendor/tailwind.min.js"></script>
+  <link rel="stylesheet" href="/dashboard/css/style.css" />
+  <style>
+    /* System font stack — loads instantly, looks great on all platforms */
+    :root { --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { font-family: var(--font-sans); }
+  </style>
+
+  <script>
+    // Show error from Discord OAuth callback if present
+    const urlParams = new URLSearchParams(window.location.search);
+    const err = urlParams.get('error');
+    if (err) {
+      const msgs = {
+        'discord_denied': 'Discord login was cancelled.',
+        'no_key': 'No SteamGuard key found for your Discord account. Get a key in #get-key first.',
+        'token_failed': 'Discord authentication failed. Please try again.',
+        'oauth_not_configured': 'Discord login is not set up yet.',
+      };
+      document.addEventListener('DOMContentLoaded', () => {
+        const el = document.getElementById('error-msg');
+        if (el) { el.textContent = msgs[err] || 'Login error: ' + err; el.style.display='block'; }
+      });
+    }
+  </script>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+  <!-- animated ambient background (CSS-only moving gradient blobs) -->
+  <div class="bg-blobs" aria-hidden="true">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+    <span class="blob blob-3"></span>
+  </div>
+
+  <main class="w-full max-w-md fade-in">
+    <!-- Brand -->
+    <div class="flex flex-col items-center mb-7">
+      <div class="rc-logo lg mb-4">RC</div>
+      <h1 class="text-2xl font-extrabold tracking-tight">SteamGuard</h1>
+      <p class="text-muted text-sm mt-1">Rivvak Community · Protection Dashboard</p>
+    </div>
+
+    <!-- Login card -->
+    <div class="card p-7 sm:p-8">
+      <h2 class="text-lg font-bold mb-1">Sign in to your dashboard</h2>
+      <p class="text-muted text-sm mb-6">Use Discord, or enter your license key manually.</p>
+
+      <!-- Discord OAuth -->
+      <button id="discord-btn" class="btn btn-discord w-full">
+        <i class="fa-brands fa-discord text-lg"></i> Login with Discord
+      </button>
+
+      <div class="flex items-center gap-3 my-5">
+        <span class="h-px flex-1" style="background:var(--border)"></span>
+        <span class="text-muted text-xs font-semibold">OR ENTER MANUALLY</span>
+        <span class="h-px flex-1" style="background:var(--border)"></span>
+      </div>
+
+      <!-- Manual toggle -->
+      <button id="manual-toggle" class="btn btn-ghost w-full mb-2">
+        <i class="fa-solid fa-key"></i> Use a license key
+      </button>
+
+      <!-- Manual form -->
+      <form id="login-form" class="hidden mt-4 space-y-3" autocomplete="off">
+        <div>
+          <label class="stat-label block mb-1.5">Discord User ID</label>
+          <input id="discord-id" class="field" inputmode="numeric" pattern="\d{15,20}"
+                 placeholder="e.g. 123456789012345678" required />
+        </div>
+        <div>
+          <label class="stat-label block mb-1.5">License Key</label>
+          <input id="license-key" class="field" type="password" maxlength="256"
+                 placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="current-password" required />
+        </div>
+        <button id="submit-btn" type="submit" class="btn btn-primary w-full mt-1">
+          <i class="fa-solid fa-right-to-bracket"></i> Sign In
+        </button>
+        <p id="err" class="text-center text-sm min-h-[18px]" style="color:var(--error)"></p>
+      </form>
+
+      <!-- get a key -->
+      <div class="text-center mt-6 pt-5" style="border-top:1px solid var(--border)">
+        <p class="text-muted text-sm">Don't have a key?</p>
+        <a href="https://discord.gg/RTHM8YhpE" target="_blank" rel="noopener"
+           class="text-accent font-semibold text-sm inline-flex items-center gap-1.5 mt-1 hover:underline">
+          <i class="fa-brands fa-discord"></i> Get one in our Discord &rarr;
+        </a>
+      </div>
+    </div>
+
+    <p class="text-center text-muted text-xs mt-6">
+      Protected by SteamGuard · <span class="text-neon">●</span> Systems operational
+    </p>
+  </main>
+
+  <script src="/dashboard/js/app.js"></script>
+  <script>
+    // If already authenticated, skip straight to the dashboard.
+    (function () {
+      const t = getToken();
+      if (t) {
+        const u = getUser();
+        window.location.href = u.is_admin ? '/dashboard/admin.html' : '/dashboard/user.html';
+      }
+    })();
+
+    const form        = document.getElementById('login-form');
+    const manualToggle= document.getElementById('manual-toggle');
+    const errEl       = document.getElementById('err');
+    const submitBtn   = document.getElementById('submit-btn');
+
+    manualToggle.addEventListener('click', () => {
+      form.classList.toggle('hidden');
+      if (!form.classList.contains('hidden')) document.getElementById('discord-id').focus();
+    });
+
+    // Discord OAuth — backend starts the authorization-code flow.
+    const discordBtn = document.getElementById('discord-btn');
+    discordBtn.addEventListener('click', () => {
+      // Loading state while the browser navigates to Discord's OAuth page.
+      discordBtn.disabled = true;
+      discordBtn.innerHTML = '<i class="fa-solid fa-spinner spin"></i> Redirecting to Discord…';
+      // The FastAPI service exposes /auth/discord to begin the OAuth handshake.
+      window.location.href = `${API_BASE}/auth/discord/start`;
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.textContent = '';
+      const discord_user_id = document.getElementById('discord-id').value.trim();
+      const key = document.getElementById('license-key').value.trim();
+      if (!discord_user_id || !key) { errEl.textContent = 'Please fill in both fields.'; return; }
+
+      submitBtn.disabled = true;
+      const origHTML = submitBtn.innerHTML;
+      submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Signing in…';
+
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ discord_user_id, key }),
+        });
+        if (res.status === 429) { errEl.textContent = 'Too many attempts. Try again later.'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errEl.textContent = data.detail || 'Invalid Discord ID or license key.';
+          return;
+        }
+        localStorage.setItem('sg_token', data.token);
+        localStorage.setItem('sg_user', JSON.stringify({
+          discord_user_id: data.discord_user_id,
+          is_admin: !!data.is_admin,
+        }));
+        window.location.href = data.is_admin ? '/dashboard/admin.html' : '/dashboard/user.html';
+      } catch (err) {
+        errEl.textContent = 'Could not reach the server. Please try again.';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = origHTML;
+      }
+    });
+  </script>
+</body>
+</html>

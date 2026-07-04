@@ -1,0 +1,32 @@
+# SteamGuard client dependencies
+
+# UI framework (required) — PySide6 (Qt) replaces the old tkinter UI.
+# tkinter is stdlib and is no longer used by the Qt client, so it is not listed.
+PySide6>=6.7.0
+pyqtdarktheme>=2.1.0
+
+# Core (required)
+psutil
+pywin32
+
+# Optional — install wmi for faster network detection (Layer 2)
+wmi
+
+# UI enhancements (optional but strongly recommended)
+Pillow       # game art thumbnails + share card PNG export
+pywinstyles  # dark title bar on Windows (fixes black window behind games)
+
+# Discord integration (optional)
+pypresence   # Discord Rich Presence (shows game in Discord status)
+
+# System tray (optional)
+pystray      # minimize SteamGuard to tray icon
+
+# Steam VDF file parsing (optional but strongly recommended)
+vdf              # parse loginusers.vdf, sharedlibrarylocking.vdf for Why Locked / Cooldown tools
+
+# HTTP requests (optional — urllib fallback built-in)
+requests         # used by DLC Advisor and Store API lookups
+
+# Build tool
+nuitka
