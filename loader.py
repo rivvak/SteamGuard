@@ -525,17 +525,19 @@ def _draw_icon(p, kind, cx, cy, color, size=22):
         p.drawLine(int(cx), int(cy - r * 0.7), int(cx), int(cy + r * 0.7))
 
     elif kind == "logout":
+        # Door + arrow = logout icon (cleaner than "+" which confused users)
+        pen = QPen(QColor(255, 255, 255, 200), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawLine(int(cx - r * 0.7), int(cy - r * 0.8),
-                   int(cx - r * 0.7), int(cy + r * 0.8))
-        p.drawLine(int(cx - r * 0.7), int(cy - r * 0.8),
-                   int(cx + r * 0.05), int(cy - r * 0.8))
-        p.drawLine(int(cx - r * 0.7), int(cy + r * 0.8),
-                   int(cx + r * 0.05), int(cy + r * 0.8))
-        p.drawLine(int(cx - r * 0.15), int(cy), int(cx + r * 0.85), int(cy))
-        p.drawLine(int(cx + r * 0.85), int(cy), int(cx + r * 0.4), int(cy - r * 0.45))
-        p.drawLine(int(cx + r * 0.85), int(cy), int(cx + r * 0.4), int(cy + r * 0.45))
+        cx = int(rect.center().x())
+        cy = int(rect.center().y())
+        # Door outline (3 sides open on right)
+        p.drawLine(cx - 6, cy - 7, cx - 6, cy + 7)   # left edge
+        p.drawLine(cx - 6, cy - 7, cx + 1, cy - 7)   # top edge
+        p.drawLine(cx - 6, cy + 7, cx + 1, cy + 7)   # bottom edge
+        # Arrow pointing right (exit)
+        p.drawLine(cx - 1, cy, cx + 7, cy)            # shaft
+        p.drawLine(cx + 4, cy - 3, cx + 7, cy)        # arrow top
+        p.drawLine(cx + 4, cy + 3, cx + 7, cy)        # arrow bottom
 
     elif kind == "circle":
         p.setPen(pen)
@@ -806,8 +808,9 @@ class Sidebar(QFrame):
 
         lay.addStretch(1)
 
-        # Bottom "+" slot → logout
-        self._logout_btn = SideIconButton("plus", "Logout")
+        # Bottom logout button (arrow-out icon, not "+" which is confusing)
+        self._logout_btn = SideIconButton("logout", "Logout")
+        self._logout_btn.setToolTip("Logout")
         self._logout_btn.clicked.connect(on_logout)
         lay.addWidget(self._logout_btn, alignment=Qt.AlignHCenter)
 
@@ -1006,6 +1009,40 @@ class ProductCard(QFrame):
 #  Login modal card (over the dimmed sidebar background)
 # ══════════════════════════════════════════════════════════════════════════════
 
+class GlassCard(QFrame):
+    """A QFrame that paints a glassmorphism background: dark translucent fill +
+    thin white border + top shimmer. Works without actual backdrop blur on Windows."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, False)  # we handle painting ourselves
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect())
+        radius = 15.0
+
+        # Base dark fill — #161514 at 92% opacity
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(22, 21, 20, 235)))
+        p.drawRoundedRect(r, radius, radius)
+
+        # Glass border — 1px white at 10% opacity
+        p.setPen(QPen(QColor(255, 255, 255, 26), 1.0))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+
+        # Top inner shimmer (frosted glass highlight)
+        shimmer = QLinearGradient(0, 0, 0, radius * 3)
+        shimmer.setColorAt(0.0, QColor(255, 255, 255, 22))
+        shimmer.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(shimmer))
+        p.drawRoundedRect(r, radius, radius)
+
+        p.end()
+
+
 class LoginScreen(QWidget):
     login_success = pyqtSignal(dict)
 
@@ -1030,19 +1067,14 @@ class LoginScreen(QWidget):
         # A faint sidebar decoration behind the dim overlay
         self._sidebar_ghost = Sidebar(lambda i: None, lambda: None, self)
         self._sidebar_ghost.setEnabled(False)
-        self._sidebar_ghost.lower()
+        self._sidebar_ghost.hide()  # completely hidden — shown dimly in paintEvent only
 
     def _build_card(self):
         # Figma "Rectangle 30" is 566x275, but that height only fits the title +
         # inputs + primary CTA. We keep the 566px width and 15px radius and let the
         # card grow vertically to hold the social row + footer without overlap.
-        card = QFrame()
+        card = GlassCard()
         card.setFixedWidth(566)
-        card.setStyleSheet(f"""
-            QFrame#logincard {{ background:{MODAL_CARD}; border-radius:15px; }}
-        """)
-        card.setObjectName("logincard")
-        card.setAttribute(Qt.WA_StyledBackground, True)
 
         c = QVBoxLayout(card)
         c.setContentsMargins(53, 26, 53, 26)
@@ -1094,17 +1126,25 @@ class LoginScreen(QWidget):
         c.addWidget(self._error)
         c.addSpacing(6)
 
-        # LOGIN button — gold, gold glow drop shadow
+        # LOGIN button — gold background, inline stylesheet (QGraphicsEffect kills QSS bg)
         self._login_btn = QPushButton("LOGIN")
-        self._login_btn.setObjectName("login-btn")
         self._login_btn.setCursor(Qt.PointingHandCursor)
         self._login_btn.setFixedSize(460, 57)
         self._login_btn.clicked.connect(self._on_login)
-        glow = QGraphicsDropShadowEffect(self._login_btn)
-        glow.setBlurRadius(26)
-        glow.setOffset(0, 0)
-        glow.setColor(QColor(236, 217, 151, 160))
-        self._login_btn.setGraphicsEffect(glow)
+        self._login_btn.setStyleSheet("""
+            QPushButton {
+                background: #ECD997;
+                color: #000000;
+                border: none;
+                border-radius: 10px;
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover { background: #f5e4aa; }
+            QPushButton:pressed { background: #d4c27a; }
+            QPushButton:disabled { background: #5a5530; color: #888; }
+        """)
         c.addWidget(self._login_btn, alignment=Qt.AlignHCenter)
         c.addSpacing(14)
 
