@@ -45,14 +45,14 @@ pyqtProperty = Property
 
 
 # ── Colour palette ────────────────────────────────────────────────────────────
-BG       = "#121318"   # flat dark
-SURFACE  = "#15171E"
-CARD     = "#15171E"
-BORDER   = "#2B2F3A"
-ACCENT   = "#7C5CFC"   # purple
+BG       = "#0D0E11"   # flat dark
+SURFACE  = "#12141C"
+CARD     = "#12141C"
+BORDER   = "#222530"
+ACCENT   = "#ECCF96"   # purple
 ACCENT2  = "#58A6FF"   # blue for links / coming-soon
-RED      = "#F23F43"
-YELLOW   = "#F0B232"
+RED      = "#E25C5C"
+YELLOW   = "#ECCF96"
 TEXT     = "#F1F5F9"
 MUTED    = "#8A8D96"
 MUTED2   = "#94A3B8"
@@ -62,8 +62,8 @@ DISCORD_BLURPLE = "#5865F2"
 YOUTUBE_RED     = "#FF0000"
 
 # Derived shades
-ACCENT_HOVER = "#8C6CFC"
-ACCENT_DIM   = "#5C3CFC"
+ACCENT_HOVER = "#F0D8A8"
+ACCENT_DIM   = "#DCB878"
 
 APP_VERSION = "v2.0"
 
@@ -559,7 +559,7 @@ class SideIconButton(QPushButton):
             p.setPen(Qt.NoPen)
             p.drawRect(0, 0, w, h)
             # Left accent border-left indicator (3px vertical bar)
-            p.setBrush(QColor("#7C5CFC"))
+            p.setBrush(QColor("#ECCF96"))
             p.drawRect(0, 0, 3, h)
             icon_color = QColor("white")
         elif self._hover:
@@ -632,6 +632,12 @@ class SideIconButton(QPushButton):
             hole_col = QColor(8, 11, 16) if not self._active else QColor("white")
             p.setBrush(hole_col)
             p.drawEllipse(QRectF(cx - 4, cy - 4, 8, 8))
+
+        elif kind == "plus":
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawLine(int(cx - 6), int(cy), int(cx + 6), int(cy))
+            p.drawLine(int(cx), int(cy - 6), int(cx), int(cy + 6))
 
         elif kind == "logout":
             p.setPen(pen)
@@ -756,7 +762,7 @@ class GameCard(QFrame):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
-        radius = 4
+        radius = 12
 
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
@@ -798,7 +804,7 @@ class ComingSoonCard(QFrame):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
-        radius = 4
+        radius = 12
 
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
@@ -867,7 +873,7 @@ def make_input(placeholder, password=False):
         QLineEdit {{
             background:#0E0F12;
             color:{TEXT};
-            border:1px solid #2B2F3A;
+            border:1px solid #222530;
             border-radius:2px;
             padding:0 14px;
             font-size:13px;
@@ -891,7 +897,7 @@ def make_primary_button(text, height=48):
             font-size:13px;
             letter-spacing:1px;
         }}
-        QPushButton:hover {{ background:#8C6CFC; }}
+        QPushButton:hover {{ background:#F0D8A8; }}
         QPushButton:pressed {{ background:#6C4CFC; }}
         QPushButton:disabled {{ background:#2B2F3A; color:{MUTED}; }}
     """)
@@ -930,30 +936,62 @@ class GradientBackground(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TitleBar(QFrame):
-    """40px custom title bar with RC logo, title, minimize + close circles."""
+    """50px custom title bar with back button, Oyun Haberleri button, and window controls."""
 
     def __init__(self, window, title="SteamGuard", parent=None):
         super().__init__(parent)
         self._win = window
         self._drag_pos = None
-        self.setFixedHeight(40)
-        self.setStyleSheet("background:#15171E; border-bottom: 1px solid #2B2F3A;")
+        self.setFixedHeight(50)
+        self.setStyleSheet("background:transparent; border:none;")
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 10, 0)
+        lay.setContentsMargins(16, 8, 16, 0)
         lay.setSpacing(10)
 
-        self._logo = SmallLogo(size=26)
-        lay.addWidget(self._logo)
+        # Sleek circular back button
+        self._back_btn = QPushButton("←")
+        self._back_btn.setCursor(Qt.PointingHandCursor)
+        self._back_btn.setFixedSize(36, 36)
+        self._back_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.06);
+                color: white;
+                border: none;
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 18px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.12);
+            }
+        """)
+        self._back_btn.clicked.connect(self._on_back)
+        lay.addWidget(self._back_btn)
 
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color:{TEXT}; font-weight:700; font-size:13px; background:transparent;")
-        lay.addWidget(title_lbl)
+        # Centered Oyun Haberleri button matching Figma
+        self._news_pill = QPushButton("Oyun Haberleri")
+        self._news_pill.setFixedHeight(30)
+        self._news_pill.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.08);
+                color: white;
+                border: none;
+                border-radius: 15px;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 0 16px;
+            }
+            QPushButton:hover {
+                background: rgba(255, 255, 255, 0.14);
+            }
+        """)
+        lay.addWidget(self._news_pill, alignment=Qt.AlignCenter)
 
         lay.addStretch(1)
 
         self._min_btn = self._mk_btn("—", self._minimize)
-        self._close_btn = self._mk_btn("✕", self._close, hover=RED)
+        self._close_btn = self._mk_btn("✕", self._close, hover="#E25C5C")
         lay.addWidget(self._min_btn)
         lay.addWidget(self._close_btn)
 
@@ -974,6 +1012,16 @@ class TitleBar(QFrame):
 
     def _close(self):
         self._win.close()
+
+    def _on_back(self):
+        if hasattr(self._win, "_dashboard") and self._win._dashboard is not None:
+            current = self._win._dashboard._stack.currentIndex()
+            if current != 0:
+                self._win._dashboard._switch_tab(0)
+            else:
+                self._win._dashboard._on_logout()
+        elif hasattr(self._win, "_go_login"):
+            self._win._go_login()
 
     # Dragging
     def mousePressEvent(self, e):
@@ -1016,9 +1064,9 @@ class LoginScreen(GradientBackground):
         card.setFixedWidth(380)
         card.setStyleSheet("""
             QFrame {
-                background:#15171E;
-                border:1px solid #2B2F3A;
-                border-radius:4px;
+                background:#12141C;
+                border:1px solid #222530;
+                border-radius:12px;
             }
         """)
         # Removed shadow for flat ImGui style
@@ -1040,22 +1088,16 @@ class LoginScreen(GradientBackground):
         c.addWidget(community)
 
         # 3. Title
-        title = QLabel("SteamGuard")
+        title = QLabel("Ürün aktivasyonu")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet(f"color:{TEXT}; font-size:24px; font-weight:800; background:transparent;")
+        title.setStyleSheet(f"color:{TEXT}; font-size:18px; font-weight:bold; background:transparent;")
         c.addWidget(title)
-
-        # 4. Version subtitle
-        badge = QLabel(f"Loader {APP_VERSION}")
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(f"color:{ACCENT}; font-size:10px; font-weight:700; background:transparent;")
-        c.addWidget(badge)
 
         c.addSpacing(20)
 
         # 6/7. Inputs
-        self._discord = make_input("Discord User ID")
-        self._key = make_input("License Key", password=True)
+        self._discord = make_input("Discord User ID (Etkinleştirici)")
+        self._key = make_input("Anahtarı girin. (License Key)", password=True)
         c.addWidget(self._discord)
         c.addWidget(self._key)
 
@@ -1073,7 +1115,7 @@ class LoginScreen(GradientBackground):
         c.addSpacing(4)
 
         # 9. Login button
-        self._login_btn = make_primary_button("LOGIN", 48)
+        self._login_btn = make_primary_button("ETKİNLEŞTİR", 48)
         self._login_btn.clicked.connect(self._on_login)
         c.addWidget(self._login_btn)
 
@@ -1237,15 +1279,17 @@ class Dashboard(QWidget):
 
     # ── layout ────────────────────────────────────────────────────────────
     def _build(self):
-        root = QVBoxLayout(self)
+        root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(TitleBar(self._win, "SteamGuard"))
+        root.addWidget(self._build_sidebar())  # Full height sidebar on left
 
-        main = QHBoxLayout()
-        main.setContentsMargins(0, 0, 0, 0)
-        main.setSpacing(0)
-        main.addWidget(self._build_sidebar())
+        right_pane = QVBoxLayout()
+        right_pane.setContentsMargins(0, 0, 0, 0)
+        right_pane.setSpacing(0)
+
+        # Sleek TitleBar inside the right panel
+        right_pane.addWidget(TitleBar(self._win, "SteamGuard"))
 
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("background:transparent;")
@@ -1253,18 +1297,23 @@ class Dashboard(QWidget):
         self._stack.addWidget(self._build_rewards_tab())       # 1
         self._stack.addWidget(self._build_referrals_tab())     # 2
         self._stack.addWidget(self._build_settings_tab())      # 3
-        main.addWidget(self._stack, 1)
+        right_pane.addWidget(self._stack, 1)
 
-        root.addLayout(main, 1)
+        root.addLayout(right_pane, 1)
 
     def _build_sidebar(self):
         bar = QFrame()
         bar.setFixedWidth(72)
-        bar.setStyleSheet("background:#15171E; border-right: 1px solid #2B2F3A;")
+        bar.setStyleSheet("background:#07080A; border-right: 1px solid #16181F;")
         lay = QVBoxLayout(bar)
-        lay.setContentsMargins(0, 16, 0, 14)
-        lay.setSpacing(0)
+        lay.setContentsMargins(0, 20, 0, 20)
+        lay.setSpacing(12)
         lay.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+
+        # Figma Hexagonal Logo at the top of the sidebar
+        logo = SmallLogo(size=32)
+        lay.addWidget(logo, alignment=Qt.AlignHCenter)
+        lay.addSpacing(16)
 
         self._nav = []
         for kind, tip, idx in [
@@ -1280,6 +1329,11 @@ class Dashboard(QWidget):
         self._nav[0].setChecked(True)
 
         lay.addStretch(1)
+
+        # Plus button matching Figma
+        plus_btn = SideIconButton("plus", "Add Tool")
+        plus_btn.setCheckable(False)
+        lay.addWidget(plus_btn)
 
         logout_btn = SideIconButton("logout", "Logout", accent=RED)
         logout_btn.setCheckable(False)
@@ -1313,9 +1367,9 @@ class Dashboard(QWidget):
     def _build_protection_tab(self):
         page, lay = self._content_page()
 
-        heading = QLabel("My Tools")
-        heading.setAlignment(Qt.AlignCenter)
-        heading.setStyleSheet(f"color:{TEXT}; font-size:18px; font-weight:800; background:transparent;")
+        heading = QLabel("Popüler ürünler")
+        heading.setAlignment(Qt.AlignLeft)
+        heading.setStyleSheet(f"color:{TEXT}; font-size:24px; font-weight:800; background:transparent; padding-left:10px;")
         lay.addWidget(heading)
 
         # Cards grid (2 columns)
