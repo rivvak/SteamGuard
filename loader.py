@@ -144,8 +144,8 @@ DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
 STEAMGUARD_DOWNLOAD_URL = f"{DEFAULT_SERVER_URL}/get-tool?tool=steamguard"
 TOOLS_DIR = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard" / "tools"
 BUNDLED_TOOLS_DIR = Path(__file__).resolve().parent / "tools"
-ROBLOX_COPY_TOOL_DIR = BUNDLED_TOOLS_DIR / "roblox_copy_tool"
-ROBLOX_COPY_ENTRY = ROBLOX_COPY_TOOL_DIR / "roblox_copy_tool.py"
+ROBLOX_COPIER_EXE = BUNDLED_TOOLS_DIR / "roblox_copier.exe"
+ROBLOX_COPIER_PKG = Path(__file__).resolve().parent / "roblox_copier"
 
 
 def ensure_tools_dir() -> None:
@@ -1430,13 +1430,13 @@ class Dashboard(QWidget):
         self._sg_card_date = self._sg_card
         grid.addWidget(self._sg_card, 0, 0)
 
-        # Card 2 — Roblox Copy Helper (bundled Python local companion)
+        # Card 2 — Roblox Copier (bundled Python local companion)
         self._roblox_card = ProductCard(
-            "Roblox Copy Helper", "roblox",
+            "Roblox Copier", "roblox",
             grad_top="#17315F", grad_bottom="#0C1024",
             action_text="Launch", action_enabled=True,
             on_action=self._on_launch_roblox_copy,
-            tagline="Local Studio asset ID companion", status_text="Bundled",
+            tagline="Local Studio animation copier", status_text="Bundled",
         )
         grid.addWidget(self._roblox_card, 0, 1)
 
@@ -1458,28 +1458,25 @@ class Dashboard(QWidget):
         return scroll
 
     def _find_roblox_copy_tool(self):
-        """Return a command for the bundled Roblox Copy Helper."""
+        """Return a command for the bundled Roblox Copier."""
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
         candidates = [
-            base / "tools" / "roblox_copy_tool" / "RobloxCopyTool.exe",
-            base / "tools" / "roblox_copy_tool" / "roblox_copy_tool.py",
-            ROBLOX_COPY_TOOL_DIR / "RobloxCopyTool.exe",
-            ROBLOX_COPY_ENTRY,
+            base / "roblox_copier.exe",
+            base / "dist" / "roblox_copier.exe",
+            ROBLOX_COPIER_EXE,
+            Path(__file__).resolve().parent / "dist" / "roblox_copier.exe",
         ]
-        frozen = getattr(sys, "frozen", False)
         for candidate in candidates:
             if candidate.exists():
-                if candidate.suffix.lower() == ".py":
-                    if frozen:
-                        continue
-                    return [sys.executable, str(candidate)]
                 return [str(candidate)]
+        if not getattr(sys, "frozen", False) and ROBLOX_COPIER_PKG.exists():
+            return [sys.executable, "-m", "roblox_copier"]
         return None
 
     def _on_launch_roblox_copy(self):
         cmd = self._find_roblox_copy_tool()
         if not cmd:
-            self._time_lbl.setText("Roblox helper missing")
+            self._time_lbl.setText("Roblox copier missing")
             return
         self._launch_tool("roblox", cmd, self._roblox_card)
 
@@ -1540,7 +1537,10 @@ class Dashboard(QWidget):
             self._time_lbl.setText("Already running")
             return
         try:
-            cwd = str(Path(cmd[-1]).resolve().parent) if cmd[-1] else None
+            if len(cmd) >= 3 and cmd[1] == "-m":
+                cwd = str(Path(__file__).resolve().parent)
+            else:
+                cwd = str(Path(cmd[-1]).resolve().parent) if cmd[-1] else None
             flags = 0
             if os.name == "nt":
                 flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
