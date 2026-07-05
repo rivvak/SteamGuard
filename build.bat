@@ -50,6 +50,22 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 echo.
+echo Building Roblox Copy Helper...
+python -m nuitka ^
+    --onefile ^
+    --windows-console-mode=force ^
+    --output-filename=RobloxCopyTool.exe ^
+    --output-dir=tools/roblox_copy_tool ^
+    --include-data-files=tools/roblox_copy_tool/LuaScript.lua=LuaScript.lua ^
+    --assume-yes-for-downloads ^
+    tools/roblox_copy_tool/roblox_copy_tool.py
+
+if %ERRORLEVEL% NEQ 0 (
+    echo Roblox Copy Helper build failed.
+    exit /b %ERRORLEVEL%
+)
+
+echo.
 echo Building Loader...
 python -m nuitka ^
     --onefile ^
@@ -58,10 +74,11 @@ python -m nuitka ^
     --windows-icon-from-ico=icon.ico ^
     --enable-plugin=pyqt5 ^
     --include-package=PyQt5 ^
+    --include-package=auth ^
+    --include-data-dir=tools=tools ^
     --assume-yes-for-downloads ^
     --output-filename=Loader.exe ^
     --output-dir=%DIST% ^
-    --include-package=auth ^
     loader.py
 echo Loader.exe built successfully!
 

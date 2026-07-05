@@ -96,21 +96,21 @@ def _apply_acrylic(hwnd):
 #  EXACT ImGui dark-theme colour palette (source-of-truth hex values)
 # ══════════════════════════════════════════════════════════════════════════════
 
-BG          = "#0F0F0F"   # WindowBg — very dark near-black
-BG_CHILD    = "#121212"   # ChildBg — cards/panels
-BG_POPUP    = "#141414"   # PopupBg — dropdowns/tooltips
-BORDER      = "#3E3E47"   # 1px borders everywhere
-ACCENT      = "#4296FA"   # Electric blue — hover/active/checkmarks
-ACCENT_ACT  = "#0F87FA"   # Pressed state — brighter blue
-ACCENT_DIM  = "#24456D"   # Button idle — accent @ 40% over bg
-FRAME_BG    = "#1D2F49"   # Input/frame background
-HEADER      = "#1F3958"   # Active nav item background
-TEXT        = "#FFFFFF"   # Primary text
-TEXT_DIM    = "#808080"   # Disabled/secondary text
-TITLE_BG    = "#0A0A0A"   # Sidebar/title bar
+BG          = "#0B0D10"   # WindowBg — near-black graphite
+BG_CHILD    = "#11151B"   # ChildBg — cards/panels
+BG_POPUP    = "#141922"   # PopupBg — dropdowns/tooltips
+BORDER      = "#2A3340"   # 1px borders everywhere
+ACCENT      = "#3B82F6"   # Electric blue — hover/active/checkmarks
+ACCENT_ACT  = "#2563EB"   # Pressed state — deeper blue
+ACCENT_DIM  = "#1E3A5F"   # Button idle — accent @ 40% over bg
+FRAME_BG    = "#111E2E"   # Input/frame background
+HEADER      = "#172A45"   # Active nav item background
+TEXT        = "#F8FAFC"   # Primary text
+TEXT_DIM    = "#94A3B8"   # Disabled/secondary text
+TITLE_BG    = "#080A0D"   # Sidebar/title bar
 
 # Hover wash for nav items
-NAV_HOVER   = "#16273D"
+NAV_HOVER   = "#111E31"
 
 # ── Legacy-compatible aliases kept so preserved logic keeps working ────────────
 ACCENT2      = ACCENT
@@ -143,6 +143,9 @@ DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
 # ── Tool download (loader fetches SteamGuard.exe via rivvak.app/get-tool) ─────
 STEAMGUARD_DOWNLOAD_URL = f"{DEFAULT_SERVER_URL}/get-tool?tool=steamguard"
 TOOLS_DIR = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard" / "tools"
+BUNDLED_TOOLS_DIR = Path(__file__).resolve().parent / "tools"
+ROBLOX_COPY_TOOL_DIR = BUNDLED_TOOLS_DIR / "roblox_copy_tool"
+ROBLOX_COPY_ENTRY = ROBLOX_COPY_TOOL_DIR / "roblox_copy_tool.py"
 
 
 def ensure_tools_dir() -> None:
@@ -173,48 +176,49 @@ _XOR_KEY = b"RivvakSteamGuardLoader-v2-fallback-key-2026"
 #  QSS stylesheet (ImGui dark theme — verbatim spec)
 # ══════════════════════════════════════════════════════════════════════════════
 STYLESHEET = """
-* { border-radius: 0px; outline: 0; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 10pt; color: #FFFFFF; }
-QMainWindow, QDialog, QWidget { background-color: #0F0F0F; color: #FFFFFF; }
-QFrame { background-color: #0F0F0F; border: none; }
-QFrame#Card { background-color: #121212; border: 1px solid #3E3E47; }
-QLabel { background: transparent; color: #FFFFFF; }
-QLabel#Muted { color: #808080; }
-QLabel#Title { color: #FFFFFF; font-weight: 700; font-size: 14pt; }
-QLabel#CardTitle { color: #FFFFFF; font-weight: 700; font-size: 11pt; }
+* { border-radius: 0px; outline: 0; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 10pt; color: #F8FAFC; }
+QMainWindow, QDialog, QWidget { background-color: #0B0D10; color: #F8FAFC; }
+QFrame { background-color: #0B0D10; border: none; }
+QFrame#Card { background-color: #11151B; border: 1px solid #2A3340; }
+QFrame#TopPill { background-color: #11151B; border: 1px solid #2A3340; }
+QLabel { background: transparent; color: #F8FAFC; }
+QLabel#Muted { color: #94A3B8; }
+QLabel#Title { color: #F8FAFC; font-weight: 700; font-size: 14pt; }
+QLabel#CardTitle { color: #F8FAFC; font-weight: 700; font-size: 11pt; }
 QLineEdit, QTextEdit, QPlainTextEdit {
-    background-color: #1D2F49; color: #FFFFFF;
-    border: 1px solid #3E3E47; border-radius: 0px;
-    padding: 6px 10px; font-size: 10pt; selection-background-color: #4296FA;
+    background-color: #111E2E; color: #F8FAFC;
+    border: 1px solid #2A3340; border-radius: 0px;
+    padding: 6px 10px; font-size: 10pt; selection-background-color: #3B82F6;
 }
-QLineEdit:focus { border: 1px solid #4296FA; }
-QLineEdit::placeholder { color: #808080; }
+QLineEdit:focus { border: 1px solid #3B82F6; }
 QPushButton {
-    background-color: #24456D; color: #FFFFFF; border: none;
+    background-color: #1E3A5F; color: #F8FAFC; border: 1px solid #2A3340;
     border-radius: 0px; padding: 6px 16px; font-size: 10pt; font-weight: 600;
     min-height: 28px;
 }
-QPushButton:hover { background-color: #4296FA; color: #FFFFFF; }
-QPushButton:pressed { background-color: #0F87FA; }
-QPushButton:disabled { background-color: #1A1A1A; color: #808080; }
+QPushButton:hover { background-color: #3B82F6; color: #FFFFFF; border-color: #60A5FA; }
+QPushButton:pressed { background-color: #2563EB; border-color: #2563EB; }
+QPushButton:disabled { background-color: #151A21; color: #64748B; border-color: #222A35; }
 QPushButton#CTA {
-    background-color: #4296FA; color: #FFFFFF; font-weight: 700;
-    border: none; border-radius: 0px; padding: 8px 24px; min-height: 36px;
+    background-color: #3B82F6; color: #FFFFFF; font-weight: 700;
+    border: 1px solid #60A5FA; border-radius: 0px; padding: 8px 24px; min-height: 36px;
 }
-QPushButton#CTA:hover { background-color: #5BA3FF; }
-QPushButton#CTA:pressed { background-color: #0F87FA; }
+QPushButton#CTA:hover { background-color: #60A5FA; border-color: #93C5FD; }
+QPushButton#CTA:pressed { background-color: #2563EB; border-color: #2563EB; }
 QPushButton#Ghost {
-    background-color: #1C1C1C; color: #E6E6E6;
-    border: 1px solid #2A2A2A; border-radius: 0px;
+    background-color: #11151B; color: #CBD5E1;
+    border: 1px solid #2A3340; border-radius: 0px;
 }
-QPushButton#Ghost:hover { background-color: #24456D; border-color: #4296FA; }
-QCheckBox { color: #FFFFFF; font-size: 10pt; }
-QCheckBox::indicator { width: 14px; height: 14px; background: #1D2F49; border: 1px solid #3E3E47; border-radius: 0px; }
-QCheckBox::indicator:checked { background: #4296FA; border-color: #4296FA; }
-QScrollBar:vertical { background: #0F0F0F; width: 8px; border: none; }
-QScrollBar::handle:vertical { background: #4F4F4F; border-radius: 0px; min-height: 20px; }
-QScrollBar::handle:vertical:hover { background: #4296FA; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QToolTip { background: #141414; color: #FFFFFF; border: 1px solid #3E3E47; padding: 4px 8px; font-size: 9pt; }
+QPushButton#Ghost:hover { background-color: #172A45; color: #FFFFFF; border-color: #3B82F6; }
+QCheckBox { color: #F8FAFC; font-size: 10pt; }
+QCheckBox::indicator { width: 14px; height: 14px; background: #111E2E; border: 1px solid #2A3340; border-radius: 0px; }
+QCheckBox::indicator:checked { background: #3B82F6; border-color: #60A5FA; }
+QScrollBar:vertical { background: #0B0D10; width: 8px; border: none; }
+QScrollBar::handle:vertical { background: #334155; border-radius: 0px; min-height: 20px; }
+QScrollBar::handle:vertical:hover { background: #3B82F6; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #0B0D10; }
+QToolTip { background: #141922; color: #F8FAFC; border: 1px solid #2A3340; padding: 4px 8px; font-size: 9pt; }
 """
 
 
@@ -600,6 +604,27 @@ def _draw_icon(p, kind, cx, cy, color, size=22):
         p.setPen(Qt.NoPen)
         p.drawEllipse(QRectF(cx - r * 0.28, cy - r * 0.28, r * 0.56, r * 0.56))
 
+    elif kind == "roblox":
+        p.setPen(QPen(col, 2))
+        p.setBrush(Qt.NoBrush)
+        side = r * 1.35
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(45)
+        p.drawRect(QRectF(-side / 2, -side / 2, side, side))
+        p.setBrush(col)
+        hole = side * 0.22
+        p.drawRect(QRectF(-hole / 2, -hole / 2, hole, hole))
+        p.restore()
+
+    elif kind == "terminal":
+        p.setPen(QPen(col, 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(QRectF(cx - r * 0.85, cy - r * 0.62, r * 1.7, r * 1.24))
+        p.drawLine(int(cx - r * 0.52), int(cy - r * 0.18), int(cx - r * 0.24), int(cy))
+        p.drawLine(int(cx - r * 0.52), int(cy + r * 0.18), int(cx - r * 0.24), int(cy))
+        p.drawLine(int(cx), int(cy + r * 0.25), int(cx + r * 0.48), int(cy + r * 0.25))
+
     elif kind == "lock":
         p.setPen(Qt.NoPen)
         pen2 = QPen(col, 2.2)
@@ -794,7 +819,7 @@ class SideIconButton(QPushButton):
         else:
             icon_col = ICON_GREY
         if self._kind in ("plus", "logout"):
-            icon_col = "rgba(255,255,255,0.65)"
+            icon_col = QColor(255, 255, 255, 166)
         _draw_icon(p, self._kind, w / 2, h / 2, icon_col, 22)
         p.end()
 
@@ -875,16 +900,20 @@ class ProductCard(QFrame):
 
     def __init__(self, title, glyph, grad_top, grad_bottom, action_text,
                  action_enabled=True, activated_date=None, on_action=None,
-                 parent=None):
+                 tagline="", status_text="", parent=None):
         super().__init__(parent)
         self._title = title
         self._glyph = glyph
         self._grad_top = QColor(grad_top)
         self._grad_bottom = QColor(grad_bottom)
         self._activated_date = activated_date
+        self._tagline = tagline
+        self._status_text = status_text
+        self._hover = False
+        self.setMouseTracking(True)
         self.setObjectName("Card")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(330)
+        self.setFixedHeight(340)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(1, 1, 1, 1)
@@ -909,9 +938,31 @@ class ProductCard(QFrame):
         name_lbl = QLabel(title)
         name_lbl.setStyleSheet(
             f"color:{TEXT}; font-size:12pt; font-weight:700; background:transparent;")
-        name_row.addWidget(name_lbl)
+        name_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        name_lbl.setTextInteractionFlags(Qt.NoTextInteraction)
+        name_lbl.setToolTip(title)
+        self._name_lbl = name_lbl
+        name_row.addWidget(name_lbl, 1)
         name_row.addStretch(1)
         bl.addLayout(name_row)
+
+        if tagline:
+            tag_lbl = QLabel(tagline)
+            tag_lbl.setStyleSheet(
+                f"color:{TEXT_DIM}; font-size:8.5pt; background:transparent;")
+            tag_lbl.setWordWrap(False)
+            tag_lbl.setToolTip(tagline)
+            self._tag_lbl = tag_lbl
+            bl.addWidget(tag_lbl)
+        else:
+            self._tag_lbl = None
+
+        if status_text:
+            status_lbl = QLabel(status_text.upper())
+            status_lbl.setStyleSheet(
+                f"QLabel {{ color:{ACCENT}; border:1px solid {ACCENT_DIM}; background:{BG}; padding:2px 6px; font-size:8pt; font-weight:700; }}")
+            status_lbl.setFixedHeight(22)
+            bl.addWidget(status_lbl, alignment=Qt.AlignLeft)
 
         # activation date row
         self._date_val = None
@@ -951,6 +1002,27 @@ class ProductCard(QFrame):
 
         lay.addWidget(bottom)
 
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def _apply_elide(self):
+        for attr, full in (("_name_lbl", self._title), ("_tag_lbl", self._tagline)):
+            lbl = getattr(self, attr, None)
+            if lbl is not None:
+                metrics = QFontMetrics(lbl.font())
+                lbl.setText(metrics.elidedText(full, Qt.ElideRight, max(40, lbl.width())))
+
+    def resizeEvent(self, event):
+        self._apply_elide()
+        super().resizeEvent(event)
+
     # helper to update the activation date from server data
     def set_activated_date(self, text):
         if self._date_val is not None:
@@ -980,9 +1052,29 @@ class ProductCard(QFrame):
         img_h = int(self.height() * 0.50)
         art_rect = QRect(1, 1, self.width() - 2, img_h - 1)
         grad = QLinearGradient(0, 0, self.width(), img_h)
-        grad.setColorAt(0, self._grad_top)
+        grad.setColorAt(0, self._grad_top.lighter(112 if self._hover else 100))
         grad.setColorAt(1, self._grad_bottom)
         p.fillRect(art_rect, QBrush(grad))
+
+        # ImGui-style scan lines / corner grid, clipped to header only.
+        p.save()
+        p.setClipRect(art_rect)
+        p.setOpacity(0.10 if not self._hover else 0.16)
+        p.setPen(QPen(QColor(255, 255, 255), 1))
+        step = 18
+        for x in range(art_rect.left() - img_h, art_rect.right() + img_h, step):
+            p.drawLine(x, art_rect.bottom(), x + img_h, art_rect.top())
+        p.restore()
+
+        # Accent glyph plate.
+        p.save()
+        p.setOpacity(0.92)
+        p.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
+        p.setBrush(QColor(8, 10, 13, 150))
+        plate = QRectF(18, 18, 54, 54)
+        p.drawRect(plate)
+        _draw_icon(p, self._glyph, plate.center().x(), plate.center().y(), ACCENT if self._hover else TEXT, 26)
+        p.restore()
 
         # Large, subtle, clipped stylized tool name over the gradient (Bug 2 fix)
         p.save()
@@ -1002,9 +1094,13 @@ class ProductCard(QFrame):
         p.drawLine(1, img_h, self.width() - 1, img_h)
 
         # 1px border (QSS #Card also styles this, drawn here for the painted overlay)
-        p.setPen(QPen(QColor(BORDER), 1))
+        p.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(0, 0, self.width() - 1, self.height() - 1)
+        if self._hover:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(ACCENT))
+            p.drawRect(0, 0, self.width(), 2)
         p.end()
 
 
@@ -1046,8 +1142,7 @@ class LoginScreen(QWidget):
         title.setObjectName("Title")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(
-            f"color:{TEXT}; font-size:14pt; font-weight:700; background:transparent;"
-            " letter-spacing:1px;")
+            f"color:{TEXT}; font-size:14pt; font-weight:700; background:transparent;")
         c.addWidget(title)
         c.addSpacing(4)
 
@@ -1143,7 +1238,7 @@ class LoginScreen(QWidget):
         b.setStyleSheet(
             f"QPushButton {{ background:transparent; color:{ACCENT};"
             " border:none; min-height:0; padding:0; font-size:9pt; }}"
-            " QPushButton:hover { text-decoration:underline; color:#5BA3FF; }")
+            " QPushButton:hover { color:#60A5FA; }")
         b.clicked.connect(slot)
         return b
 
@@ -1236,9 +1331,11 @@ class Dashboard(QWidget):
         self._token = session.get("token", "")
         self._server = DEFAULT_SERVER_URL.rstrip("/")
         self._settings = load_settings()
+        self._processes = {}
         self._sg_process = None
+        self._roblox_process = None
         self._proc_timer = QTimer(self)
-        self._proc_timer.timeout.connect(self._check_process)
+        self._proc_timer.timeout.connect(self._check_processes)
         self._workers = []   # keep references alive
         self._referral_ensured = False
         self._tier_lbl = None
@@ -1299,10 +1396,22 @@ class Dashboard(QWidget):
         head_row = QHBoxLayout()
         head_row.addWidget(self._header("Popular products"))
         head_row.addStretch(1)
+        self._time_lbl = QLabel("")
+        self._time_lbl.setObjectName("Muted")
+        self._time_lbl.setStyleSheet(
+            f"color:{TEXT_DIM}; font-size:9pt; background:transparent;")
         self._tier_lbl = QLabel("")
         self._tier_lbl.setStyleSheet(
             f"color:{ACCENT}; font-size:10pt; font-weight:700; background:transparent;")
-        head_row.addWidget(self._tier_lbl, alignment=Qt.AlignVCenter)
+        pill = QFrame()
+        pill.setObjectName("TopPill")
+        pill.setAttribute(Qt.WA_StyledBackground, True)
+        pl = QHBoxLayout(pill)
+        pl.setContentsMargins(10, 4, 10, 4)
+        pl.setSpacing(10)
+        pl.addWidget(self._time_lbl)
+        pl.addWidget(self._tier_lbl)
+        head_row.addWidget(pill, alignment=Qt.AlignVCenter)
         lay.addLayout(head_row)
 
         grid = QGridLayout()
@@ -1316,15 +1425,18 @@ class Dashboard(QWidget):
             action_text="Launch", action_enabled=True,
             activated_date="—",
             on_action=self._on_launch,
+            tagline="Steam session utility", status_text="Installed on demand",
         )
         self._sg_card_date = self._sg_card
         grid.addWidget(self._sg_card, 0, 0)
 
-        # Card 2 — Roblox Tool (dark blue/purple), Coming Soon
+        # Card 2 — Roblox Copy Helper (bundled Python local companion)
         self._roblox_card = ProductCard(
-            "Roblox Tool", "circle",
-            grad_top="#1a1a38", grad_bottom="#0d0d20",
-            action_text="Coming Soon", action_enabled=False,
+            "Roblox Copy Helper", "roblox",
+            grad_top="#17315F", grad_bottom="#0C1024",
+            action_text="Launch", action_enabled=True,
+            on_action=self._on_launch_roblox_copy,
+            tagline="Local Studio asset ID companion", status_text="Bundled",
         )
         grid.addWidget(self._roblox_card, 0, 1)
 
@@ -1333,6 +1445,7 @@ class Dashboard(QWidget):
             "Coming Soon", "lock",
             grad_top="#1a1a20", grad_bottom="#0d0d12",
             action_text="Coming Soon", action_enabled=False,
+            tagline="More tools are being prepared", status_text="Locked",
         )
         grid.addWidget(self._soon_card, 0, 2)
 
@@ -1342,13 +1455,33 @@ class Dashboard(QWidget):
         lay.addLayout(grid)
         lay.addStretch(1)
 
-        # status/time label (repurposes the old time label for messages)
-        self._time_lbl = QLabel("")
-        self._time_lbl.setObjectName("Muted")
-        self._time_lbl.setStyleSheet(
-            f"color:{TEXT_DIM}; font-size:9pt; background:transparent;")
-        lay.addWidget(self._time_lbl)
         return scroll
+
+    def _find_roblox_copy_tool(self):
+        """Return a command for the bundled Roblox Copy Helper."""
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+        candidates = [
+            base / "tools" / "roblox_copy_tool" / "RobloxCopyTool.exe",
+            base / "tools" / "roblox_copy_tool" / "roblox_copy_tool.py",
+            ROBLOX_COPY_TOOL_DIR / "RobloxCopyTool.exe",
+            ROBLOX_COPY_ENTRY,
+        ]
+        frozen = getattr(sys, "frozen", False)
+        for candidate in candidates:
+            if candidate.exists():
+                if candidate.suffix.lower() == ".py":
+                    if frozen:
+                        continue
+                    return [sys.executable, str(candidate)]
+                return [str(candidate)]
+        return None
+
+    def _on_launch_roblox_copy(self):
+        cmd = self._find_roblox_copy_tool()
+        if not cmd:
+            self._time_lbl.setText("Roblox helper missing")
+            return
+        self._launch_tool("roblox", cmd, self._roblox_card)
 
     def _find_steamguard(self):
         """Look for SteamGuard.exe: local cache first, then same folder, then PATH."""
@@ -1400,22 +1533,48 @@ class Dashboard(QWidget):
 
     def _launch_exe(self, exe):
         """Launch SteamGuard.exe and start monitoring the process."""
+        self._launch_tool("steamguard", [str(exe)], self._sg_card)
+
+    def _launch_tool(self, key, cmd, card):
+        if key in self._processes and self._processes[key].poll() is None:
+            self._time_lbl.setText("Already running")
+            return
         try:
-            self._sg_process = subprocess.Popen([str(exe)])
-        except Exception as e:
+            cwd = str(Path(cmd[-1]).resolve().parent) if cmd[-1] else None
+            flags = 0
+            if os.name == "nt":
+                flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            proc = subprocess.Popen(cmd, cwd=cwd, creationflags=flags)
+        except Exception:
             self._time_lbl.setText("Launch failed")
             return
-        self._sg_card.set_action_running()
+        self._processes[key] = proc
+        if key == "steamguard":
+            self._sg_process = proc
+        elif key == "roblox":
+            self._roblox_process = proc
+        card.set_action_running()
+        self._time_lbl.setText(f"{key.title()} running")
         self._proc_timer.start(1000)
 
-    def _check_process(self):
-        if self._sg_process is None:
+    def _check_processes(self):
+        if not self._processes:
             self._proc_timer.stop()
             return
-        if self._sg_process.poll() is not None:
+        finished = []
+        for key, proc in list(self._processes.items()):
+            if proc.poll() is not None:
+                finished.append(key)
+        for key in finished:
+            self._processes.pop(key, None)
+            if key == "steamguard":
+                self._sg_process = None
+                self._sg_card.reset_action("Launch", ACCENT)
+            elif key == "roblox":
+                self._roblox_process = None
+                self._roblox_card.reset_action("Launch", ACCENT)
+        if not self._processes:
             self._proc_timer.stop()
-            self._sg_process = None
-            self._sg_card.reset_action("Launch", ACCENT)
 
     def _load_overview(self):
         if not self._token:
@@ -1812,8 +1971,14 @@ class Dashboard(QWidget):
 
     def _on_logout(self):
         clear_creds()
-        if self._sg_process:
-            self._proc_timer.stop()
+        for proc in list(self._processes.values()):
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        self._processes.clear()
+        self._proc_timer.stop()
         self.logout.emit()
 
 
@@ -1959,6 +2124,12 @@ def main():
         pass
 
     app = QApplication(sys.argv)
+    try:
+        pal = app.palette()
+        pal.setColor(pal.PlaceholderText, QColor(TEXT_DIM))
+        app.setPalette(pal)
+    except Exception:
+        pass
     app.setStyle("Fusion")  # Required for QPushButton to respect background-color
     app.setApplicationName("Rivvak Community")
     app.setStyleSheet(STYLESHEET)

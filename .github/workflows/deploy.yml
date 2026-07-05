@@ -72,19 +72,26 @@ jobs:
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
 
+      - name: Build Roblox Copy Helper with Nuitka
+        run: |
+          python -m nuitka --onefile --windows-console-mode=force --output-filename=RobloxCopyTool.exe --output-dir=tools/roblox_copy_tool --include-data-files=tools/roblox_copy_tool/LuaScript.lua=LuaScript.lua --assume-yes-for-downloads tools/roblox_copy_tool/roblox_copy_tool.py
+
       - name: Build Loader with Nuitka
         run: |
           pip install PyQt5
-          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --windows-icon-from-ico=icon.ico --enable-plugin=pyqt5 --include-package=PyQt5 --assume-yes-for-downloads --output-filename=Loader.exe loader.py
+          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --windows-icon-from-ico=icon.ico --enable-plugin=pyqt5 --include-package=PyQt5 --include-package=auth --include-data-dir=tools=tools --assume-yes-for-downloads --output-filename=Loader.exe loader.py
 
       - name: Verify Build
         shell: pwsh
         run: |
-          if (Test-Path "SteamGuard.exe") {
-            Write-Host "Build successful! File size:"
-            (Get-Item "SteamGuard.exe").Length / 1MB
-          } else {
-            throw "SteamGuard.exe not found!"
+          $artifacts = @("SteamGuard.exe", "Loader.exe", "tools/roblox_copy_tool/RobloxCopyTool.exe")
+          foreach ($artifact in $artifacts) {
+            if (Test-Path $artifact) {
+              Write-Host "$artifact built. File size MB:"
+              (Get-Item $artifact).Length / 1MB
+            } else {
+              throw "$artifact not found!"
+            }
           }
 
       - name: Authenticate to GCP
