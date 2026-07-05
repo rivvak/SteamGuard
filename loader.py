@@ -144,7 +144,11 @@ DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
 STEAMGUARD_DOWNLOAD_URL = f"{DEFAULT_SERVER_URL}/get-tool?tool=steamguard"
 TOOLS_DIR = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard" / "tools"
 BUNDLED_TOOLS_DIR = Path(__file__).resolve().parent / "tools"
-ROBLOX_COPIER_EXE = BUNDLED_TOOLS_DIR / "roblox_copier.exe"
+ROBLOX_COPY_TOOL_DIR = BUNDLED_TOOLS_DIR / "roblox_copy_tool"
+ROBLOX_COPIER_EXE = ROBLOX_COPY_TOOL_DIR / "RobloxCopyTool.exe"
+ROBLOX_COPY_TOOL_ENTRY = ROBLOX_COPY_TOOL_DIR / "roblox_copy_tool.py"
+# Legacy fallback paths (older builds shipped these locations).
+ROBLOX_COPIER_EXE_LEGACY = BUNDLED_TOOLS_DIR / "roblox_copier.exe"
 ROBLOX_COPIER_PKG = Path(__file__).resolve().parent / "roblox_copier"
 
 
@@ -1458,19 +1462,27 @@ class Dashboard(QWidget):
         return scroll
 
     def _find_roblox_copy_tool(self):
-        """Return a command for the bundled Roblox Copier."""
+        """Return a command for the bundled Roblox Copy Tool."""
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
         candidates = [
+            # Current layout (Nuitka build in tools/roblox_copy_tool/).
+            base / "tools" / "roblox_copy_tool" / "RobloxCopyTool.exe",
+            ROBLOX_COPIER_EXE,
+            # Legacy fallbacks so older bundles keep working.
             base / "roblox_copier.exe",
             base / "dist" / "roblox_copier.exe",
-            ROBLOX_COPIER_EXE,
+            ROBLOX_COPIER_EXE_LEGACY,
             Path(__file__).resolve().parent / "dist" / "roblox_copier.exe",
         ]
         for candidate in candidates:
             if candidate.exists():
                 return [str(candidate)]
-        if not getattr(sys, "frozen", False) and ROBLOX_COPIER_PKG.exists():
-            return [sys.executable, "-m", "roblox_copier"]
+        # Dev fallback: run the .py entrypoint directly.
+        if not getattr(sys, "frozen", False):
+            if ROBLOX_COPY_TOOL_ENTRY.exists():
+                return [sys.executable, str(ROBLOX_COPY_TOOL_ENTRY)]
+            if ROBLOX_COPIER_PKG.exists():
+                return [sys.executable, "-m", "roblox_copier"]
         return None
 
     def _on_launch_roblox_copy(self):
