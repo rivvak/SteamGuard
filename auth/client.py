@@ -36,7 +36,7 @@ LOG = logging.getLogger("sg-client")
 # ── Server Configuration ──────────────────────────────────────────────────────
 
 # Primary API endpoint. rivvak.app is the public-facing brand domain, but the
-# license API is served from this Cloud Run URL (per AGENTS.md, this is the live
+# license API is served from this Cloud Run URL (per docs/AGENTS.md, this is the live
 # deployment). Override with the SG_SERVER_URL env var if the API moves behind
 # rivvak.app. Do NOT hardcode https://rivvak.app here unless that host is
 # confirmed to route to this API — doing so would break activation/verify.

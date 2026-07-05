@@ -115,6 +115,7 @@ NAV_HOVER   = "#111E31"
 # ── Legacy-compatible aliases kept so preserved logic keeps working ────────────
 ACCENT2      = ACCENT
 RED          = "#F23F43"
+RED_HOVER    = "#DC2626"
 YELLOW       = ACCENT
 MUTED        = TEXT_DIM
 MUTED2       = TEXT_DIM
@@ -146,6 +147,7 @@ LOGO_PATH_ALT  = _APP_DIR / "icon.png"
 LOGO_PATH_LEG  = _APP_DIR / "rc_logo_64.png"
 DISCORD_SVG    = ASSETS_DIR / "discord.svg"
 YOUTUBE_SVG    = ASSETS_DIR / "youtube.svg"
+WARNING_SVG    = ASSETS_DIR / "warning.svg"
 DISCORD_PNG    = _APP_DIR / "discord_icon_24.png"  # legacy PNG fallback
 YOUTUBE_PNG    = _APP_DIR / "youtube_icon_24.png"  # legacy PNG fallback
 
@@ -421,7 +423,7 @@ class DownloadWorker(QThread):
         self.token = token
 
     def run(self):
-        import urllib.request, ssl
+        import urllib.request, urllib.error, ssl, socket
         headers = {
             "User-Agent":        "SteamGuardLoader/2.0",
             "X-Loader-Identity": LOADER_IDENTITY_TOKEN,
@@ -447,9 +449,27 @@ class DownloadWorker(QThread):
                         if total > 0:
                             self.progress.emit(int(downloaded / total * 100))
             self.done.emit(str(self.dest))
-        except Exception as e:
-            self.error.emit(f"Download failed: {str(e)[:120]}")
-            self.done.emit("")
+        except urllib.error.HTTPError as e:
+            # Emit a machine-readable category; the UI maps it to a message.
+            if e.code == 404:
+                self.error.emit("http_404")
+            elif e.code == 401:
+                self.error.emit("http_401")
+            elif e.code == 403:
+                self.error.emit("http_403")
+            else:
+                self.error.emit("generic")
+        except socket.timeout:
+            self.error.emit("timeout")
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError)):
+                self.error.emit("timeout")
+            else:
+                self.error.emit("connection")
+        except TimeoutError:
+            self.error.emit("timeout")
+        except Exception:
+            self.error.emit("generic")
 
 
 class Worker(QThread):
@@ -967,7 +987,7 @@ class ProductCard(QFrame):
 
     def __init__(self, title, glyph, grad_top, grad_bottom, action_text,
                  action_enabled=True, activated_date=None, on_action=None,
-                 tagline="", status_text="", parent=None):
+                 tagline="", status_text="", blue_glow=False, parent=None):
         super().__init__(parent)
         self._title = title
         self._glyph = glyph
@@ -1001,16 +1021,25 @@ class ProductCard(QFrame):
         name_row.setSpacing(8)
         name_row.setContentsMargins(0, 0, 0, 0)
         icon = IconWidget(glyph, TEXT, 20, box=24)
+        if blue_glow:
+            # Consistent blue brand glow (slightly softer than the RC login logo).
+            glow = QGraphicsDropShadowEffect(icon)
+            glow.setBlurRadius(20)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(66, 150, 250, 120))
+            icon.setGraphicsEffect(glow)
         name_row.addWidget(icon, alignment=Qt.AlignVCenter)
         name_lbl = QLabel(title)
+        _name_color = TEXT_DIM if blue_glow else TEXT
         name_lbl.setStyleSheet(
-            f"color:{TEXT}; font-size:12pt; font-weight:700; background:transparent;")
+            f"color:{_name_color}; font-size:12pt; font-weight:700; background:transparent;")
         name_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         name_lbl.setTextInteractionFlags(Qt.NoTextInteraction)
+        name_lbl.setWordWrap(True)
+        name_lbl.setMinimumHeight(44)   # room for a wrapped second line
         name_lbl.setToolTip(title)
         self._name_lbl = name_lbl
         name_row.addWidget(name_lbl, 1)
-        name_row.addStretch(1)
         bl.addLayout(name_row)
 
         if tagline:
@@ -1080,7 +1109,8 @@ class ProductCard(QFrame):
         super().leaveEvent(event)
 
     def _apply_elide(self):
-        for attr, full in (("_name_lbl", self._title), ("_tag_lbl", self._tagline)):
+        # The title now word-wraps instead of eliding; only the tagline elides.
+        for attr, full in (("_tag_lbl", self._tagline),):
             lbl = getattr(self, attr, None)
             if lbl is not None:
                 metrics = QFontMetrics(lbl.font())
@@ -1453,6 +1483,9 @@ class Dashboard(QWidget):
         self._referral_ensured = False
         self._tier_lbl = None
         self._sg_card_date = None
+        self._dl_attempts = 0
+        self._dl_error_banner = None
+        self._dl_error_lbl = None
         self._build()
         self._load_overview()
 
@@ -1527,6 +1560,9 @@ class Dashboard(QWidget):
         head_row.addWidget(pill, alignment=Qt.AlignVCenter)
         lay.addLayout(head_row)
 
+        # Dedicated download-error banner (hidden until a download fails 3x).
+        lay.addWidget(self._build_dl_error_banner())
+
         grid = QGridLayout()
         grid.setHorizontalSpacing(20)
         grid.setVerticalSpacing(20)
@@ -1556,9 +1592,10 @@ class Dashboard(QWidget):
         # Card 3 — Coming Soon (dark grey)
         self._soon_card = ProductCard(
             "Coming Soon", "lock",
-            grad_top="#1a1a20", grad_bottom="#0d0d12",
+            grad_top="#17223A", grad_bottom="#0C1018",
             action_text="Coming Soon", action_enabled=False,
             tagline="More tools are being prepared", status_text="Locked",
+            blue_glow=True,
         )
         grid.addWidget(self._soon_card, 0, 2)
 
@@ -1623,8 +1660,60 @@ class Dashboard(QWidget):
             return
         self._start_download()
 
-    def _start_download(self):
+    def _build_dl_error_banner(self):
+        """Dedicated failure banner, separate from the tier pill. Hidden by default."""
+        banner = QFrame()
+        banner.setObjectName("DlErrorBanner")
+        banner.setAttribute(Qt.WA_StyledBackground, True)
+        banner.setStyleSheet(
+            "QFrame#DlErrorBanner { background-color:%s; "
+            "border:1px solid %s; border-left:3px solid #EF4444; }" % (BG_CHILD, BORDER))
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(10, 10, 10, 10)
+        row.setSpacing(10)
+
+        icon = QLabel()
+        pm = _load_icon(WARNING_SVG).pixmap(24, 24)
+        if pm.isNull():
+            icon.setText("⚠")
+            icon.setStyleSheet("color:#EF4444; font-size:14pt; background:transparent;")
+        else:
+            icon.setPixmap(pm)
+            icon.setFixedSize(24, 24)
+        icon.setStyleSheet(icon.styleSheet() + "background:transparent;")
+        row.addWidget(icon, 0, Qt.AlignVCenter)
+
+        self._dl_error_lbl = QLabel("")
+        self._dl_error_lbl.setWordWrap(True)
+        self._dl_error_lbl.setAlignment(Qt.AlignCenter)
+        self._dl_error_lbl.setStyleSheet(
+            "color:#EF4444; font-size:9.5pt; font-weight:600; background:transparent;")
+        row.addWidget(self._dl_error_lbl, 1, Qt.AlignVCenter)
+
+        retry_btn = QPushButton("Retry")
+        retry_btn.setObjectName("Ghost")
+        retry_btn.setCursor(Qt.PointingHandCursor)
+        retry_btn.setFixedHeight(28)
+        retry_btn.clicked.connect(self._on_dl_retry_clicked)
+        row.addWidget(retry_btn, 0, Qt.AlignVCenter)
+
+        banner.hide()
+        self._dl_error_banner = banner
+        return banner
+
+    def _on_dl_retry_clicked(self):
+        """Manual retry from the banner: reset the attempt counter and restart."""
+        self._dl_attempts = 0
+        if self._dl_error_banner is not None:
+            self._dl_error_banner.hide()
+        self._start_download()
+
+    def _start_download(self, retry: bool = False):
         """Download SteamGuard.exe from the server with a progress indicator."""
+        if not retry:
+            self._dl_attempts = 0
+            if self._dl_error_banner is not None:
+                self._dl_error_banner.hide()
         self._sg_card.set_action_label("Downloading...")
         token = self._token or ""
         dest  = get_local_tool_path("SteamGuard.exe")
@@ -1639,15 +1728,36 @@ class Dashboard(QWidget):
         self._sg_card.set_action_label(f"Downloading {pct}%")
 
     def _on_dl_done(self, path: str):
+        # Only fires on success now (the worker no longer emits done("") on error).
+        if not path:
+            return
+        self._dl_attempts = 0
+        if self._dl_error_banner is not None:
+            self._dl_error_banner.hide()
         self._sg_card.reset_action("Launch", ACCENT)
-        if path:
-            self._launch_exe(path)
-        else:
-            self._time_lbl.setText("Download failed — check connection")
+        self._launch_exe(path)
 
-    def _on_dl_error(self, msg: str):
+    def _on_dl_error(self, category: str):
+        # Silent auto-retry (up to 3 attempts) before showing any error UI.
+        if self._dl_attempts < 3:
+            self._dl_attempts += 1
+            self._sg_card.set_action_label("Retrying...")
+            QTimer.singleShot(1500, lambda: self._start_download(retry=True))
+            return
+        # All retries exhausted — surface a specific message in the banner.
+        messages = {
+            "http_404":   "Download unavailable — the file was moved or removed.",
+            "http_401":   "Access denied — your license may need renewal.",
+            "http_403":   "Access denied — your license may need renewal.",
+            "timeout":    "Server took too long to respond.",
+            "connection": "Can't reach the download server — check your internet.",
+        }
+        msg = messages.get(category, "Download failed after 3 attempts. Try again in a moment.")
         self._sg_card.reset_action("Launch", ACCENT)
-        self._time_lbl.setText(f"{msg[:60]}")
+        if self._dl_error_lbl is not None:
+            self._dl_error_lbl.setText(msg)
+        if self._dl_error_banner is not None:
+            self._dl_error_banner.show()
 
     def _launch_exe(self, exe):
         """Launch SteamGuard.exe and start monitoring the process."""

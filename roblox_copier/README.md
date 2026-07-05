@@ -31,7 +31,7 @@ The Studio script posts animation IDs to `127.0.0.1:6969`, polls until the copy 
 From the repository root:
 
 ```bash
-python build_roblox_copier.py
+python scripts/build_roblox_copier.py
 ```
 
 The build writes `dist/roblox_copier.exe`.

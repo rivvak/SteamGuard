@@ -1,23 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-.venv/
-venv/
-env/
-
-# Build output
-dist/
-build/
-*.exe
-*.spec
-
-# Secrets — never commit these
+# Secrets
 .env
+*.env
 .env.*
+!.env.example
 *.key
 *.pem
 *.p12
+secrets/
+credentials.json
+service-account*.json
 
 # Local config with real values (cache, logs, saved session)
 auth/.session
@@ -28,10 +19,35 @@ run_output.log
 .devin/config.json
 .devin/config.local.json
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# PyInstaller / Nuitka
+*.spec
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+
 # IDE
 .vscode/
 .idea/
+*.swp
 
 # OS
-Thumbs.db
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
