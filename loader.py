@@ -136,6 +136,28 @@ APP_VERSION = "v2.0"
 DISCORD_INVITE = "https://discord.gg/RTHM8YhpE"
 BRAND_SITE     = "https://rivvak.app"
 
+# ── Brand assets (loaded directly from disk — no base64, no PIL) ──────────────
+_APP_DIR       = Path(__file__).resolve().parent
+ASSETS_DIR     = _APP_DIR / "assets"
+LOGO_PATH      = _APP_DIR / "rc_logo_64.png"
+DISCORD_SVG    = ASSETS_DIR / "discord.svg"
+YOUTUBE_SVG    = ASSETS_DIR / "youtube.svg"
+DISCORD_PNG    = _APP_DIR / "discord_icon_24.png"  # legacy PNG fallback
+YOUTUBE_PNG    = _APP_DIR / "youtube_icon_24.png"  # legacy PNG fallback
+
+
+def _load_icon(*candidates):
+    """Return the first QIcon that loads a non-null pixmap, else a null QIcon."""
+    for path in candidates:
+        try:
+            if path and Path(path).exists():
+                icon = QIcon(str(path))
+                if not icon.isNull():
+                    return icon
+        except Exception:
+            continue
+    return QIcon()
+
 # Default license/API server. The auth API is served under rivvak.app; override
 # via the SG_SERVER_URL env var.
 DEFAULT_SERVER_URL = os.environ.get("SG_SERVER_URL", "https://rivvak.app")
@@ -1138,17 +1160,37 @@ class LoginScreen(QWidget):
         card.setAttribute(Qt.WA_StyledBackground, True)
 
         c = QVBoxLayout(card)
-        c.setContentsMargins(40, 32, 40, 32)
+        c.setContentsMargins(40, 28, 40, 32)
         c.setSpacing(0)
 
-        # Title
+        # Brand row: RC logo (top-left) + title text next to it
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(10)
+
+        logo = QLabel()
+        logo.setFixedSize(32, 32)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet("background:transparent;")
+        if LOGO_PATH.exists():
+            pm = QPixmap(str(LOGO_PATH))
+            if not pm.isNull():
+                logo.setPixmap(pm.scaled(
+                    32, 32,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                ))
+        brand_row.addWidget(logo, 0, Qt.AlignVCenter)
+
         title = QLabel("RIVVAK COMMUNITY")
         title.setObjectName("Title")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         title.setStyleSheet(
-            f"color:{TEXT}; font-size:14pt; font-weight:700; background:transparent;")
-        c.addWidget(title)
-        c.addSpacing(4)
+            f"color:{TEXT}; font-size:14pt; font-weight:700; background:transparent; letter-spacing:1px;")
+        brand_row.addWidget(title, 1, Qt.AlignVCenter)
+
+        c.addLayout(brand_row)
+        c.addSpacing(6)
 
         # Subtitle
         sub = QLabel("Login to access your tools")
@@ -1196,20 +1238,27 @@ class LoginScreen(QWidget):
         c.addWidget(self._login_btn)
         c.addSpacing(16)
 
-        # Social buttons row (Discord | YouTube) — Ghost style
+        # Social buttons row (Discord | YouTube) — Ghost style with brand icons
         social = QHBoxLayout()
         social.setSpacing(10)
         social.setContentsMargins(0, 0, 0, 0)
-        discord_btn = QPushButton("Discord")
+
+        discord_btn = QPushButton("  Discord")
         discord_btn.setObjectName("Ghost")
         discord_btn.setCursor(Qt.PointingHandCursor)
         discord_btn.setFixedHeight(34)
+        discord_btn.setIcon(_load_icon(DISCORD_SVG, DISCORD_PNG))
+        discord_btn.setIconSize(QSize(18, 18))
         discord_btn.clicked.connect(lambda: webbrowser.open(DISCORD_INVITE))
-        youtube_btn = QPushButton("YouTube")
+
+        youtube_btn = QPushButton("  YouTube")
         youtube_btn.setObjectName("Ghost")
         youtube_btn.setCursor(Qt.PointingHandCursor)
         youtube_btn.setFixedHeight(34)
+        youtube_btn.setIcon(_load_icon(YOUTUBE_SVG, YOUTUBE_PNG))
+        youtube_btn.setIconSize(QSize(18, 18))
         youtube_btn.clicked.connect(lambda: webbrowser.open(BRAND_SITE))
+
         social.addWidget(discord_btn, 1)
         social.addWidget(youtube_btn, 1)
         c.addLayout(social)
@@ -1240,8 +1289,8 @@ class LoginScreen(QWidget):
         b.setCursor(Qt.PointingHandCursor)
         b.setFlat(True)
         b.setStyleSheet(
-            f"QPushButton {{ background:transparent; color:{ACCENT};"
-            " border:none; min-height:0; padding:0; font-size:9pt; }}"
+            "QPushButton { background:transparent; color:" + ACCENT + ";"
+            " border:none; min-height:0; padding:0; font-size:9pt; }"
             " QPushButton:hover { color:#60A5FA; }")
         b.clicked.connect(slot)
         return b
