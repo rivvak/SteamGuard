@@ -51,7 +51,7 @@ except ImportError:  # pragma: no cover - non-Windows dev
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFrame, QStackedWidget, QTextEdit, QButtonGroup,
-    QSizePolicy, QGraphicsOpacityEffect, QMessageBox,
+    QSizePolicy, QGraphicsOpacityEffect, QGraphicsDropShadowEffect, QMessageBox,
 )
 from PySide6.QtCore import (
     Qt, QTimer, QObject, Signal, QThread, QPropertyAnimation,
@@ -77,16 +77,27 @@ CURRENT_VERSION = "1.4.0"
 # DESIGN SYSTEM — dark gaming palette
 # ─────────────────────────────────────────────────────────────────────────────
 
-C_BG        = "#0B0F1A"   # deep navy-black background
-C_SURFACE   = "#131929"
-C_CARD      = "#1A2238"
-C_ACCENT    = "#7C5CFC"   # purple
-C_ACCENT2   = "#5B8AF0"   # blue
-C_SUCCESS   = "#22D3A5"   # teal green
-C_WARNING   = "#F59E0B"   # amber
-C_ERROR     = "#EF4444"   # red
-C_TEXT      = "#F1F5F9"   # primary text
-C_TEXT_DIM  = "#94A3B8"   # secondary text
+# Backgrounds
+C_BG        = "#0B0D10"      # match loader base
+C_SURFACE   = "#0F1114"      # match loader card surface
+C_CARD      = "#12161C"      # slightly lighter than surface for depth
+C_BORDER    = "#1F2937"      # subtle borders
+
+# Accent (ImGui blue — match loader exactly)
+C_ACCENT       = "#3B82F6"   # primary blue
+C_ACCENT_HOVER = "#60A5FA"   # lighter for hover
+C_ACCENT_GLOW  = QColor(66, 150, 250, 180)  # same glow as loader RC logo
+
+# Semantic
+C_SUCCESS   = "#22C55E"      # green ON state
+C_WARNING   = "#F59E0B"      # amber
+C_ERROR     = "#EF4444"      # red OFF state
+C_ERROR_HOVER = "#DC2626"
+
+# Text
+C_TEXT      = "#F8FAFC"      # primary text (match loader TEXT)
+C_TEXT_DIM  = "#94A3B8"      # muted secondary
+C_TEXT_MUTED = "#64748B"     # labels
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App data paths
@@ -910,11 +921,11 @@ class NetworkMonitor:
 
 MAIN_STYLE = """
 QMainWindow, QWidget#central {
-    background-color: #0B0F1A;
+    background-color: #0B0D10;
 }
 QWidget#sidebar {
-    background-color: #0A0D17;
-    border-right: 1px solid rgba(255,255,255,0.06);
+    background-color: #0A0C10;
+    border-right: 1px solid rgba(255,255,255,0.05);
 }
 QPushButton#nav-btn {
     background: transparent;
@@ -922,39 +933,43 @@ QPushButton#nav-btn {
     color: #64748B;
     font-size: 20px;
     padding: 12px;
-    border-radius: 8px;
+    border-radius: 4px;
 }
-QPushButton#nav-btn:hover { color: #F1F5F9; background: rgba(255,255,255,0.05); }
-QPushButton#nav-btn:checked { color: #7C5CFC; background: rgba(124,92,252,0.12); }
+QPushButton#nav-btn:hover { color: #F8FAFC; background: rgba(255,255,255,0.05); }
+QPushButton#nav-btn:checked {
+    color: #3B82F6; background: rgba(59,130,246,0.12);
+    border-left: 2px solid #3B82F6;
+}
 QFrame#card {
-    background: #1A2238;
-    border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.06);
+    background: #12161C;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.05);
 }
-QFrame#card:hover { border-color: rgba(124,92,252,0.3); }
-QLabel#card-value { color: #F1F5F9; font-size: 28px; font-weight: 700; }
+QFrame#card:hover { border-color: rgba(59,130,246,0.3); }
+QLabel#card-value { color: #F8FAFC; font-size: 28px; font-weight: 700; }
 QLabel#card-label { color: #64748B; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
 QPushButton#btn-primary {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #7C5CFC,stop:1 #5B8AF0);
-    color: white; border: none; border-radius: 8px;
+    background: #3B82F6;
+    color: white; border: none; border-radius: 4px;
     font-size: 13px; font-weight: 700; padding: 12px 24px;
 }
-QPushButton#btn-primary:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #8B6EFF,stop:1 #6B9AF8); }
-QPushButton#btn-primary:pressed { background: #6B4EE8; }
+QPushButton#btn-primary:hover { background: #60A5FA; }
+QPushButton#btn-primary:pressed { background: #2563EB; }
 QPushButton#btn-danger {
     background: transparent; color: #EF4444;
-    border: 1px solid #EF4444; border-radius: 8px;
+    border: 1px solid #EF4444; border-radius: 4px;
     font-size: 13px; font-weight: 700; padding: 12px 24px;
 }
 QPushButton#btn-danger:hover { background: rgba(239,68,68,0.1); }
 QTextEdit#log {
-    background: #0D1117; color: #94A3B8;
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 8px; font-family: 'Consolas', monospace; font-size: 12px;
+    background: #0A0C10; color: #94A3B8;
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 6px; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 12px;
     padding: 8px;
 }
-QScrollBar:vertical { background: #0D1117; width: 6px; border-radius: 3px; }
-QScrollBar::handle:vertical { background: #2D3748; border-radius: 3px; }
+QScrollBar:vertical { background: #0A0C10; width: 6px; border-radius: 3px; }
+QScrollBar::handle:vertical { background: #1F2937; border-radius: 3px; min-height: 20px; }
+QScrollBar::handle:vertical:hover { background: #3B82F6; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
@@ -978,30 +993,49 @@ class UiBridge(QObject):
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TitleBar(QWidget):
-    """Frameless custom 40px title bar (drag to move, minimize, close)."""
+    """Frameless custom 44px title bar (drag to move, minimize, close)."""
 
     def __init__(self, parent, icon_path=None):
         super().__init__(parent)
         self._win = parent
         self._drag_pos = None
-        self.setFixedHeight(40)
-        self.setStyleSheet("background-color: #0B0F1A;")
+        self.setFixedHeight(44)
+        self.setStyleSheet(f"background-color: {C_BG};")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 0, 6, 0)
-        lay.setSpacing(8)
+        lay.setContentsMargins(12, 0, 6, 0)
+        lay.setSpacing(10)
 
+        # RC logo with blue glow — matches the loader's login card treatment.
         logo = QLabel()
-        if icon_path and os.path.exists(icon_path):
-            pm = QPixmap(icon_path).scaled(22, 22, Qt.KeepAspectRatio,
-                                           Qt.SmoothTransformation)
-            logo.setPixmap(pm)
-        else:
+        here = Path(__file__).parent
+        candidates = [here / "icon_256.png", here / "icon.png", here / "rc_logo_64.png"]
+        if icon_path:
+            candidates.insert(0, Path(icon_path))
+        loaded = False
+        for cand in candidates:
+            if cand and os.path.exists(str(cand)):
+                src = QPixmap(str(cand))
+                if not src.isNull():
+                    # 2x supersample then downsample for crisp edges on hi-dpi.
+                    pm = src.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    pm.setDevicePixelRatio(2.0)
+                    logo.setPixmap(pm)
+                    logo.setFixedSize(40, 40)
+                    loaded = True
+                    break
+        if not loaded:
             logo.setText("RC")
             logo.setStyleSheet(f"color: {C_ACCENT}; font-weight: 700; font-size: 13px;")
+        glow = QGraphicsDropShadowEffect(logo)
+        glow.setBlurRadius(22)
+        glow.setOffset(0, 0)
+        glow.setColor(C_ACCENT_GLOW)
+        logo.setGraphicsEffect(glow)
         lay.addWidget(logo)
 
-        title = QLabel("SteamGuard — Rivvak Community")
-        title.setStyleSheet(f"color: {C_TEXT}; font-size: 12px; font-weight: 600;")
+        title = QLabel("SteamGuard")
+        title.setStyleSheet(
+            f"color: {C_TEXT}; font-size: 13px; font-weight: 600; letter-spacing: 1px;")
         lay.addStretch(1)
         lay.addWidget(title)
         lay.addStretch(1)
@@ -1012,11 +1046,11 @@ class TitleBar(QWidget):
             b.setFixedSize(28, 24)
             b.setCursor(Qt.PointingHandCursor)
         btn_min.setStyleSheet(
-            "QPushButton{background:transparent;color:#94A3B8;border:none;font-size:14px;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.08);border-radius:6px;color:#F1F5F9;}")
+            "QPushButton{background:transparent;color:#94A3B8;border:none;border-radius:4px;font-size:14px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.08);color:#F8FAFC;}")
         btn_close.setStyleSheet(
-            "QPushButton{background:transparent;color:#94A3B8;border:none;font-size:13px;}"
-            "QPushButton:hover{background:#EF4444;border-radius:6px;color:white;}")
+            "QPushButton{background:transparent;color:#94A3B8;border:none;border-radius:4px;font-size:13px;}"
+            "QPushButton:hover{background:rgba(239,68,68,0.15);color:#EF4444;}")
         btn_min.clicked.connect(self._win.showMinimized)
         btn_close.clicked.connect(self._win.close)
         lay.addWidget(btn_min)
@@ -1063,19 +1097,28 @@ class StatCard(QFrame):
 
 
 class ProtectionCard(StatCard):
-    """Protection ON/OFF card with a colored glow border."""
+    """Protection ON/OFF card with a semantic tinted border + subtle glow."""
+
+    def _apply_glow(self, qcolor):
+        glow = QGraphicsDropShadowEffect(self)
+        glow.setBlurRadius(24)
+        glow.setOffset(0, 0)
+        glow.setColor(qcolor)
+        self.setGraphicsEffect(glow)
 
     def set_protected(self, protected: bool):
         if protected:
             self.set_value("ON", C_SUCCESS)
             self.setStyleSheet(
-                "QFrame#card{background:#1A2238;border-radius:12px;"
-                "border:1px solid rgba(34,211,165,0.55);}")
+                "QFrame#card{background:#12161C;border-radius:6px;"
+                "border:1px solid rgba(34,197,94,0.4);}")
+            self._apply_glow(QColor(34, 197, 94, 70))  # subtle green inner glow
         else:
             self.set_value("OFF", C_ERROR)
             self.setStyleSheet(
-                "QFrame#card{background:#1A2238;border-radius:12px;"
-                "border:1px solid rgba(239,68,68,0.45);}")
+                "QFrame#card{background:#12161C;border-radius:6px;"
+                "border:1px solid rgba(239,68,68,0.4);}")
+            self._apply_glow(QColor(239, 68, 68, 70))  # subtle red inner glow
 
 
 class TimeRingCard(StatCard):
@@ -1123,7 +1166,7 @@ class TimeRingCard(StatCard):
         y = 14
         rect = QRectF(x, y, d, d)
         # track
-        pen = QPen(QColor("#2A3350"), 4)
+        pen = QPen(QColor(255, 255, 255, 15), 4)  # rgba(255,255,255,0.06)
         p.setPen(pen)
         p.drawArc(rect, 0, 360 * 16)
         # progress
@@ -1163,17 +1206,19 @@ class StatusBanner(QFrame):
     def set_protected(self, protected: bool):
         if protected:
             self.label.setText("🛡️ PROTECTED — SteamGuard is blocking Steam CM servers")
+            self.label.setStyleSheet(
+                f"color: {C_SUCCESS}; font-size: 14px; font-weight: 700; background: transparent;")
             self.setStyleSheet(
-                "QFrame{border-radius:10px;background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                "stop:0 rgba(34,211,165,0.30),stop:1 rgba(34,211,165,0.12));"
-                "border:1px solid rgba(34,211,165,0.6);}")
+                "QFrame{border-radius:6px;background:rgba(34,197,94,0.15);"
+                "border:1px solid rgba(34,197,94,0.4);}")
             self._anim.start()
         else:
             self.label.setText("⚠️ UNPROTECTED — Click Start Protection to activate")
+            self.label.setStyleSheet(
+                f"color: {C_ERROR}; font-size: 14px; font-weight: 700; background: transparent;")
             self.setStyleSheet(
-                "QFrame{border-radius:10px;background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                "stop:0 rgba(239,68,68,0.28),stop:1 rgba(239,68,68,0.10));"
-                "border:1px solid rgba(239,68,68,0.5);}")
+                "QFrame{border-radius:6px;background:rgba(239,68,68,0.15);"
+                "border:1px solid rgba(239,68,68,0.4);}")
             self._anim.start()
 
 
@@ -1382,7 +1427,7 @@ class SteamGuardWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        icon_path = str(Path(__file__).parent / "icon.png")
+        icon_path = str(Path(__file__).parent / "icon_256.png")
         self._title_bar = TitleBar(self, icon_path)
         outer.addWidget(self._title_bar)
         if os.path.exists(icon_path):
@@ -1487,15 +1532,16 @@ class SteamGuardWindow(QMainWindow):
 
         header = QHBoxLayout()
         title = QLabel("Event Log")
-        title.setStyleSheet(f"color: {C_TEXT}; font-size: 16px; font-weight: 700;")
+        title.setStyleSheet(
+            f"color: {C_TEXT}; font-size: 16px; font-weight: 700; letter-spacing: 1px;")
         header.addWidget(title)
         header.addStretch(1)
         clear_btn = QPushButton("Clear Log")
         clear_btn.setCursor(Qt.PointingHandCursor)
         clear_btn.setStyleSheet(
-            "QPushButton{background:#1A2238;color:#94A3B8;border:1px solid rgba(255,255,255,0.08);"
-            "border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;}"
-            "QPushButton:hover{color:#F1F5F9;border-color:rgba(124,92,252,0.4);}")
+            "QPushButton{background:transparent;color:#94A3B8;border:1px solid rgba(255,255,255,0.1);"
+            "border-radius:4px;padding:6px 14px;font-size:12px;font-weight:600;}"
+            "QPushButton:hover{color:#F8FAFC;border-color:rgba(59,130,246,0.5);}")
         clear_btn.clicked.connect(lambda: self._log_view.clear())
         header.addWidget(clear_btn)
         lay.addLayout(header)
@@ -1513,31 +1559,39 @@ class SteamGuardWindow(QMainWindow):
         lay.setSpacing(14)
 
         title = QLabel("Settings")
-        title.setStyleSheet(f"color: {C_TEXT}; font-size: 16px; font-weight: 700;")
+        title.setStyleSheet(
+            f"color: {C_TEXT}; font-size: 16px; font-weight: 700; letter-spacing: 1px;")
         lay.addWidget(title)
 
         card = QFrame()
         card.setObjectName("card")
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(20, 18, 20, 18)
-        cl.setSpacing(14)
+        cl.setContentsMargins(20, 8, 20, 8)
+        cl.setSpacing(0)
 
-        def row(label_text):
-            r = QHBoxLayout()
-            lbl = QLabel(label_text)
-            lbl.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 12px; font-weight: 600;")
+        def row(label_text, divider=True):
+            row_frame = QFrame()
+            row_frame.setStyleSheet(
+                "QFrame{background:transparent;" +
+                ("border-bottom:1px solid rgba(255,255,255,0.04);" if divider else "") + "}")
+            r = QHBoxLayout(row_frame)
+            r.setContentsMargins(0, 12, 0, 12)
+            lbl = QLabel(label_text.upper())
+            lbl.setStyleSheet(
+                f"color: {C_TEXT_MUTED}; font-size: 11px; font-weight: 600; "
+                "letter-spacing: 1px; border: none;")
             lbl.setFixedWidth(150)
             val = QLabel("—")
-            val.setStyleSheet(f"color: {C_TEXT}; font-size: 13px;")
+            val.setStyleSheet(f"color: {C_TEXT}; font-size: 13px; border: none;")
             val.setTextInteractionFlags(Qt.TextSelectableByMouse)
             r.addWidget(lbl)
             r.addWidget(val, 1)
-            cl.addLayout(r)
+            cl.addWidget(row_frame)
             return val
 
         self._set_discord_val = row("Discord User ID")
         self._set_key_val = row("License Key")
-        self._set_time_val = row("Time Remaining")
+        self._set_time_val = row("Time Remaining", divider=False)
         lay.addWidget(card)
 
         btn_row = QHBoxLayout()
