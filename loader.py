@@ -49,6 +49,52 @@ from PyQt5.QtWidgets import (
 # ══════════════════════════════════════════════════════════════════════════════
 #  EXACT Figma colour palette (source-of-truth hex values)
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _apply_acrylic(hwnd):
+    """Apply Windows Acrylic (frosted glass) backdrop to a window handle.
+    Works on Windows 10 1903+ and Windows 11. Silent no-op on failure."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        # Try Win11 Mica/Acrylic first (DwmSetWindowAttribute DWMWA_SYSTEMBACKDROP_TYPE=3)
+        DWMWA_SYSTEMBACKDROP_TYPE = 38
+        DWMSBT_TRANSIENTWINDOW = 3  # Acrylic
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                ctypes.byref(ctypes.c_int(DWMSBT_TRANSIENTWINDOW)),
+                ctypes.sizeof(ctypes.c_int)
+            )
+            return
+        except Exception:
+            pass
+
+        # Fallback: Win10 SetWindowCompositionAttribute (acrylic brush)
+        class _ACCENT(ctypes.Structure):
+            _fields_ = [
+                ("AccentState",   ctypes.c_int),
+                ("AccentFlags",   ctypes.c_int),
+                ("GradientColor", ctypes.c_uint),
+                ("AnimationId",   ctypes.c_int),
+            ]
+        class _WCA_DATA(ctypes.Structure):
+            _fields_ = [("Attribute", ctypes.c_int),
+                        ("pData",     ctypes.c_void_p),
+                        ("cbData",    ctypes.c_ulong)]
+        accent = _ACCENT(AccentState=4,  # ACCENT_ENABLE_ACRYLICBLURBEHIND
+                         AccentFlags=2,
+                         GradientColor=0x99141820,  # #141820 @ 60% = dark tinted acrylic
+                         AnimationId=0)
+        data = _WCA_DATA(Attribute=19,  # WCA_ACCENT_POLICY
+                         pData=ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p),
+                         cbData=ctypes.sizeof(accent))
+        ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data))
+    except Exception:
+        pass  # Not Windows or API unavailable
+
+
+
 BG              = "#0F1014"   # app/window background ("Splash Background")
 SIDEBAR_FILL    = "#14151C"   # sidebar panel (blur simulated with solid)
 SIDEBAR_DIVIDER = "#1A1C25"   # 1px vertical divider on the sidebar's right edge
@@ -1894,7 +1940,8 @@ class LoaderWindow(QWidget):
         self.setWindowTitle("Rivvak Community")
         self.setMinimumSize(1100, 670)
         self.resize(1100, 670)
-        self.setStyleSheet(f"background:{BG};")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet(f"background:rgba(15,16,20,245);")  # near-opaque allows acrylic to tint through
 
         try:
             ico = Path(__file__).parent / "icon.ico"
@@ -2000,10 +2047,17 @@ def main():
         pass
 
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")  # Required for QPushButton to respect background-color
     app.setApplicationName("Rivvak Community")
     app.setStyleSheet(STYLESHEET)
     win = LoaderWindow()
     win.show()
+    # Apply Windows Acrylic/Mica for real frosted glass effect
+    try:
+        hwnd = int(win.winId())
+        _apply_acrylic(hwnd)
+    except Exception:
+        pass
 
     # Brief loading state, then reveal the login screen + attempt auto-login.
     def _reveal():
