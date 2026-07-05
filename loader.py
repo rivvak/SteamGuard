@@ -1173,17 +1173,27 @@ class ProductCard(QFrame):
         _draw_icon(p, self._glyph, plate.center().x(), plate.center().y(), ACCENT if self._hover else TEXT, 26)
         p.restore()
 
-        # Large, subtle, clipped stylized tool name over the gradient (Bug 2 fix)
+        # Large, subtle stylized tool name over the gradient.
+        # Auto-shrink the font so multi-word titles ("Roblox Copier",
+        # "Coming Soon") never clip mid-word at any card width.
         p.save()
-        p.setClipRect(art_rect)          # clip to art area
+        p.setClipRect(art_rect)
+        text_rect = QRect(14, 14, self.width() - 28, img_h - 28)
         font = QFont("Consolas", 1)
-        font.setPixelSize(42)            # was 70
         font.setWeight(QFont.DemiBold)
+        # Start at 42px and step down until the full title fits horizontally.
+        for size_px in (42, 38, 34, 30, 26, 22, 18):
+            font.setPixelSize(size_px)
+            fm = QFontMetrics(font)
+            if fm.horizontalAdvance(self._title) <= text_rect.width():
+                break
         p.setFont(font)
-        p.setOpacity(0.12)               # more subtle
+        p.setOpacity(0.12)
         p.setPen(QColor(255, 255, 255))
-        p.drawText(QRect(14, 14, self.width() - 28, img_h - 28),
-                   Qt.AlignBottom | Qt.AlignLeft, self._title)
+        # TextDontClip so any leftover overhang still renders instead of ellipsizing.
+        p.drawText(text_rect,
+                   Qt.AlignBottom | Qt.AlignLeft | Qt.TextDontClip,
+                   self._title)
         p.restore()
 
         # Hairline under the art area
