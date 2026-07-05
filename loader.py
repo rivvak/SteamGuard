@@ -784,18 +784,55 @@ class Avatar(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class LogoSlot(QWidget):
-    """Top brand slot: 72px square, RC hexagon shield inside (no radius)."""
+    """Top brand slot: 72x56 outer footprint, real RC logo PNG centered inside.
+
+    Loads the highest-res brand asset available (icon_256.png, falling back
+    to icon.png then rc_logo_64.png) into a child QLabel and applies the same
+    soft blue glow used on the login card (see commit 5767535) so the logo
+    reads clearly against the dark sidebar instead of the old QPainter-drawn
+    hexagon placeholder.
+    """
+
+    LOGO_PX = 40
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(72, 56)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        _draw_icon(p, "logo", 36, 28, TEXT, 30)
-        p.end()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        logo = QLabel(self)
+        logo.setFixedSize(self.LOGO_PX, self.LOGO_PX)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet("background:transparent;")
+
+        for logo_src in (LOGO_PATH, LOGO_PATH_ALT, LOGO_PATH_LEG):
+            if logo_src.exists():
+                pm = QPixmap(str(logo_src))
+                if not pm.isNull():
+                    # Render at 2x then downscale for crisper edges.
+                    logo.setPixmap(pm.scaled(
+                        self.LOGO_PX * 2, self.LOGO_PX * 2,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    ).scaled(
+                        self.LOGO_PX, self.LOGO_PX,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    ))
+                    break
+
+        # Soft glow so the logo separates from the dark sidebar background.
+        glow = QGraphicsDropShadowEffect(logo)
+        glow.setBlurRadius(22)
+        glow.setOffset(0, 0)
+        glow.setColor(QColor(66, 150, 250, 180))  # ImGui accent blue @ 70% alpha
+        logo.setGraphicsEffect(glow)
+
+        lay.addWidget(logo, 0, Qt.AlignHCenter | Qt.AlignVCenter)
 
 
 class SideIconButton(QPushButton):

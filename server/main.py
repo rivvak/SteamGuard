@@ -131,6 +131,7 @@ EVENTS_COL      = "events"         # security audit log
 YT_TOKENS_COL   = "yt_tokens"      # doc id = discord_user_id
 REFERRAL_CODES_COL  = "referral_codes"   # doc id = code
 REFERRALS_COL       = "referrals"        # doc id = auto
+INVITE_TO_REFERRAL_COL = "invite_to_referral"  # doc id = discord_invite_code, reverse index
 REWARDS_COL         = "rewards"          # doc id = discord_user_id
 REWARD_LOG_COL      = "reward_log"       # doc id = auto (audit trail)
 LEADERBOARD_COL     = "leaderboard"      # doc id = "weekly"
@@ -479,7 +480,17 @@ class ReferralCreateRequest(BaseModel):
 class ReferralUseRequest(BaseModel):
     code:                 str
     referred_discord_id:  str
-    referred_license_key: str
+    referred_license_key: Optional[str] = None
+
+class ReferralLinkInviteRequest(BaseModel):
+    code:                 str   # referral code
+    discord_invite_code:  str   # the short suffix, e.g. "AbC123" from discord.gg/AbC123
+    admin_key:            str
+
+class ReferralTrackJoinRequest(BaseModel):
+    discord_invite_code:  str
+    referred_discord_id:  str
+    admin_key:            str
 
 class BadgeGrantRequest(BaseModel):
     discord_user_id: str
@@ -1615,7 +1626,16 @@ async def referral_use(req: ReferralUseRequest):
     if referrer_discord_id == req.referred_discord_id:
         raise HTTPException(status_code=400, detail="Cannot refer yourself")
 
-    referred_key_hash = _key_hash(req.referred_license_key)
+    # referred_license_key is optional — when the referred user hasn't
+    # activated a license yet (e.g. attribution came from a raw Discord
+    # invite join), we still record the referral but leave the key hash
+    # unset and mark it pending until they activate later.
+    if req.referred_license_key:
+        referred_key_hash = _key_hash(req.referred_license_key)
+        status = "pending"
+    else:
+        referred_key_hash = None
+        status = "pending_activation"
     valid_after = utcnow() + timedelta(days=7)
 
     referral_id = secrets.token_hex(16)
@@ -1628,7 +1648,7 @@ async def referral_use(req: ReferralUseRequest):
             "referred_key_hash":   referred_key_hash,
             "created_at":          utcnow(),
             "valid_after":         valid_after,
-            "status":              "pending",
+            "status":              status,
         })
         # Increment uses_count on the code doc
         db.collection(REFERRAL_CODES_COL).document(req.code).update({
@@ -1642,10 +1662,107 @@ async def referral_use(req: ReferralUseRequest):
         "code":                req.code,
         "referrer_discord_id": referrer_discord_id,
         "referred_discord_id": req.referred_discord_id,
+        "status":              status,
     })
     # Auto-grant +3h to the referrer (not if they're an owner)
     if referrer_discord_id:
         _grant_reward(referrer_discord_id, "invite_friend")
+    return {"ok": True, "referral_id": referral_id}
+
+# ── /referral/link-invite ────────────────────────────────────────────────────
+
+@app.post("/referral/link-invite")
+async def referral_link_invite(req: ReferralLinkInviteRequest):
+    """Associate a Discord invite code with a user's referral code.
+
+    Called by the bot right after it mints a per-user invite in /refer, so
+    that a later on_member_join can resolve which referral code a new
+    member's invite maps back to.
+    """
+    _require_admin(req.admin_key)
+
+    code_ref = db.collection(REFERRAL_CODES_COL).document(req.code)
+    code_doc = code_ref.get()
+    if not code_doc.exists:
+        raise HTTPException(status_code=404, detail="Referral code not found")
+
+    code_data = code_doc.to_dict() or {}
+    owner_discord_id = code_data.get("owner_discord_id", "")
+
+    try:
+        code_ref.update({"discord_invite_code": req.discord_invite_code})
+        db.collection(INVITE_TO_REFERRAL_COL).document(req.discord_invite_code).set({
+            "referral_code":    req.code,
+            "owner_discord_id": owner_discord_id,
+            "linked_at":        utcnow(),
+        })
+    except Exception as e:
+        LOG.warning(f"Referral link-invite write failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to link invite")
+
+    _log_event("referral", "referral_invite_linked", {
+        "code":                req.code,
+        "discord_invite_code": req.discord_invite_code,
+        "owner_discord_id":    owner_discord_id,
+    })
+    return {"ok": True, "code": req.code, "discord_invite_code": req.discord_invite_code}
+
+# ── /referral/track-join ─────────────────────────────────────────────────────
+
+@app.post("/referral/track-join")
+async def referral_track_join(req: ReferralTrackJoinRequest):
+    """Record a new Discord member join attributed to a tracked invite.
+
+    Looks up the reverse index built by /referral/link-invite to find which
+    referral code (and referrer) the invite belongs to, then writes a
+    pending_activation referral doc — the real fix for referral counts that
+    always read 0 because Discord strips ?ref= query params from invite URLs.
+    """
+    _require_admin(req.admin_key)
+
+    try:
+        link_doc = db.collection(INVITE_TO_REFERRAL_COL).document(req.discord_invite_code).get()
+    except Exception as e:
+        LOG.warning(f"Referral track-join lookup failed: {e}")
+        raise HTTPException(status_code=500, detail="Server error")
+
+    if not link_doc.exists:
+        return {"ok": False, "reason": "invite_not_linked"}
+
+    link_data = link_doc.to_dict() or {}
+    referral_code       = link_data.get("referral_code", "")
+    referrer_discord_id = link_data.get("owner_discord_id", "")
+
+    if referrer_discord_id == req.referred_discord_id:
+        return {"ok": False, "reason": "self_referral"}
+
+    valid_after = utcnow() + timedelta(days=7)
+    referral_id = secrets.token_hex(16)
+    try:
+        db.collection(REFERRALS_COL).document(referral_id).set({
+            "referral_id":         referral_id,
+            "code":                referral_code,
+            "referrer_discord_id": referrer_discord_id,
+            "referred_discord_id": req.referred_discord_id,
+            "referred_key_hash":   None,
+            "created_at":          utcnow(),
+            "valid_after":         valid_after,
+            "status":              "pending_activation",
+            "discord_invite_code": req.discord_invite_code,
+        })
+        db.collection(REFERRAL_CODES_COL).document(referral_code).update({
+            "uses_count": firestore.Increment(1),
+        })
+    except Exception as e:
+        LOG.warning(f"Referral track-join write failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record referral")
+
+    _log_event("referral", "referral_join_tracked", {
+        "code":                referral_code,
+        "discord_invite_code": req.discord_invite_code,
+        "referrer_discord_id": referrer_discord_id,
+        "referred_discord_id": req.referred_discord_id,
+    })
     return {"ok": True, "referral_id": referral_id}
 
 # ── /referral/stats/{discord_user_id} ────────────────────────────────────────
@@ -2201,9 +2318,14 @@ async def me_create_referral(user=Depends(_get_current_user)):
     if existing:
         data = existing[0].to_dict() or {}
         code = data.get("code", existing[0].id)
+        discord_invite_code = data.get("discord_invite_code")
+        # Prefer the real, per-user Discord invite (attributable via
+        # on_member_join) over the legacy ?ref= link, which Discord strips.
+        referral_link = (f"https://discord.gg/{discord_invite_code}"
+                          if discord_invite_code else f"https://discord.gg/RTHM8YhpE?ref={code}")
         return {
             "code": code,
-            "referral_link": f"https://discord.gg/RTHM8YhpE?ref={code}",
+            "referral_link": referral_link,
             "valid_referrals": data.get("valid_referrals", 0),
             "pending_referrals": data.get("pending_referrals", 0),
             "earned_hours": data.get("valid_referrals", 0) * 3.0,

@@ -86,6 +86,15 @@ def _hmac_sign(data: str) -> str:
     """Mirror of the license server's _hmac_sign — HMAC-SHA256 over SECRET_KEY."""
     return hmac.new(SECRET_KEY.encode(), data.encode(), hashlib.sha256).hexdigest()
 DISCORD_INVITE     = os.environ.get("DISCORD_INVITE", "https://discord.gg/REPLACE")
+# Optional: channel to mint per-user referral invites in. Falls back to the
+# guild's system channel, then the first accessible text channel.
+REFERRAL_INVITE_CHANNEL_ID = int(os.environ.get("REFERRAL_INVITE_CHANNEL_ID", "0") or "0")
+
+# ── Referral invite-attribution cache ────────────────────────────────────────
+# Maps invite.code -> invite.uses for the configured guild. Rebuilt on
+# on_ready and kept in sync via on_invite_create / on_invite_delete /
+# on_member_join (diffing use counts to identify which invite was used).
+_invite_uses: dict[str, int] = {}
 
 ADMIN_USER_IDS: set[int] = set(
     int(x) for x in os.environ.get("ADMIN_USER_IDS", "").split(",") if x.strip()
@@ -317,6 +326,26 @@ async def on_ready():
     except Exception as e:
         LOG.error(f"Failed to sync slash commands: {e}")
 
+    # Build the invite-uses cache for referral attribution. Reading a
+    # guild's invites requires the Manage Server (Manage Guild) permission —
+    # if the bot lacks it, referral attribution via on_member_join simply
+    # won't work, so warn loudly instead of failing silently.
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if guild is not None:
+            invites = await guild.invites()
+            _invite_uses.clear()
+            _invite_uses.update({inv.code: (inv.uses or 0) for inv in invites})
+            LOG.info(f"Cached {len(_invite_uses)} invite(s) for referral attribution")
+        else:
+            LOG.warning(f"Could not find guild {GUILD_ID} to cache invites")
+    except discord.Forbidden:
+        LOG.warning(
+            "Missing 'Manage Server' permission — cannot list guild invites, "
+            "so referral attribution via Discord invites will not work.")
+    except Exception as e:
+        LOG.warning(f"Failed to build invite cache: {e}")
+
     # Fetch total license count for presence display
     total_keys = 0
     try:
@@ -357,6 +386,76 @@ async def on_ready():
             LOG.info(f"Startup hard-delete: {uid} → {deleted} key(s) erased. Reason: {reason}")
         except Exception as e:
             LOG.warning(f"Startup hard-delete failed for {uid}: {e}")
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """Diff invite use counts to identify which invite a new member used,
+    then report that to the license server so referral counts (which
+    previously always read 0, since Discord strips ?ref= URL params) can
+    actually be attributed to the referrer."""
+    if member.guild.id != GUILD_ID:
+        return
+
+    used_code = None
+    try:
+        invites = await member.guild.invites()
+        new_uses = {inv.code: (inv.uses or 0) for inv in invites}
+
+        for code, uses in new_uses.items():
+            prev = _invite_uses.get(code)
+            if prev is None:
+                # Wasn't in cache before — a brand-new invite with 1 use
+                # was almost certainly what this member used.
+                if uses == 1:
+                    used_code = code
+                    break
+            elif uses == prev + 1:
+                used_code = code
+                break
+
+        _invite_uses.clear()
+        _invite_uses.update(new_uses)
+    except discord.Forbidden:
+        LOG.warning(
+            "Missing 'Manage Server' permission — cannot diff invite uses "
+            f"for {member}'s join; referral attribution skipped.")
+    except Exception as e:
+        LOG.warning(f"Failed to diff invite uses on member join: {e}")
+
+    if used_code is None:
+        LOG.info(f"{member} joined — could not identify invite used")
+        return
+
+    LOG.info(f"{member} joined via invite code {used_code}")
+    try:
+        result = await _api("post", "/referral/track-join", json={
+            "discord_invite_code": used_code,
+            "referred_discord_id": str(member.id),
+            "admin_key":           ADMIN_KEY,
+        })
+        if result.get("ok"):
+            LOG.info(f"Referral tracked for {member} via invite {used_code}: {result}")
+        else:
+            LOG.info(f"Referral not tracked for {member} via invite {used_code}: {result}")
+    except Exception as e:
+        LOG.warning(f"/referral/track-join call failed for {member}: {e}")
+
+
+@bot.event
+async def on_invite_create(invite: discord.Invite):
+    """Keep the invite-uses cache in sync as invites are created."""
+    if invite.guild is None or invite.guild.id != GUILD_ID:
+        return
+    _invite_uses[invite.code] = invite.uses or 0
+
+
+@bot.event
+async def on_invite_delete(invite: discord.Invite):
+    """Keep the invite-uses cache in sync as invites are deleted."""
+    if invite.guild is None or invite.guild.id != GUILD_ID:
+        return
+    _invite_uses.pop(invite.code, None)
+
 
 @bot.event
 async def on_member_remove(member: discord.Member):
@@ -2152,13 +2251,51 @@ async def slash_refer(ctx: commands.Context):
         await ctx.send(f"❌ {data['error']}")
         return
 
-    referral_link   = data.get("referral_link", "N/A")
+    referral_code   = data.get("code", "")
+    join_link       = data.get("referral_link") or data.get("link", "N/A")
     valid_referrals = data.get("valid_referrals", 0)
+
+    # Mint a real per-user Discord invite so joins can be attributed via
+    # on_member_join (Discord strips ?ref= params, so the join URL alone
+    # never worked for attribution). Falls back gracefully if the bot
+    # lacks Create Instant Invite permission in the target channel.
+    discord_invite_url = None
+    if referral_code:
+        invite_channel = None
+        if REFERRAL_INVITE_CHANNEL_ID:
+            invite_channel = ctx.guild.get_channel(REFERRAL_INVITE_CHANNEL_ID)
+        if invite_channel is None:
+            invite_channel = ctx.guild.system_channel
+        if invite_channel is None and ctx.guild.text_channels:
+            invite_channel = ctx.guild.text_channels[0]
+
+        if invite_channel is not None:
+            try:
+                invite = await invite_channel.create_invite(
+                    max_age=0, max_uses=0, unique=True,
+                    reason=f"Referral link for {ctx.author}",
+                )
+                await _api("post", "/referral/link-invite", json={
+                    "code":                referral_code,
+                    "discord_invite_code": invite.code,
+                    "admin_key":           ADMIN_KEY,
+                })
+                discord_invite_url = invite.url
+            except discord.Forbidden:
+                LOG.warning(
+                    f"Missing 'Create Instant Invite' permission — could not "
+                    f"mint a tracked invite for {ctx.author}; falling back to join URL.")
+            except Exception as e:
+                LOG.warning(f"Failed to create/link referral invite for {ctx.author}: {e}")
+
+    primary_link = discord_invite_url or join_link
 
     embed = _embed_info(
         "🔗  Your SteamGuard Referral Link",
         footer="Only visible to you")
-    embed.add_field(name="Your Link",         value=referral_link,           inline=False)
+    embed.add_field(name="Your Link",         value=primary_link,             inline=False)
+    if discord_invite_url:
+        embed.add_field(name="Alt Link (join page)", value=join_link,         inline=False)
     embed.add_field(name="Valid Referrals",   value=str(valid_referrals),     inline=True)
     embed.add_field(name="​",                 value="​",                       inline=True)
     embed.add_field(
