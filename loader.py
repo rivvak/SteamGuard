@@ -571,19 +571,17 @@ def _draw_icon(p, kind, cx, cy, color, size=22):
         p.drawLine(int(cx), int(cy - r * 0.7), int(cx), int(cy + r * 0.7))
 
     elif kind == "logout":
-        # Door + arrow = logout icon (cleaner than "+" which confused users)
+        # Door + arrow icon — uses cx, cy, r passed into _draw_icon
         pen = QPen(QColor(255, 255, 255, 200), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         p.setPen(pen)
-        cx = int(rect.center().x())
-        cy = int(rect.center().y())
-        # Door outline (3 sides open on right)
-        p.drawLine(cx - 6, cy - 7, cx - 6, cy + 7)   # left edge
-        p.drawLine(cx - 6, cy - 7, cx + 1, cy - 7)   # top edge
-        p.drawLine(cx - 6, cy + 7, cx + 1, cy + 7)   # bottom edge
-        # Arrow pointing right (exit)
-        p.drawLine(cx - 1, cy, cx + 7, cy)            # shaft
-        p.drawLine(cx + 4, cy - 3, cx + 7, cy)        # arrow top
-        p.drawLine(cx + 4, cy + 3, cx + 7, cy)        # arrow bottom
+        # Door outline (3 sides, open on right)
+        p.drawLine(int(cx - r*0.6), int(cy - r*0.7), int(cx - r*0.6), int(cy + r*0.7))
+        p.drawLine(int(cx - r*0.6), int(cy - r*0.7), int(cx + r*0.1), int(cy - r*0.7))
+        p.drawLine(int(cx - r*0.6), int(cy + r*0.7), int(cx + r*0.1), int(cy + r*0.7))
+        # Arrow pointing right
+        p.drawLine(int(cx - r*0.1), int(cy), int(cx + r*0.7), int(cy))
+        p.drawLine(int(cx + r*0.4), int(cy - r*0.3), int(cx + r*0.7), int(cy))
+        p.drawLine(int(cx + r*0.4), int(cy + r*0.3), int(cx + r*0.7), int(cy))
 
     elif kind == "circle":
         p.setPen(pen)
