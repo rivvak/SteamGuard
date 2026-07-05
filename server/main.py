@@ -86,9 +86,41 @@ ADMIN_USER_IDS = {
 }
 
 # Web dashboard JWT signing config. JWT_SECRET should be set as an env var in
-# production so tokens survive restarts; falls back to an ephemeral secret.
+# production so tokens survive restarts; falls back to a disk-persisted secret
+# so single-instance dev restarts don't invalidate every logged-in user.
 import secrets as _secrets
-JWT_SECRET = os.environ.get("JWT_SECRET", _secrets.token_hex(32))
+
+def _load_or_create_jwt_secret() -> str:
+    env = os.environ.get("JWT_SECRET")
+    if env:
+        return env
+    # Fallback: persist a secret next to the code so restarts don't rotate it.
+    # In multi-instance/serverless deploys this file is per-instance, so PLEASE
+    # set JWT_SECRET as a real env var in production.
+    from pathlib import Path as _P
+    secret_path = _P(os.environ.get("JWT_SECRET_FILE",
+                                     str(_P.home() / ".steamguard_jwt_secret")))
+    try:
+        if secret_path.exists():
+            return secret_path.read_text().strip()
+        new_secret = _secrets.token_hex(32)
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        secret_path.write_text(new_secret)
+        secret_path.chmod(0o600)
+        print("WARNING: JWT_SECRET env var not set. Generated and persisted a new "
+              f"secret to {secret_path}. Set JWT_SECRET in production to avoid "
+              "per-instance token invalidation on multi-instance deploys.",
+              flush=True)
+        return new_secret
+    except Exception as e:
+        # Last resort: ephemeral. This is the original behavior — logs everyone out
+        # on restart, so at least make the failure loud.
+        print(f"WARNING: Could not persist JWT secret ({e}). Using ephemeral "
+              "secret — ALL sessions will be invalidated on this restart.",
+              flush=True)
+        return _secrets.token_hex(32)
+
+JWT_SECRET = _load_or_create_jwt_secret()
 JWT_ALGO   = "HS256"
 STATS_CHANNEL_ID      = os.environ.get("STATS_CHANNEL_ID", "")
 
