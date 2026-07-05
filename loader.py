@@ -139,7 +139,11 @@ BRAND_SITE     = "https://rivvak.app"
 # ── Brand assets (loaded directly from disk — no base64, no PIL) ──────────────
 _APP_DIR       = Path(__file__).resolve().parent
 ASSETS_DIR     = _APP_DIR / "assets"
-LOGO_PATH      = _APP_DIR / "rc_logo_64.png"
+# Prefer the high-res 256px master; scale down for crisp edges on a small QLabel.
+# rc_logo_64.png is kept as a last-ditch fallback for older bundles.
+LOGO_PATH      = _APP_DIR / "icon_256.png"
+LOGO_PATH_ALT  = _APP_DIR / "icon.png"
+LOGO_PATH_LEG  = _APP_DIR / "rc_logo_64.png"
 DISCORD_SVG    = ASSETS_DIR / "discord.svg"
 YOUTUBE_SVG    = ASSETS_DIR / "youtube.svg"
 DISCORD_PNG    = _APP_DIR / "discord_icon_24.png"  # legacy PNG fallback
@@ -1168,18 +1172,37 @@ class LoginScreen(QWidget):
         brand_row.setContentsMargins(0, 0, 0, 0)
         brand_row.setSpacing(10)
 
+        # RC logo — 48px with a soft blue-white glow so the white outline
+        # reads against the near-black card. Loads the highest-res source
+        # available and scales down with smooth transform for crisp edges.
+        LOGO_PX = 48
         logo = QLabel()
-        logo.setFixedSize(32, 32)
+        logo.setFixedSize(LOGO_PX, LOGO_PX)
         logo.setAlignment(Qt.AlignCenter)
         logo.setStyleSheet("background:transparent;")
-        if LOGO_PATH.exists():
-            pm = QPixmap(str(LOGO_PATH))
-            if not pm.isNull():
-                logo.setPixmap(pm.scaled(
-                    32, 32,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                ))
+        for logo_src in (LOGO_PATH, LOGO_PATH_ALT, LOGO_PATH_LEG):
+            if logo_src.exists():
+                pm = QPixmap(str(logo_src))
+                if not pm.isNull():
+                    # Render at 2x then downscale for crisper edges.
+                    logo.setPixmap(pm.scaled(
+                        LOGO_PX * 2, LOGO_PX * 2,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    ).scaled(
+                        LOGO_PX, LOGO_PX,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    ))
+                    break
+
+        # Soft glow so the outline logo separates from the dark card.
+        glow = QGraphicsDropShadowEffect(logo)
+        glow.setBlurRadius(22)
+        glow.setOffset(0, 0)
+        glow.setColor(QColor(66, 150, 250, 180))  # ImGui accent blue @ 70% alpha
+        logo.setGraphicsEffect(glow)
+
         brand_row.addWidget(logo, 0, Qt.AlignVCenter)
 
         title = QLabel("RIVVAK COMMUNITY")
