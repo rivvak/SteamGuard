@@ -72,6 +72,10 @@ jobs:
             --include-module=steam_features `
             --include-module=steamguard `
             --include-package=auth `
+            --include-data-files=icon.ico=icon.ico `
+            --include-data-files=icon.png=icon.png `
+            --include-data-files=icon_256.png=icon_256.png `
+            --include-data-files=rc_logo_64.png=rc_logo_64.png `
             --assume-yes-for-downloads `
             --output-filename=SteamGuard.exe `
             steamguard_qt.py
@@ -94,7 +98,30 @@ jobs:
       - name: Build Loader with Nuitka
         run: |
           pip install PyQt5
-          python -m nuitka --onefile --windows-console-mode=disable --windows-uac-admin --windows-icon-from-ico=icon.ico --enable-plugin=pyqt5 --include-package=PyQt5 --include-package=auth --include-data-dir=tools=tools --assume-yes-for-downloads --output-filename=Loader.exe loader.py
+          python -m nuitka `
+            --onefile `
+            --windows-console-mode=disable `
+            --windows-uac-admin `
+            --windows-icon-from-ico=icon.ico `
+            --enable-plugin=pyqt5 `
+            --include-package=PyQt5 `
+            --include-package=auth `
+            --include-data-dir=tools=tools `
+            --include-data-dir=assets=assets `
+            --include-data-files=icon.ico=icon.ico `
+            --include-data-files=icon.png=icon.png `
+            --include-data-files=icon_16.png=icon_16.png `
+            --include-data-files=icon_32.png=icon_32.png `
+            --include-data-files=icon_64.png=icon_64.png `
+            --include-data-files=icon_256.png=icon_256.png `
+            --include-data-files=rc_logo_64.png=rc_logo_64.png `
+            --include-data-files=discord_icon.png=discord_icon.png `
+            --include-data-files=discord_icon_24.png=discord_icon_24.png `
+            --include-data-files=youtube_icon.png=youtube_icon.png `
+            --include-data-files=youtube_icon_24.png=youtube_icon_24.png `
+            --assume-yes-for-downloads `
+            --output-filename=Loader.exe `
+            loader.py
 
       - name: Verify Build
         shell: pwsh

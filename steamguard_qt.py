@@ -2269,11 +2269,73 @@ class SteamGuardWindow(QMainWindow):
         debug_log(f"sync: {text}")
 
     def _on_remote_kill(self, reason):
+        """Server told us this license is dead. Stop protection, show a
+        themed modal explaining the specific reason in plain English, and
+        exit the app when the user acknowledges. There is no useful action
+        they can take from inside SteamGuard once revoked.
+        """
         if self._protected:
             self._stop_protection()
         self._append_log(f"Remote kill received: {reason}", "error")
-        QMessageBox.critical(self, "SteamGuard — Access Revoked",
-                             f"Your license has been deactivated:\n\n{reason}\n\nContact support in Discord.")
+
+        # Map raw backend reason codes to user-friendly messages.
+        pretty = {
+            "license_suspended":  "Your license was suspended by an admin. This is usually because of a Terms of Service violation.",
+            "license_revoked":    "Your license has been permanently revoked.",
+            "license_expired":    "Your license has expired. Renew or earn more time at rivvak.app to continue.",
+            "license_not_found":  "We could not find a license attached to this device. Reinstall the loader and log in again.",
+            "hwid_mismatch":      "This license is bound to a different device. Contact support in Discord to reset your device binding.",
+            "key_disabled":       "Your license key has been disabled.",
+            "time_exhausted":     "Your protection time has run out. Earn more time via the rewards system.",
+        }.get(str(reason).strip().lower(), None)
+        if pretty is None:
+            # Unknown reason — keep the raw code in a smaller line for support.
+            pretty = "Your license has been deactivated by the server."
+            code_line = f"\n\nReason code: {reason}"
+        else:
+            code_line = ""
+
+        # Custom-themed dialog that matches the app palette instead of the
+        # generic Windows red-X system messagebox.
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("SteamGuard — Access Revoked")
+        dlg.setIcon(QMessageBox.Critical)
+        dlg.setText("<b>Access to SteamGuard has been revoked.</b>")
+        dlg.setInformativeText(
+            pretty + code_line +
+            "\n\nSteamGuard will now close. Join Discord for support:"
+            "\nhttps://discord.gg/RTHM8YhpE"
+        )
+        dlg.setStandardButtons(QMessageBox.Ok)
+        dlg.button(QMessageBox.Ok).setText("Close SteamGuard")
+        dlg.setDefaultButton(QMessageBox.Ok)
+
+        # Reuse the loader's palette so the dialog blends with the app theme.
+        try:
+            dlg.setStyleSheet(
+                "QMessageBox { background-color: #0B0D10; color: #F8FAFC; }"
+                "QMessageBox QLabel { color: #F8FAFC; font-size: 11pt; }"
+                "QMessageBox QPushButton {"
+                " background-color: #EF4444; color: #FFFFFF;"
+                " border: 1px solid #DC2626; border-radius: 6px;"
+                " padding: 6px 18px; font-weight: 700; }"
+                "QMessageBox QPushButton:hover { background-color: #DC2626; }"
+            )
+        except Exception:
+            pass
+
+        dlg.exec()
+
+        # Suspended / revoked / bound to another device — there is no path
+        # forward from inside this app. Quit gracefully so the user can
+        # reopen the loader (or contact support).
+        try:
+            from PySide6.QtWidgets import QApplication
+            QApplication.instance().quit()
+        except Exception:
+            pass
+        # Fallback in case Qt event loop is stuck.
+        os._exit(0)
 
     def _on_time_expired(self):
         if self._protected:
