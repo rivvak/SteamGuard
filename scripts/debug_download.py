@@ -138,6 +138,47 @@ def main() -> int:
             print(f"  [ERROR] {type(e).__name__}: {e}")
             traceback.print_exc()
 
+    _print_section("Test 6: Verify on-disk write matches Content-Length (AV check)")
+    # Writes to the SAME path the loader uses and confirms the file landed
+    # fully. A PermissionError/OSError here, or a size mismatch, means
+    # antivirus/Defender is quarantining or truncating the .exe — which the
+    # loader now reports as the 'disk_write' category.
+    try:
+        DEST.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(URL, headers=headers1)
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            print(f"  Content-Length: {total}")
+            downloaded = 0
+            try:
+                with open(DEST, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+            except (PermissionError, OSError) as e:
+                print(f"  ❌ DISK WRITE FAILED — {type(e).__name__}: {e}")
+                print("     >>> Antivirus is almost certainly blocking the .exe write.")
+                raise SystemExit(0)
+        size = DEST.stat().st_size if DEST.exists() else -1
+        ok = (total == 0 or size == total)
+        print(f"  Downloaded {downloaded} bytes; on-disk size {size}")
+        print(f"  Size matches Content-Length: {ok}")
+        if not ok:
+            print("     >>> SIZE MISMATCH — partial/blocked write (antivirus?).")
+        else:
+            print("     ✅ Write verified — disk path is healthy.")
+    except SystemExit:
+        pass
+    except urllib.error.HTTPError as e:
+        print(f"  ❌ HTTPError {e.code} {e.reason}")
+    except Exception as e:
+        print(f"  ❌ {type(e).__name__}: {e}")
+        traceback.print_exc()
+
     print("\nDone. Paste the ENTIRE output above back to the assistant.")
     return 0
 

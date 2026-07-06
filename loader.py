@@ -189,6 +189,25 @@ def get_local_tool_path(tool_name: str = "SteamGuard.exe") -> Path:
     return TOOLS_DIR / tool_name
 
 
+# ── Loader debug log ──────────────────────────────────────────────────────────
+# Plain-text log of every download attempt/outcome, written next to the tools
+# dir so users can share it when a download fails. Best-effort: never raises.
+_LOADER_LOG_FILE = Path(
+    os.environ.get("APPDATA", os.path.expanduser("~"))) / "SteamGuard" / "loader_debug.log"
+
+
+def loader_log(msg: str) -> None:
+    """Append a timestamped line to loader_debug.log. Swallows all errors."""
+    try:
+        import datetime
+        _LOADER_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(_LOADER_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {msg}\n")
+    except Exception:
+        pass
+
+
 # Loader identity token — sent with every /get-tool request so the server
 # knows the request came from the official loader, not a browser.
 # The server validates this header before allowing the download.
@@ -410,6 +429,45 @@ def _http_json(url: str, method: str = "GET", payload: dict = None,
 
 # ── Download worker with progress ─────────────────────────────────────────────
 
+class _StripAuthRedirectHandler:
+    """Factory for a redirect handler that drops loader-only auth headers when
+    a redirect crosses to a different host.
+
+    /get-tool authenticates the loader (via X-Loader-Identity or a Bearer JWT)
+    and then 302-redirects to the external storage host that actually serves
+    the .exe. urllib forwards *all* request headers across that redirect, so the
+    storage backend receives the loader's Authorization/X-Loader-Identity — which
+    it does not understand and rejects with 401. Raw urllib with no auth header
+    succeeds, which is exactly why a logged-in loader failed where a manual test
+    did not. Stripping those headers on a cross-host redirect fixes it.
+    """
+
+    @staticmethod
+    def build():
+        import urllib.request
+        from urllib.parse import urlparse
+
+        class _Handler(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                new = super().redirect_request(req, fp, code, msg, headers, newurl)
+                if new is None:
+                    return None
+                try:
+                    old_host = urlparse(req.full_url).netloc
+                    new_host = urlparse(newurl).netloc
+                    if old_host != new_host:
+                        for h in ("Authorization", "X-Loader-Identity"):
+                            new.headers.pop(h, None)
+                            new.unredirected_hdrs.pop(h, None)
+                        loader_log(f"redirect {old_host} -> {new_host}: "
+                                   f"stripped loader auth headers")
+                except Exception as e:
+                    loader_log(f"redirect header strip failed: {e}")
+                return new
+
+        return _Handler()
+
+
 class DownloadWorker(QThread):
     """Downloads a file with progress reporting. Used to fetch SteamGuard.exe."""
     progress = pyqtSignal(int)       # 0-100
@@ -430,46 +488,94 @@ class DownloadWorker(QThread):
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        loader_log(f"DownloadWorker.run START url={self.url} dest={self.dest} "
+                   f"has_token={bool(self.token)}")
+
+        # Build an SSL context. Under PyInstaller/Nuitka the system trust store
+        # is sometimes unavailable, so fall back to certifi's CA bundle.
+        try:
+            ctx = ssl.create_default_context()
+        except Exception as e:
+            loader_log(f"ssl.create_default_context failed ({e}); trying certifi")
+            try:
+                import certifi
+                ctx = ssl.create_default_context(cafile=certifi.where())
+                loader_log("using certifi CA bundle")
+            except Exception as e2:
+                loader_log(f"certifi fallback failed: {e2}")
+                self.error.emit(f"connection|SSL context could not be created: {e2}")
+                return
+
         try:
             req = urllib.request.Request(self.url, headers=headers)
-            ctx = ssl.create_default_context()
             ensure_tools_dir()
-            with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+            # Custom opener strips loader auth headers on cross-host redirects
+            # so the storage backend the server redirects to doesn't 401 on the
+            # forwarded Bearer/identity header.
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=ctx),
+                _StripAuthRedirectHandler.build())
+            with opener.open(req, timeout=60) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
+                loader_log(f"HTTP {getattr(resp, 'status', '?')} Content-Length={total}")
                 downloaded = 0
                 chunk_size = 65536  # 64KB chunks
                 self.dest.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.dest, "wb") as f:
-                    while True:
-                        chunk = resp.read(chunk_size)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            self.progress.emit(int(downloaded / total * 100))
+                # Disk write is isolated so we can attribute AV/quarantine
+                # failures to a distinct category instead of the generic bucket.
+                try:
+                    with open(self.dest, "wb") as f:
+                        while True:
+                            chunk = resp.read(chunk_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                self.progress.emit(int(downloaded / total * 100))
+                except (PermissionError, OSError) as e:
+                    loader_log(f"DISK WRITE FAILED {type(e).__name__}: {e}")
+                    self.error.emit(f"disk_write|{type(e).__name__}: {e}")
+                    return
+
+            # Verify the file landed fully before declaring success. A partial
+            # write (AV truncating/quarantining) would otherwise launch a
+            # corrupt exe.
+            size = self.dest.stat().st_size if self.dest.exists() else -1
+            loader_log(f"write complete downloaded={downloaded} on_disk={size} total={total}")
+            if not self.dest.exists() or size <= 0 or (total > 0 and size != total):
+                self.error.emit(
+                    f"disk_write|file missing or size mismatch "
+                    f"(on_disk={size}, expected={total})")
+                return
+            loader_log("DownloadWorker.run SUCCESS")
             self.done.emit(str(self.dest))
         except urllib.error.HTTPError as e:
+            loader_log(f"HTTPError {e.code}: {e.reason}")
             # Emit a machine-readable category; the UI maps it to a message.
             if e.code == 404:
-                self.error.emit("http_404")
+                self.error.emit(f"http_404|HTTP 404: {e.reason}")
             elif e.code == 401:
-                self.error.emit("http_401")
+                self.error.emit(f"http_401|HTTP 401: {e.reason}")
             elif e.code == 403:
-                self.error.emit("http_403")
+                self.error.emit(f"http_403|HTTP 403: {e.reason}")
             else:
-                self.error.emit("generic")
+                self.error.emit(f"generic|HTTP {e.code}: {e.reason}")
         except socket.timeout:
-            self.error.emit("timeout")
+            loader_log("socket.timeout")
+            self.error.emit("timeout|socket.timeout")
         except urllib.error.URLError as e:
+            loader_log(f"URLError reason={e.reason!r}")
             if isinstance(getattr(e, "reason", None), (socket.timeout, TimeoutError)):
-                self.error.emit("timeout")
+                self.error.emit("timeout|URLError timeout")
             else:
-                self.error.emit("connection")
+                self.error.emit(f"connection|{e.reason}")
         except TimeoutError:
-            self.error.emit("timeout")
-        except Exception:
-            self.error.emit("generic")
+            loader_log("TimeoutError")
+            self.error.emit("timeout|TimeoutError")
+        except Exception as e:
+            loader_log(f"UNEXPECTED {type(e).__name__}: {e}")
+            self.error.emit(f"generic|{type(e).__name__}: {e}")
 
 
 class Worker(QThread):
@@ -1496,6 +1602,7 @@ class Dashboard(QWidget):
         self._dl_attempts = 0
         self._dl_error_banner = None
         self._dl_error_lbl = None
+        self._dl_last_detail = ""
         self._build()
         self._load_overview()
 
@@ -1651,8 +1758,16 @@ class Dashboard(QWidget):
     def _find_steamguard(self):
         """Look for SteamGuard.exe: local cache first, then same folder, then PATH."""
         cached = get_local_tool_path("SteamGuard.exe")
+        # Reject a truncated/quarantined cache (<1MB) so a corrupt file doesn't
+        # get launched — force a fresh download instead.
         if cached.exists():
-            return str(cached)
+            try:
+                if cached.stat().st_size >= 1_000_000:
+                    return str(cached)
+                loader_log(f"cached SteamGuard.exe too small "
+                           f"({cached.stat().st_size} bytes) — ignoring")
+            except OSError:
+                pass
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
         local = base / "SteamGuard.exe"
         if local.exists():
@@ -1727,6 +1842,8 @@ class Dashboard(QWidget):
         self._sg_card.set_action_label("Downloading...")
         token = self._token or ""
         dest  = get_local_tool_path("SteamGuard.exe")
+        loader_log(f"_start_download retry={retry} attempt={self._dl_attempts} "
+                   f"url={STEAMGUARD_DOWNLOAD_URL} dest={dest}")
         self._dl_worker = DownloadWorker(STEAMGUARD_DOWNLOAD_URL, dest, token, self)
         self._dl_worker.progress.connect(self._on_dl_progress)
         self._dl_worker.done.connect(self._on_dl_done)
@@ -1741,6 +1858,7 @@ class Dashboard(QWidget):
         # Only fires on success now (the worker no longer emits done("") on error).
         if not path:
             return
+        loader_log(f"_on_dl_done SUCCESS path={path}")
         self._dl_attempts = 0
         if self._dl_error_banner is not None:
             self._dl_error_banner.hide()
@@ -1748,6 +1866,12 @@ class Dashboard(QWidget):
         self._launch_exe(path)
 
     def _on_dl_error(self, category: str):
+        # The worker sends "category|detail"; split so the category drives the
+        # user-facing message while the detail feeds the log + tooltip.
+        cat, _, detail = category.partition("|")
+        loader_log(f"_on_dl_error attempt={self._dl_attempts} "
+                   f"category={cat} detail={detail}")
+        self._dl_last_detail = detail or cat
         # Silent auto-retry (up to 3 attempts) before showing any error UI.
         if self._dl_attempts < 3:
             self._dl_attempts += 1
@@ -1761,12 +1885,22 @@ class Dashboard(QWidget):
             "http_403":   "Access denied — your license may need renewal.",
             "timeout":    "Server took too long to respond.",
             "connection": "Can't reach the download server — check your internet.",
+            "disk_write": "Can't save the file — antivirus may be blocking it. "
+                          "Add the SteamGuard folder to exclusions.",
         }
-        msg = messages.get(category, "Download failed after 3 attempts. Try again in a moment.")
+        msg = messages.get(cat, "Download failed after 3 attempts. Try again in a moment.")
+        loader_log(f"_on_dl_error EXHAUSTED category={cat} msg={msg}")
         self._sg_card.reset_action("Launch", ACCENT)
         if self._dl_error_lbl is not None:
             self._dl_error_lbl.setText(msg)
         if self._dl_error_banner is not None:
+            # Hover tooltip exposes the exact exception + attempt count so a
+            # user can share precisely what failed without opening the log.
+            tip = (f"After {self._dl_attempts} attempt(s).\n"
+                   f"Category: {cat}\nDetail: {self._dl_last_detail}")
+            self._dl_error_banner.setToolTip(tip)
+            if self._dl_error_lbl is not None:
+                self._dl_error_lbl.setToolTip(tip)
             self._dl_error_banner.show()
 
     def _launch_exe(self, exe):
