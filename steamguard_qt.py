@@ -59,7 +59,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QBrush, QFont, QTextCursor, QTextCharFormat,
-    QIcon, QPixmap, QFontDatabase,
+    QIcon, QPixmap, QFontDatabase, QPainterPath,
 )
 
 # Pull in the steam_features helpers exactly like the original UI did. These
@@ -98,6 +98,12 @@ C_ERROR_HOVER = "#DC2626"
 C_TEXT      = "#F8FAFC"      # primary text (match loader TEXT)
 C_TEXT_DIM  = "#94A3B8"      # muted secondary
 C_TEXT_MUTED = "#64748B"     # labels
+
+# Glassmorphism system — matches loader.py commit 9865c7a
+GLASS_BG      = "rgba(15, 17, 20, 0.72)"
+GLASS_BORDER  = "rgba(255, 255, 255, 0.08)"
+GLASS_HILITE  = "rgba(255, 255, 255, 0.05)"
+BG_DEEP       = "#050708"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App data paths
@@ -924,52 +930,60 @@ QMainWindow, QWidget#central {
     background-color: #0B0D10;
 }
 QWidget#sidebar {
-    background-color: #0A0C10;
-    border-right: 1px solid rgba(255,255,255,0.05);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(10,12,15,0.90), stop:1 rgba(5,7,8,0.95));
+    border-right: 1px solid rgba(255,255,255,0.06);
 }
 QPushButton#nav-btn {
     background: transparent;
     border: none;
-    color: #64748B;
+    color: #94A3B8;
     font-size: 20px;
     padding: 12px;
-    border-radius: 4px;
+    border-radius: 8px;
 }
-QPushButton#nav-btn:hover { color: #F8FAFC; background: rgba(255,255,255,0.05); }
+QPushButton#nav-btn:hover { color: #F8FAFC; background: rgba(255,255,255,0.04); }
 QPushButton#nav-btn:checked {
-    color: #3B82F6; background: rgba(59,130,246,0.12);
+    color: #3B82F6; background: rgba(59,130,246,0.14);
     border-left: 2px solid #3B82F6;
 }
 QFrame#card {
-    background: #12161C;
-    border-radius: 6px;
-    border: 1px solid rgba(255,255,255,0.05);
+    background: rgba(15,17,20,0.72);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-top: 1px solid rgba(255,255,255,0.10);
 }
-QFrame#card:hover { border-color: rgba(59,130,246,0.3); }
-QLabel#card-value { color: #F8FAFC; font-size: 28px; font-weight: 700; }
+QFrame#card:hover { border-color: rgba(59,130,246,0.4); }
+QLabel#card-value { color: #F8FAFC; font-size: 24px; font-weight: 700; }
 QLabel#card-label { color: #64748B; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
 QPushButton#btn-primary {
-    background: #3B82F6;
-    color: white; border: none; border-radius: 4px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #4F8DF8, stop:1 #3475E8);
+    color: white; border: none; border-radius: 8px;
     font-size: 13px; font-weight: 700; padding: 12px 24px;
 }
-QPushButton#btn-primary:hover { background: #60A5FA; }
+QPushButton#btn-primary:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #6EA6FF, stop:1 #4F8DF8);
+}
 QPushButton#btn-primary:pressed { background: #2563EB; }
+QPushButton#btn-primary:disabled { background: #1E2A3D; color: #64748B; }
 QPushButton#btn-danger {
     background: transparent; color: #EF4444;
-    border: 1px solid #EF4444; border-radius: 4px;
+    border: 1px solid #EF4444; border-radius: 8px;
     font-size: 13px; font-weight: 700; padding: 12px 24px;
 }
-QPushButton#btn-danger:hover { background: rgba(239,68,68,0.1); }
+QPushButton#btn-danger:hover { background: rgba(239,68,68,0.10); border-color: #DC2626; }
+QPushButton#btn-danger:disabled { color: #4A2A2A; border-color: #3A2222; }
 QTextEdit#log {
     background: #0A0C10; color: #94A3B8;
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 6px; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 12px;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 12px;
     padding: 8px;
 }
-QScrollBar:vertical { background: #0A0C10; width: 6px; border-radius: 3px; }
-QScrollBar::handle:vertical { background: #1F2937; border-radius: 3px; min-height: 20px; }
-QScrollBar::handle:vertical:hover { background: #3B82F6; }
+QScrollBar:vertical { background: transparent; width: 5px; border-radius: 2px; }
+QScrollBar::handle:vertical { background: rgba(255,255,255,0.15); border-radius: 2px; min-height: 20px; }
+QScrollBar::handle:vertical:hover { background: rgba(59,130,246,0.50); }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
@@ -1071,7 +1085,7 @@ class TitleBar(QWidget):
 
 
 class StatCard(QFrame):
-    """A stat card with a small uppercase label and a large value."""
+    """A glass stat card with a small uppercase label and a large value."""
 
     def __init__(self, label_text, value_text="—"):
         super().__init__()
@@ -1088,36 +1102,56 @@ class StatCard(QFrame):
         lay.addWidget(self.value)
         lay.addStretch(1)
 
+        # Blue hover glow (widget-level), invisible at rest.
+        self._glow = QGraphicsDropShadowEffect(self)
+        self._glow.setBlurRadius(24)
+        self._glow.setOffset(0, 0)
+        self._glow.setColor(QColor(59, 130, 246, 0))
+        self.setGraphicsEffect(self._glow)
+
+    def enterEvent(self, event):
+        self._glow.setColor(QColor(59, 130, 246, 80))
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._glow.setColor(QColor(59, 130, 246, 0))
+        super().leaveEvent(event)
+
     def set_value(self, text, color=None):
         self.value.setText(text)
         if color:
-            self.value.setStyleSheet(f"color: {color}; font-size: 28px; font-weight: 700;")
+            self.value.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: 700;")
         else:
             self.value.setStyleSheet("")
 
 
 class ProtectionCard(StatCard):
-    """Protection ON/OFF card with a semantic tinted border + subtle glow."""
+    """Protection ON/OFF card with a semantic tinted border + persistent glow."""
 
     def _apply_glow(self, qcolor):
-        glow = QGraphicsDropShadowEffect(self)
-        glow.setBlurRadius(24)
-        glow.setOffset(0, 0)
-        glow.setColor(qcolor)
-        self.setGraphicsEffect(glow)
+        self._glow.setColor(qcolor)
+
+    # Keep the semantic (green/red) glow — don't clobber it on hover.
+    def enterEvent(self, event):
+        return
+
+    def leaveEvent(self, event):
+        return
 
     def set_protected(self, protected: bool):
         if protected:
             self.set_value("ON", C_SUCCESS)
             self.setStyleSheet(
-                "QFrame#card{background:#12161C;border-radius:6px;"
-                "border:1px solid rgba(34,197,94,0.4);}")
+                "QFrame#card{background:rgba(15,17,20,0.72);border-radius:12px;"
+                "border:1px solid rgba(34,197,94,0.4);"
+                "border-top:1px solid rgba(255,255,255,0.10);}")
             self._apply_glow(QColor(34, 197, 94, 70))  # subtle green inner glow
         else:
             self.set_value("OFF", C_ERROR)
             self.setStyleSheet(
-                "QFrame#card{background:#12161C;border-radius:6px;"
-                "border:1px solid rgba(239,68,68,0.4);}")
+                "QFrame#card{background:rgba(15,17,20,0.72);border-radius:12px;"
+                "border:1px solid rgba(239,68,68,0.4);"
+                "border-top:1px solid rgba(255,255,255,0.10);}")
             self._apply_glow(QColor(239, 68, 68, 70))  # subtle red inner glow
 
 
@@ -1178,48 +1212,161 @@ class TimeRingCard(StatCard):
         p.end()
 
 
-class StatusBanner(QFrame):
-    """Full-width pulsing banner showing protected/unprotected state."""
+class GlowButton(QPushButton):
+    """QPushButton that fades a soft colored glow in on hover."""
+
+    def __init__(self, text, glow_color=None):
+        super().__init__(text)
+        self._gc = glow_color or QColor(59, 130, 246, 150)
+        self._glow = QGraphicsDropShadowEffect(self)
+        self._glow.setBlurRadius(26)
+        self._glow.setOffset(0, 0)
+        self._glow.setColor(QColor(self._gc.red(), self._gc.green(), self._gc.blue(), 0))
+        self.setGraphicsEffect(self._glow)
+
+    def enterEvent(self, event):
+        if self.isEnabled():
+            self._glow.setColor(self._gc)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._glow.setColor(QColor(self._gc.red(), self._gc.green(), self._gc.blue(), 0))
+        super().leaveEvent(event)
+
+
+class SessionGraphCard(QFrame):
+    """Time-series graph of protection state over the last 24 hours."""
 
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(56)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(20, 0, 20, 0)
-        self.label = QLabel()
-        self.label.setStyleSheet("color: white; font-size: 14px; font-weight: 700;")
-        self.label.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.label)
+        self.setObjectName("card")
+        self.setMinimumHeight(180)
+        # Glass surface (matches the loader treatment via shared constants).
+        self.setStyleSheet(
+            f"QFrame#card{{background:{GLASS_BG};border-radius:12px;"
+            f"border:1px solid {GLASS_BORDER};"
+            f"border-top:1px solid rgba(255,255,255,0.10);}}")
+        self._range = "24h"          # or "7d"
+        self._data: list[tuple[float, bool]] = []  # (hours_ago, is_protected)
+        self._init_placeholder_data()
 
-        self._opacity = QGraphicsOpacityEffect(self)
-        self._opacity.setOpacity(1.0)
-        self.setGraphicsEffect(self._opacity)
-        self._anim = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._anim.setDuration(1400)
-        self._anim.setStartValue(1.0)
-        self._anim.setKeyValueAt(0.5, 0.55)
-        self._anim.setEndValue(1.0)
-        self._anim.setLoopCount(-1)
-        self._anim.setEasingCurve(QEasingCurve.InOutSine)
-        self.set_protected(False)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 12)
+        lay.setSpacing(6)
 
-    def set_protected(self, protected: bool):
-        if protected:
-            self.label.setText("🛡️ PROTECTED — SteamGuard is blocking Steam CM servers")
-            self.label.setStyleSheet(
-                f"color: {C_SUCCESS}; font-size: 14px; font-weight: 700; background: transparent;")
-            self.setStyleSheet(
-                "QFrame{border-radius:6px;background:rgba(34,197,94,0.15);"
-                "border:1px solid rgba(34,197,94,0.4);}")
-            self._anim.start()
-        else:
-            self.label.setText("⚠️ UNPROTECTED — Click Start Protection to activate")
-            self.label.setStyleSheet(
-                f"color: {C_ERROR}; font-size: 14px; font-weight: 700; background: transparent;")
-            self.setStyleSheet(
-                "QFrame{border-radius:6px;background:rgba(239,68,68,0.15);"
-                "border:1px solid rgba(239,68,68,0.4);}")
-            self._anim.start()
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self._title = QLabel("PROTECTED TIME — LAST 24H")
+        self._title.setObjectName("card-label")
+        head.addWidget(self._title)
+        head.addStretch(1)
+        self._chip_24h = QPushButton("24H")
+        self._chip_7d = QPushButton("7D")
+        for chip, rng in ((self._chip_24h, "24h"), (self._chip_7d, "7d")):
+            chip.setCheckable(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setFixedHeight(22)
+            chip.setStyleSheet(self._chip_css())
+            chip.clicked.connect(lambda _=False, r=rng: self._set_range(r))
+            head.addWidget(chip)
+        self._chip_24h.setChecked(True)
+        lay.addLayout(head)
+        lay.addStretch(1)  # chart is painted in the region below the header
+
+    @staticmethod
+    def _chip_css() -> str:
+        return (
+            "QPushButton{background:transparent;color:#64748B;"
+            "border:1px solid rgba(255,255,255,0.10);border-radius:11px;"
+            "padding:2px 12px;font-size:10px;font-weight:700;letter-spacing:1px;}"
+            "QPushButton:hover{color:#F8FAFC;border-color:rgba(59,130,246,0.5);}"
+            "QPushButton:checked{color:#3B82F6;background:rgba(59,130,246,0.14);"
+            "border-color:rgba(59,130,246,0.5);}")
+
+    def _init_placeholder_data(self):
+        """Placeholder: mostly-protected pattern with a few gaps.
+
+        # TODO: wire to real event log data from HeartbeatWorker
+        """
+        import random
+        random.seed(42)
+        self._data = []
+        for hour in range(24):
+            state = random.random() > 0.1  # 90% chance protected
+            self._data.append((24 - hour, state))
+
+    def _set_range(self, rng: str):
+        self._range = rng
+        self._chip_24h.setChecked(rng == "24h")
+        self._chip_7d.setChecked(rng == "7d")
+        # 7D is a stub for now — only the label changes.
+        self._title.setText("PROTECTED TIME — LAST 24H" if rng == "24h"
+                            else "PROTECTED TIME — LAST 7D")
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)  # QSS glass background + border
+        if not self._data:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        L, R = 20, self.width() - 20
+        T, B = 56, self.height() - 30
+        if R <= L or B <= T:
+            p.end()
+            return
+        plot_w = R - L
+        plot_h = B - T
+        n = len(self._data)
+        y_hi = T + plot_h * 0.18
+        y_lo = T + plot_h * 0.82
+
+        def x_at(i):
+            return L + plot_w * (i / (n - 1)) if n > 1 else L
+
+        # Grid lines every 4 hours + hour labels (drawn behind the series).
+        p.save()
+        grid_pen = QPen(QColor(255, 255, 255, 10), 1)
+        p.setPen(grid_pen)
+        label_font = QFont()
+        label_font.setPointSize(8)
+        for i in range(0, n, 4):
+            gx = x_at(i)
+            p.setPen(grid_pen)
+            p.drawLine(int(gx), T, int(gx), B)
+            p.setPen(QPen(QColor("#64748B")))
+            p.setFont(label_font)
+            hours_ago = int(self._data[i][0])
+            label = "now" if hours_ago <= 1 else f"-{hours_ago}h"
+            p.drawText(QRectF(gx - 20, B + 4, 40, 16), Qt.AlignCenter, label)
+        p.restore()
+
+        # Build the stepped series.
+        line = QPainterPath()
+        prev_y = None
+        for i, (_ha, st) in enumerate(self._data):
+            xi = x_at(i)
+            yi = y_hi if st else y_lo
+            if i == 0:
+                line.moveTo(xi, yi)
+            else:
+                line.lineTo(xi, prev_y)
+                line.lineTo(xi, yi)
+            prev_y = yi
+
+        # Area fill under the line.
+        area = QPainterPath(line)
+        area.lineTo(R, B)
+        area.lineTo(L, B)
+        area.closeSubpath()
+        p.fillPath(area, QBrush(QColor(59, 130, 246, 38)))  # rgba(59,130,246,0.15)
+
+        # Series line on top.
+        line_pen = QPen(QColor(C_ACCENT), 2)
+        line_pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(line_pen)
+        p.drawPath(line)
+        p.end()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1483,9 +1630,13 @@ class SteamGuardWindow(QMainWindow):
     def _build_status_page(self):
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setContentsMargins(24, 24, 24, 24)
         lay.setSpacing(16)
 
+        # ── Row 1: hero status card (state + game info + inline CTA) ────────────
+        lay.addWidget(self._build_hero())
+
+        # ── Row 2: stat cards grid (2x2) ────────────────────────────────────────
         grid = QGridLayout()
         grid.setSpacing(14)
         self._card_protection = ProtectionCard("Protection", "OFF")
@@ -1493,36 +1644,99 @@ class SteamGuardWindow(QMainWindow):
         self._card_time = TimeRingCard("Time Remaining")
         self._card_heals = StatCard("Heals Today", "0")
         for c in (self._card_protection, self._card_game, self._card_time, self._card_heals):
-            c.setMinimumHeight(96)
+            c.setMinimumHeight(80)
             c.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         grid.addWidget(self._card_protection, 0, 0)
         grid.addWidget(self._card_game, 0, 1)
         grid.addWidget(self._card_time, 1, 0)
         grid.addWidget(self._card_heals, 1, 1)
-        lay.addLayout(grid, 1)
+        lay.addLayout(grid)
 
-        self._banner = StatusBanner()
-        lay.addWidget(self._banner)
+        # ── Row 3: session graph (fills remaining space) ────────────────────────
+        self._graph = SessionGraphCard()
+        lay.addWidget(self._graph, 1)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
-        self._btn_start = QPushButton("START PROTECTION")
+        self._card_protection.set_protected(False)
+        self._update_hero(False)
+        return page
+
+    def _build_hero(self):
+        """Full-width hero status card: state indicator + game info + CTA."""
+        frame = QFrame()
+        frame.setObjectName("card")
+        frame.setFixedHeight(104)
+        self._hero_frame = frame
+        h = QHBoxLayout(frame)
+        h.setContentsMargins(24, 16, 20, 16)
+        h.setSpacing(18)
+
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+        self._hero_dot = QLabel()
+        self._hero_dot.setFixedSize(12, 12)
+        self._hero_status = QLabel("UNPROTECTED")
+        self._hero_status.setStyleSheet(
+            f"color:{C_ERROR};font-size:18pt;font-weight:700;"
+            "letter-spacing:1px;background:transparent;")
+        status_row.addWidget(self._hero_dot)
+        status_row.addWidget(self._hero_status)
+        status_row.addStretch(1)
+        left.addLayout(status_row)
+        self._hero_info = QLabel("Game: None detected  ·  Session: 0m")
+        self._hero_info.setStyleSheet(
+            f"color:{C_TEXT_DIM};font-size:11pt;background:transparent;")
+        left.addWidget(self._hero_info)
+        h.addLayout(left, 1)
+
+        self._btn_start = GlowButton("START PROTECTION")
         self._btn_start.setObjectName("btn-primary")
         self._btn_start.setCursor(Qt.PointingHandCursor)
-        self._btn_start.setMinimumHeight(44)
+        self._btn_start.setMinimumHeight(42)
         self._btn_start.clicked.connect(self._start_protection)
         self._btn_stop = QPushButton("STOP")
         self._btn_stop.setObjectName("btn-danger")
         self._btn_stop.setCursor(Qt.PointingHandCursor)
-        self._btn_stop.setMinimumHeight(44)
-        self._btn_stop.setFixedWidth(160)
+        self._btn_stop.setMinimumHeight(42)
+        self._btn_stop.setFixedWidth(120)
         self._btn_stop.clicked.connect(self._stop_protection)
-        btn_row.addWidget(self._btn_start, 1)
-        btn_row.addWidget(self._btn_stop)
-        lay.addLayout(btn_row)
+        h.addWidget(self._btn_start)
+        h.addWidget(self._btn_stop)
+        return frame
 
-        self._card_protection.set_protected(False)
-        return page
+    def _update_hero(self, protected: bool):
+        if protected:
+            self._hero_status.setText("PROTECTED")
+            self._hero_status.setStyleSheet(
+                f"color:{C_SUCCESS};font-size:18pt;font-weight:700;"
+                "letter-spacing:1px;background:transparent;")
+            self._hero_dot.setStyleSheet(f"background:{C_SUCCESS};border-radius:6px;")
+            self._hero_frame.setStyleSheet(
+                f"QFrame#card{{background:{GLASS_BG};border-radius:12px;"
+                f"border:1px solid rgba(34,197,94,0.45);"
+                "border-top:1px solid rgba(255,255,255,0.10);}")
+        else:
+            self._hero_status.setText("UNPROTECTED")
+            self._hero_status.setStyleSheet(
+                f"color:{C_ERROR};font-size:18pt;font-weight:700;"
+                "letter-spacing:1px;background:transparent;")
+            self._hero_dot.setStyleSheet(f"background:{C_ERROR};border-radius:6px;")
+            self._hero_frame.setStyleSheet(
+                f"QFrame#card{{background:{GLASS_BG};border-radius:12px;"
+                f"border:1px solid {GLASS_BORDER};"
+                "border-top:1px solid rgba(255,255,255,0.10);}")
+        self._update_hero_info()
+
+    def _update_hero_info(self):
+        game = self._running_game["name"] if self._running_game else "None detected"
+        if self._protection_start_time:
+            secs = (datetime.now() - self._protection_start_time).total_seconds()
+        else:
+            secs = 0
+        mins = int(secs // 60)
+        dur = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+        self._hero_info.setText(f"Game: {game}  ·  Session: {dur}")
 
     def _build_log_page(self):
         page = QWidget()
@@ -1795,6 +2009,7 @@ class SteamGuardWindow(QMainWindow):
             self._card_game.set_value(game["name"], C_ACCENT)
         else:
             self._card_game.set_value("None")
+        self._update_hero_info()
 
     def _auto_protect_if_still_running(self):
         if self._auto_heal and self._running_appid and not self._protected:
@@ -1935,7 +2150,7 @@ class SteamGuardWindow(QMainWindow):
         self._btn_start.setText("PROTECTED" if self._protected else "START PROTECTION")
         self._btn_stop.setEnabled(self._protected and not self._protection_busy)
         self._card_protection.set_protected(self._protected)
-        self._banner.set_protected(self._protected)
+        self._update_hero(self._protected)
 
     def _sync_fw_state(self, state):
         self._fw_state = state
