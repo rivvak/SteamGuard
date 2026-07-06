@@ -112,6 +112,12 @@ TITLE_BG    = "#080A0D"   # Sidebar/title bar
 # Hover wash for nav items
 NAV_HOVER   = "#111E31"
 
+# ── Glassmorphism additions ─────────────────────────────────────────────────
+GLASS_BG      = "rgba(15, 17, 20, 0.72)"      # translucent card fill
+GLASS_BORDER  = "rgba(255, 255, 255, 0.08)"   # subtle white top border for glass
+GLASS_HILITE  = "rgba(255, 255, 255, 0.05)"   # inner highlight
+BG_DEEP       = "#050708"                     # deeper base for radial gradient
+
 # ── Legacy-compatible aliases kept so preserved logic keeps working ────────────
 ACCENT2      = ACCENT
 RED          = "#F23F43"
@@ -148,6 +154,11 @@ LOGO_PATH_LEG  = _APP_DIR / "rc_logo_64.png"
 DISCORD_SVG    = ASSETS_DIR / "discord.svg"
 YOUTUBE_SVG    = ASSETS_DIR / "youtube.svg"
 WARNING_SVG    = ASSETS_DIR / "warning.svg"
+# Product-card cover art (600x360). Optional — ProductCard falls back to the
+# painted gradient art if any of these are missing.
+COVER_STEAMGUARD    = _APP_DIR / "assets/cover_steamguard.png"
+COVER_ROBLOX_COPIER = _APP_DIR / "assets/cover_roblox_copier.png"
+COVER_COMING_SOON   = _APP_DIR / "assets/cover_coming_soon.png"
 DISCORD_PNG    = _APP_DIR / "discord_icon_24.png"  # legacy PNG fallback
 YOUTUBE_PNG    = _APP_DIR / "youtube_icon_24.png"  # legacy PNG fallback
 
@@ -208,6 +219,116 @@ def loader_log(msg: str) -> None:
         pass
 
 
+# ── UAC elevation (Windows) ────────────────────────────────────────────────────
+# The SteamGuard exe embeds a UAC manifest (Nuitka --windows-uac-admin), so a
+# plain subprocess.Popen fails with the elevation-required OSError (740). We
+# launch it elevated via ShellExecuteExW "runas", which triggers the UAC prompt.
+
+class _ElevatedProcHandle:
+    """Duck-types the subset of subprocess.Popen the loader relies on (.poll()
+    and .communicate()) for a process started detached via ShellExecuteExW.
+
+    Wraps the returned hProcess handle; .poll() checks it with
+    WaitForSingleObject(0ms) — returns None while running, the exit code once
+    it exits. This lets the existing _check_processes timer keep working."""
+
+    def __init__(self, hprocess):
+        self._h = hprocess
+        self._rc = None
+
+    def poll(self):
+        if self._rc is not None:
+            return self._rc
+        if not self._h:
+            # No handle to wait on — assume still running so we don't falsely
+            # flip the card back to "Launch".
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            WAIT_OBJECT_0 = 0x0
+            res = ctypes.windll.kernel32.WaitForSingleObject(self._h, 0)
+            if res == WAIT_OBJECT_0:
+                code = wintypes.DWORD()
+                ctypes.windll.kernel32.GetExitCodeProcess(
+                    self._h, ctypes.byref(code))
+                self._rc = int(code.value)
+                try:
+                    ctypes.windll.kernel32.CloseHandle(self._h)
+                except Exception:
+                    pass
+                self._h = None
+                return self._rc
+        except Exception as e:
+            loader_log(f"_ElevatedProcHandle.poll error: {e}")
+        return None
+
+    def communicate(self, timeout=None):
+        # No pipes on a detached elevated process.
+        return (b"", b"")
+
+
+def _launch_elevated_windows(exe_path: str, args=None) -> bool:
+    """Launch an exe with UAC elevation via ShellExecuteExW runas verb.
+
+    Returns True if the ShellExecuteEx call succeeded (user accepted UAC),
+    False otherwise. Stores the process handle on the function for the caller
+    to wrap in _ElevatedProcHandle."""
+    _launch_elevated_windows.last_hprocess = None
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        SEE_MASK_NOCLOSEPROCESS = 0x00000040
+        SEE_MASK_NOASYNC        = 0x00000100
+
+        class SHELLEXECUTEINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize",       wintypes.DWORD),
+                ("fMask",        wintypes.ULONG),
+                ("hwnd",         wintypes.HWND),
+                ("lpVerb",       wintypes.LPCWSTR),
+                ("lpFile",       wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory",  wintypes.LPCWSTR),
+                ("nShow",        ctypes.c_int),
+                ("hInstApp",     wintypes.HINSTANCE),
+                ("lpIDList",     ctypes.c_void_p),
+                ("lpClass",      wintypes.LPCWSTR),
+                ("hkeyClass",    wintypes.HKEY),
+                ("dwHotKey",     wintypes.DWORD),
+                ("hIcon",        wintypes.HANDLE),
+                ("hProcess",     wintypes.HANDLE),
+            ]
+
+        params = " ".join(f'"{a}"' for a in (args or []))
+        sei = SHELLEXECUTEINFO()
+        sei.cbSize       = ctypes.sizeof(SHELLEXECUTEINFO)
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+        sei.lpVerb       = "runas"
+        sei.lpFile       = str(exe_path)
+        sei.lpParameters = params or None
+        sei.lpDirectory  = str(Path(exe_path).parent)
+        sei.nShow        = 1  # SW_SHOWNORMAL
+
+        ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
+        if not ok:
+            err = ctypes.GetLastError()
+            loader_log(f"ShellExecuteExW runas failed err={err}")
+            return False
+        loader_log(f"ShellExecuteExW runas launched hProcess={sei.hProcess}")
+        _launch_elevated_windows.last_hprocess = sei.hProcess
+        return True
+    except Exception as e:
+        loader_log(f"_launch_elevated_windows exception: {type(e).__name__}: {e}")
+        return False
+
+
+_launch_elevated_windows.last_hprocess = None
+
+
 # Loader identity token — sent with every /get-tool request so the server
 # knows the request came from the official loader, not a browser.
 # The server validates this header before allowing the download.
@@ -227,49 +348,67 @@ _XOR_KEY = b"RivvakSteamGuardLoader-v2-fallback-key-2026"
 #  QSS stylesheet (ImGui dark theme — verbatim spec)
 # ══════════════════════════════════════════════════════════════════════════════
 STYLESHEET = """
-* { border-radius: 0px; outline: 0; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 10pt; color: #F8FAFC; }
+* { outline: 0; font-family: 'Consolas', 'JetBrains Mono', monospace; font-size: 10pt; color: #F8FAFC; }
 QMainWindow, QDialog, QWidget { background-color: #0B0D10; color: #F8FAFC; }
-QFrame { background-color: #0B0D10; border: none; }
-QFrame#Card { background-color: #11151B; border: 1px solid #2A3340; }
-QFrame#TopPill { background-color: #11151B; border: 1px solid #2A3340; }
+QFrame { background-color: transparent; border: none; }
+QFrame#Card {
+    background-color: rgba(15, 17, 20, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+}
+QFrame#TopPill {
+    background-color: rgba(15, 17, 20, 0.60);
+    border: 1px solid rgba(59, 130, 246, 0.30);
+    border-radius: 12px;
+}
 QLabel { background: transparent; color: #F8FAFC; }
 QLabel#Muted { color: #94A3B8; }
-QLabel#Title { color: #F8FAFC; font-weight: 700; font-size: 14pt; }
-QLabel#CardTitle { color: #F8FAFC; font-weight: 700; font-size: 11pt; }
+QLabel#Title { color: #F8FAFC; font-weight: 700; font-size: 14pt; letter-spacing: 1px; }
+QLabel#CardTitle { color: #F8FAFC; font-weight: 700; font-size: 11pt; letter-spacing: 0.5px; }
 QLineEdit, QTextEdit, QPlainTextEdit {
-    background-color: #111E2E; color: #F8FAFC;
-    border: 1px solid #2A3340; border-radius: 0px;
-    padding: 6px 10px; font-size: 10pt; selection-background-color: #3B82F6;
+    background-color: rgba(17, 30, 46, 0.85); color: #F8FAFC;
+    border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px;
+    padding: 7px 11px; font-size: 10pt; selection-background-color: #3B82F6;
 }
 QLineEdit:focus { border: 1px solid #3B82F6; }
 QPushButton {
-    background-color: #1E3A5F; color: #F8FAFC; border: 1px solid #2A3340;
-    border-radius: 0px; padding: 6px 16px; font-size: 10pt; font-weight: 600;
+    background-color: #1E3A5F; color: #F8FAFC; border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 8px; padding: 6px 16px; font-size: 10pt; font-weight: 600;
     min-height: 28px;
 }
 QPushButton:hover { background-color: #3B82F6; color: #FFFFFF; border-color: #60A5FA; }
 QPushButton:pressed { background-color: #2563EB; border-color: #2563EB; }
 QPushButton:disabled { background-color: #151A21; color: #64748B; border-color: #222A35; }
 QPushButton#CTA {
-    background-color: #3B82F6; color: #FFFFFF; font-weight: 700;
-    border: 1px solid #60A5FA; border-radius: 0px; padding: 8px 24px; min-height: 36px;
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #4F8DF8, stop:1 #3475E8);
+    color: #FFFFFF; font-weight: 700;
+    border: 1px solid #60A5FA; border-radius: 8px; padding: 8px 24px; min-height: 36px;
 }
-QPushButton#CTA:hover { background-color: #60A5FA; border-color: #93C5FD; }
+QPushButton#CTA:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #6EA6FF, stop:1 #4F8DF8);
+    border-color: #93C5FD;
+}
 QPushButton#CTA:pressed { background-color: #2563EB; border-color: #2563EB; }
 QPushButton#Ghost {
-    background-color: #11151B; color: #CBD5E1;
-    border: 1px solid #2A3340; border-radius: 0px;
+    background-color: transparent; color: #CBD5E1;
+    border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 8px;
 }
-QPushButton#Ghost:hover { background-color: #172A45; color: #FFFFFF; border-color: #3B82F6; }
+QPushButton#Ghost:hover {
+    background-color: rgba(59, 130, 246, 0.08); color: #FFFFFF;
+    border-color: rgba(59, 130, 246, 0.50);
+}
 QCheckBox { color: #F8FAFC; font-size: 10pt; }
-QCheckBox::indicator { width: 14px; height: 14px; background: #111E2E; border: 1px solid #2A3340; border-radius: 0px; }
+QCheckBox::indicator { width: 14px; height: 14px; background: #111E2E; border: 1px solid #2A3340; border-radius: 4px; }
 QCheckBox::indicator:checked { background: #3B82F6; border-color: #60A5FA; }
-QScrollBar:vertical { background: #0B0D10; width: 8px; border: none; }
-QScrollBar::handle:vertical { background: #334155; border-radius: 0px; min-height: 20px; }
-QScrollBar::handle:vertical:hover { background: #3B82F6; }
+QScrollBar:vertical { background: transparent; width: 5px; border: none; margin: 0px; }
+QScrollBar::handle:vertical { background: rgba(255, 255, 255, 0.15); border-radius: 2px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: rgba(59, 130, 246, 0.50); }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #0B0D10; }
-QToolTip { background: #141922; color: #F8FAFC; border: 1px solid #2A3340; padding: 4px 8px; font-size: 9pt; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QToolTip { background: #141922; color: #F8FAFC; border: 1px solid #2A3340; border-radius: 6px; padding: 4px 8px; font-size: 9pt; }
 """
 
 
@@ -951,9 +1090,9 @@ class LogoSlot(QWidget):
                     ))
                     break
 
-        # Soft glow so the logo separates from the dark sidebar background.
+        # Wider soft glow so the logo separates from the dark sidebar.
         glow = QGraphicsDropShadowEffect(logo)
-        glow.setBlurRadius(22)
+        glow.setBlurRadius(30)
         glow.setOffset(0, 0)
         glow.setColor(QColor(66, 150, 250, 180))  # ImGui accent blue @ 70% alpha
         logo.setGraphicsEffect(glow)
@@ -999,14 +1138,14 @@ class SideIconButton(QPushButton):
         w, h = self.width(), self.height()
         p.setPen(Qt.NoPen)
         if self._active:
-            p.setBrush(QColor(HEADER))
+            # Translucent blue frosted fill + 2px accent left border.
+            p.setBrush(QColor(59, 130, 246, 36))   # rgba(59,130,246,0.14)
             p.drawRect(0, 0, w, h)
-            # 3px accent left border
             p.setBrush(QColor(ACCENT))
-            p.drawRect(0, 0, 3, h)
+            p.drawRect(0, 0, 2, h)
             icon_col = TEXT
         elif self._hover:
-            p.setBrush(QColor(NAV_HOVER))
+            p.setBrush(QColor(255, 255, 255, 10))  # rgba(255,255,255,0.04)
             p.drawRect(0, 0, w, h)
             icon_col = TEXT
         else:
@@ -1027,8 +1166,10 @@ class Sidebar(QFrame):
         self.setFixedWidth(72)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(
-            "QFrame#Sidebar { background-color:%s; border:none;"
-            " border-right:1px solid %s; }" % (TITLE_BG, BORDER))
+            "QFrame#Sidebar { border:none;"
+            " border-right:1px solid rgba(255,255,255,0.06);"
+            " background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 rgba(10,12,15,0.90), stop:1 rgba(5,7,8,0.95)); }")
         self._on_nav = on_nav
         self._active_index = 0
 
@@ -1093,7 +1234,8 @@ class ProductCard(QFrame):
 
     def __init__(self, title, glyph, grad_top, grad_bottom, action_text,
                  action_enabled=True, activated_date=None, on_action=None,
-                 tagline="", status_text="", blue_glow=False, parent=None):
+                 tagline="", status_text="", blue_glow=False, cover_path=None,
+                 parent=None):
         super().__init__(parent)
         self._title = title
         self._glyph = glyph
@@ -1107,6 +1249,33 @@ class ProductCard(QFrame):
         self.setObjectName("Card")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedHeight(340)
+
+        # Cover art: cache the QPixmap once (never reload in paintEvent). Falls
+        # back to the painted gradient art if the PNG is absent/unreadable.
+        self._cover_pm = None
+        if cover_path is not None:
+            try:
+                cp = Path(cover_path)
+                if cp.exists():
+                    pm = QPixmap(str(cp))
+                    if not pm.isNull():
+                        self._cover_pm = pm
+            except Exception:
+                self._cover_pm = None
+
+        # Soft blue glow on hover (blur 24, offset 0). Alpha is 0 when idle so
+        # the effect is invisible until enterEvent tints it.
+        self._glow = QGraphicsDropShadowEffect(self)
+        self._glow.setBlurRadius(24)
+        self._glow.setOffset(0, 0)
+        self._glow.setColor(QColor(59, 130, 246, 0))
+        self.setGraphicsEffect(self._glow)
+
+        # Subtle hover scale (1.02x) anchored on the card centre.
+        self._base_geom = None
+        self._scale_anim = QPropertyAnimation(self, b"geometry", self)
+        self._scale_anim.setDuration(150)
+        self._scale_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(1, 1, 1, 1)
@@ -1206,13 +1375,44 @@ class ProductCard(QFrame):
 
     def enterEvent(self, event):
         self._hover = True
+        self._glow.setColor(QColor(59, 130, 246, 80))
+        self._animate_scale(grow=True)
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._hover = False
+        self._glow.setColor(QColor(59, 130, 246, 0))
+        self._animate_scale(grow=False)
         self.update()
         super().leaveEvent(event)
+
+    def _animate_scale(self, grow: bool):
+        """Animate a subtle 1.02x scale on hover, anchored on the card centre.
+        Captures the layout-assigned geometry once so leave restores exactly."""
+        if self._scale_anim.state() == QPropertyAnimation.Running:
+            self._scale_anim.stop()
+        if self._base_geom is None:
+            self._base_geom = self.geometry()
+        base = self._base_geom
+        if grow:
+            dw = int(base.width() * 0.02)
+            dh = int(base.height() * 0.02)
+            target = QRect(base.x() - dw // 2, base.y() - dh // 2,
+                           base.width() + dw, base.height() + dh)
+        else:
+            target = base
+        self._scale_anim.setStartValue(self.geometry())
+        self._scale_anim.setEndValue(target)
+        self._scale_anim.start()
+
+    def resizeEvent(self, event):
+        # Refresh the captured base geometry when the layout resizes us (but
+        # not while our own hover animation is driving the geometry).
+        if self._scale_anim.state() != QPropertyAnimation.Running and not self._hover:
+            self._base_geom = self.geometry()
+        self._apply_elide()
+        super().resizeEvent(event)
 
     def _apply_elide(self):
         # The title now word-wraps instead of eliding; only the tagline elides.
@@ -1221,10 +1421,6 @@ class ProductCard(QFrame):
             if lbl is not None:
                 metrics = QFontMetrics(lbl.font())
                 lbl.setText(metrics.elidedText(full, Qt.ElideRight, max(40, lbl.width())))
-
-    def resizeEvent(self, event):
-        self._apply_elide()
-        super().resizeEvent(event)
 
     # helper to update the activation date from server data
     def set_activated_date(self, text):
@@ -1244,76 +1440,102 @@ class ProductCard(QFrame):
         self.action_btn.setDisabled(False)
 
     def paintEvent(self, _):
-        # Draw the painted art header first, then let the QSS border draw on top.
+        # Glassmorphism card: rounded translucent body, cover-art (or gradient
+        # fallback) top half, lit top edge, blue hover ring.
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Card base (ChildBg), leaving 1px for the QSS border
-        p.fillRect(QRect(1, 1, self.width() - 2, self.height() - 2), QColor(BG_CHILD))
+        RADIUS = 12
+        w, h = self.width(), self.height()
+        body = QRectF(0.5, 0.5, w - 1, h - 1)
 
-        # Top image area gradient (~50%)
-        img_h = int(self.height() * 0.50)
-        art_rect = QRect(1, 1, self.width() - 2, img_h - 1)
-        grad = QLinearGradient(0, 0, self.width(), img_h)
-        grad.setColorAt(0, self._grad_top.lighter(112 if self._hover else 100))
-        grad.setColorAt(1, self._grad_bottom)
-        p.fillRect(art_rect, QBrush(grad))
-
-        # ImGui-style scan lines / corner grid, clipped to header only.
+        # Clip everything to the rounded card shape.
+        clip = QPainterPath()
+        clip.addRoundedRect(body, RADIUS, RADIUS)
         p.save()
-        p.setClipRect(art_rect)
-        p.setOpacity(0.10 if not self._hover else 0.16)
-        p.setPen(QPen(QColor(255, 255, 255), 1))
-        step = 18
-        for x in range(art_rect.left() - img_h, art_rect.right() + img_h, step):
-            p.drawLine(x, art_rect.bottom(), x + img_h, art_rect.top())
-        p.restore()
+        p.setClipPath(clip)
 
-        # Accent glyph plate.
-        p.save()
-        p.setOpacity(0.92)
-        p.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
-        p.setBrush(QColor(8, 10, 13, 150))
-        plate = QRectF(18, 18, 54, 54)
-        p.drawRect(plate)
-        _draw_icon(p, self._glyph, plate.center().x(), plate.center().y(), ACCENT if self._hover else TEXT, 26)
-        p.restore()
+        # Translucent card base gradient (top #0D1015 → bottom #0A0D11).
+        base = QLinearGradient(0, 0, 0, h)
+        base.setColorAt(0, QColor(13, 16, 21, 235))
+        base.setColorAt(1, QColor(10, 13, 17, 235))
+        p.fillRect(self.rect(), QBrush(base))
 
-        # Large, subtle stylized tool name over the gradient.
-        # Auto-shrink the font so multi-word titles ("Roblox Copier",
-        # "Coming Soon") never clip mid-word at any card width.
-        p.save()
-        p.setClipRect(art_rect)
-        text_rect = QRect(14, 14, self.width() - 28, img_h - 28)
-        font = QFont("Consolas", 1)
-        font.setWeight(QFont.DemiBold)
-        # Start at 42px and step down until the full title fits horizontally.
-        for size_px in (42, 38, 34, 30, 26, 22, 18):
-            font.setPixelSize(size_px)
-            fm = QFontMetrics(font)
-            if fm.horizontalAdvance(self._title) <= text_rect.width():
-                break
-        p.setFont(font)
-        p.setOpacity(0.12)
-        p.setPen(QColor(255, 255, 255))
-        # TextDontClip so any leftover overhang still renders instead of ellipsizing.
-        p.drawText(text_rect,
-                   Qt.AlignBottom | Qt.AlignLeft | Qt.TextDontClip,
-                   self._title)
-        p.restore()
+        # Top ~50% cover-art area.
+        img_h = int(h * 0.50)
+        art_rect = QRect(0, 0, w, img_h)
 
-        # Hairline under the art area
-        p.setPen(QPen(QColor(BORDER), 1))
-        p.drawLine(1, img_h, self.width() - 1, img_h)
+        if self._cover_pm is not None and not self._cover_pm.isNull():
+            # Scale the cover to fill the art area (crop-to-fill), centred.
+            scaled = self._cover_pm.scaled(
+                art_rect.size(), Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation)
+            sx = max(0, (scaled.width() - art_rect.width()) // 2)
+            sy = max(0, (scaled.height() - art_rect.height()) // 2)
+            p.drawPixmap(art_rect, scaled,
+                         QRect(sx, sy, art_rect.width(), art_rect.height()))
+            # Bottom-fade for text legibility (transparent → card base).
+            fade = QLinearGradient(0, art_rect.top(), 0, art_rect.bottom())
+            fade.setColorAt(0.0, QColor(11, 13, 16, 0))
+            fade.setColorAt(1.0, QColor(11, 13, 16, 235))
+            p.fillRect(art_rect, QBrush(fade))
+        else:
+            # Fallback: painted gradient + scan-lines + stylized title.
+            grad = QLinearGradient(0, 0, w, img_h)
+            grad.setColorAt(0, self._grad_top.lighter(112 if self._hover else 100))
+            grad.setColorAt(1, self._grad_bottom)
+            p.fillRect(art_rect, QBrush(grad))
 
-        # 1px border (QSS #Card also styles this, drawn here for the painted overlay)
-        p.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
+            p.save()
+            p.setClipRect(art_rect)
+            p.setOpacity(0.10 if not self._hover else 0.16)
+            p.setPen(QPen(QColor(255, 255, 255), 1))
+            step = 18
+            for x in range(art_rect.left() - img_h, art_rect.right() + img_h, step):
+                p.drawLine(x, art_rect.bottom(), x + img_h, art_rect.top())
+            p.restore()
+
+            p.save()
+            p.setOpacity(0.92)
+            p.setPen(QPen(QColor(ACCENT if self._hover else BORDER), 1))
+            p.setBrush(QColor(8, 10, 13, 150))
+            plate = QRectF(18, 18, 54, 54)
+            p.drawRect(plate)
+            _draw_icon(p, self._glyph, plate.center().x(), plate.center().y(),
+                       ACCENT if self._hover else TEXT, 26)
+            p.restore()
+
+            p.save()
+            p.setClipRect(art_rect)
+            text_rect = QRect(14, 14, w - 28, img_h - 28)
+            font = QFont("Consolas", 1)
+            font.setWeight(QFont.DemiBold)
+            for size_px in (42, 38, 34, 30, 26, 22, 18):
+                font.setPixelSize(size_px)
+                fm = QFontMetrics(font)
+                if fm.horizontalAdvance(self._title) <= text_rect.width():
+                    break
+            p.setFont(font)
+            p.setOpacity(0.12)
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(text_rect,
+                       Qt.AlignBottom | Qt.AlignLeft | Qt.TextDontClip,
+                       self._title)
+            p.restore()
+
+        p.restore()  # end rounded clip
+
+        # Card border: 1px subtle white all-round + lit top edge.
         p.setBrush(Qt.NoBrush)
-        p.drawRect(0, 0, self.width() - 1, self.height() - 1)
-        if self._hover:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(ACCENT))
-            p.drawRect(0, 0, self.width(), 2)
+        ring = QColor(ACCENT) if self._hover else QColor(255, 255, 255, 16)
+        p.setPen(QPen(ring, 1))
+        p.drawRoundedRect(body, RADIUS, RADIUS)
+        # Lit top highlight arc for the "glass lit-from-above" look.
+        p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        top_edge = QPainterPath()
+        top_edge.moveTo(RADIUS, 1)
+        top_edge.lineTo(w - RADIUS, 1)
+        p.drawPath(top_edge)
         p.end()
 
 
@@ -1345,6 +1567,13 @@ class LoginScreen(QWidget):
         card.setObjectName("Card")
         card.setFixedWidth(460)
         card.setAttribute(Qt.WA_StyledBackground, True)
+
+        # Soft blue glow around the whole login card for glass depth.
+        card_glow = QGraphicsDropShadowEffect(card)
+        card_glow.setBlurRadius(40)
+        card_glow.setOffset(0, 0)
+        card_glow.setColor(QColor(59, 130, 246, 50))
+        card.setGraphicsEffect(card_glow)
 
         c = QVBoxLayout(card)
         c.setContentsMargins(40, 28, 40, 32)
@@ -1606,6 +1835,21 @@ class Dashboard(QWidget):
         self._build()
         self._load_overview()
 
+    def paintEvent(self, _):
+        # Atmospheric backdrop: deep base + a very low-opacity blue radial
+        # glow behind everything, giving the glass panels something to float
+        # over. Pages/stack are transparent so this shows through.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor(BG_DEEP))
+        w, h = self.width(), self.height()
+        rg = QRadialGradient(w * 0.42, h * 0.18, max(w, h) * 0.9)
+        rg.setColorAt(0.0, QColor(59, 130, 246, 20))   # ~8% blue
+        rg.setColorAt(0.5, QColor(59, 130, 246, 8))
+        rg.setColorAt(1.0, QColor(59, 130, 246, 0))
+        p.fillRect(self.rect(), QBrush(rg))
+        p.end()
+
     def _build(self):
         main = QHBoxLayout(self)
         main.setContentsMargins(0, 0, 0, 0)
@@ -1615,7 +1859,7 @@ class Dashboard(QWidget):
         main.addWidget(self._sidebar)
 
         self._stack = QStackedWidget()
-        self._stack.setStyleSheet(f"background:{BG};")
+        self._stack.setStyleSheet("background:transparent;")
         self._stack.addWidget(self._build_products_tab())    # 0
         self._stack.addWidget(self._build_rewards_tab())      # 1
         self._stack.addWidget(self._build_referrals_tab())    # 2
@@ -1634,10 +1878,10 @@ class Dashboard(QWidget):
         """A scrollable page over the app background. Returns (scroll, inner_layout)."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"QScrollArea {{ border:none; background:{BG}; }}")
-        scroll.viewport().setStyleSheet(f"background:{BG};")
+        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        scroll.viewport().setStyleSheet("background:transparent;")
         inner = QWidget()
-        inner.setStyleSheet(f"background:{BG};")
+        inner.setStyleSheet("background:transparent;")
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(32, 28, 32, 28)
         lay.setSpacing(16)
@@ -1648,7 +1892,8 @@ class Dashboard(QWidget):
         h = QLabel(text)
         h.setObjectName("Title")
         h.setStyleSheet(
-            f"color:{TEXT}; font-size:16pt; font-weight:700; background:transparent;")
+            f"color:{TEXT}; font-size:22pt; font-weight:700; "
+            f"letter-spacing:1px; background:transparent;")
         return h
 
     # ── Products tab ("Popular products") ─────────────────────────────────
@@ -1670,10 +1915,16 @@ class Dashboard(QWidget):
         pill.setObjectName("TopPill")
         pill.setAttribute(Qt.WA_StyledBackground, True)
         pl = QHBoxLayout(pill)
-        pl.setContentsMargins(10, 4, 10, 4)
+        pl.setContentsMargins(14, 6, 14, 6)
         pl.setSpacing(10)
         pl.addWidget(self._time_lbl)
         pl.addWidget(self._tier_lbl)
+        # Subtle inner blue glow around the glass chip.
+        pill_glow = QGraphicsDropShadowEffect(pill)
+        pill_glow.setBlurRadius(18)
+        pill_glow.setOffset(0, 0)
+        pill_glow.setColor(QColor(59, 130, 246, 60))
+        pill.setGraphicsEffect(pill_glow)
         head_row.addWidget(pill, alignment=Qt.AlignVCenter)
         lay.addLayout(head_row)
 
@@ -1692,6 +1943,7 @@ class Dashboard(QWidget):
             activated_date="—",
             on_action=self._on_launch,
             tagline="Steam session utility", status_text="Installed on demand",
+            cover_path=COVER_STEAMGUARD,
         )
         self._sg_card_date = self._sg_card
         grid.addWidget(self._sg_card, 0, 0)
@@ -1703,6 +1955,7 @@ class Dashboard(QWidget):
             action_text="Launch", action_enabled=True,
             on_action=self._on_launch_roblox_copy,
             tagline="Local Studio animation copier", status_text="Bundled",
+            cover_path=COVER_ROBLOX_COPIER,
         )
         grid.addWidget(self._roblox_card, 0, 1)
 
@@ -1713,6 +1966,7 @@ class Dashboard(QWidget):
             action_text="Coming Soon", action_enabled=False,
             tagline="More tools are being prepared", status_text="Locked",
             blue_glow=True,
+            cover_path=COVER_COMING_SOON,
         )
         grid.addWidget(self._soon_card, 0, 2)
 
@@ -1929,6 +2183,32 @@ class Dashboard(QWidget):
             # 'Already running' also goes to the card, not the tier pill.
             loader_log(f"_launch_tool key={key} already running")
             card.reset_action("Running...", ACCENT)
+            return
+
+        # SteamGuard's exe embeds a UAC manifest; a plain Popen fails with the
+        # elevation-required OSError (740). On Windows, launch it elevated via
+        # ShellExecuteExW so the user gets a UAC prompt and it starts as admin.
+        if key == "steamguard" and os.name == "nt":
+            exe_path = cmd[0]
+            exe_args = cmd[1:]
+            loader_log(f"_launch_tool elevating steamguard exe={exe_path}")
+            if _launch_elevated_windows(exe_path, exe_args):
+                handle = _ElevatedProcHandle(_launch_elevated_windows.last_hprocess)
+                self._processes[key] = handle
+                self._sg_process = handle
+                card.set_action_running()
+                self._proc_timer.start(1000)
+                return
+            # ShellExecuteEx returned False — commonly the user clicked Cancel
+            # on the UAC prompt (or elevation is unavailable). Surface it.
+            loader_log("_launch_tool elevation returned False (UAC cancelled?)")
+            card.reset_action("Elevation cancelled", RED)
+            try:
+                card.setToolTip(
+                    "SteamGuard needs administrator rights. Click Launch again "
+                    "and choose 'Yes' on the Windows UAC prompt.")
+            except Exception:
+                pass
             return
         try:
             if len(cmd) >= 3 and cmd[1] == "-m":
