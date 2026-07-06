@@ -62,12 +62,16 @@ jobs:
         run: |
           python -m nuitka `
             --onefile `
+            --follow-imports `
             --windows-console-mode=disable `
             --windows-uac-admin `
             --windows-icon-from-ico=icon.ico `
             --enable-plugin=pyside6 `
             --include-qt-plugins=sensible,styles `
             --include-package-data=qdarktheme `
+            --include-module=steam_features `
+            --include-module=steamguard `
+            --include-package=auth `
             --assume-yes-for-downloads `
             --output-filename=SteamGuard.exe `
             steamguard_qt.py

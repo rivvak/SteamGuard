@@ -1751,7 +1751,16 @@ class Dashboard(QWidget):
     def _on_launch_roblox_copy(self):
         cmd = self._find_roblox_copy_tool()
         if not cmd:
-            self._time_lbl.setText("Roblox copier missing")
+            # Never touch the tier pill — keep FREE badge clean.
+            loader_log("_on_launch_roblox_copy: Roblox copier binary missing")
+            self._roblox_card.reset_action("Not installed", RED)
+            try:
+                self._roblox_card.setToolTip(
+                    "Roblox Copier binary not found. Reinstall the loader or "
+                    "run scripts/build_roblox_copier.py locally."
+                )
+            except Exception:
+                pass
             return
         self._launch_tool("roblox", cmd, self._roblox_card)
 
@@ -1908,8 +1917,18 @@ class Dashboard(QWidget):
         self._launch_tool("steamguard", [str(exe)], self._sg_card)
 
     def _launch_tool(self, key, cmd, card):
+        """Launch a bundled/downloaded tool.
+
+        Failure UX: never write into the tier pill (self._time_lbl) — that
+        used to produce garble like 'Launch failed FREE' overlapping the
+        FREE badge. Instead, show a per-card 'Launch failed' state via
+        card.reset_action() with a helpful tooltip, and log the full
+        exception + captured stderr to loader_debug.log.
+        """
         if key in self._processes and self._processes[key].poll() is None:
-            self._time_lbl.setText("Already running")
+            # 'Already running' also goes to the card, not the tier pill.
+            loader_log(f"_launch_tool key={key} already running")
+            card.reset_action("Running...", ACCENT)
             return
         try:
             if len(cmd) >= 3 and cmd[1] == "-m":
@@ -1919,18 +1938,92 @@ class Dashboard(QWidget):
             flags = 0
             if os.name == "nt":
                 flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            proc = subprocess.Popen(cmd, cwd=cwd, creationflags=flags)
-        except Exception:
-            self._time_lbl.setText("Launch failed")
+            loader_log(f"_launch_tool spawn key={key} cmd={cmd} cwd={cwd} flags={flags}")
+            proc = subprocess.Popen(
+                cmd, cwd=cwd, creationflags=flags,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+        except Exception as e:
+            detail = f"{type(e).__name__}: {e}"
+            loader_log(f"_launch_tool spawn FAILED key={key} error={detail}")
+            card.reset_action("Launch failed", RED)
+            try:
+                card.setToolTip(f"Launch failed: {detail}")
+            except Exception:
+                pass
             return
+
+        # Give the process a moment to actually start — many Windows launch
+        # failures (SmartScreen block, missing dependency DLL, antivirus
+        # quarantine after write) show up as an *immediate* exit code, not
+        # as an exception from Popen. If it dies within 500ms, treat as
+        # failure and surface a useful message.
+        QTimer.singleShot(500, lambda: self._check_launch_ok(key, proc, card, cmd))
+
         self._processes[key] = proc
         if key == "steamguard":
             self._sg_process = proc
         elif key == "roblox":
             self._roblox_process = proc
         card.set_action_running()
-        self._time_lbl.setText(f"{key.title()} running")
+        # Tier pill (_time_lbl) intentionally NOT touched here — keeps FREE
+        # badge intact instead of overlapping with status text.
         self._proc_timer.start(1000)
+
+    def _check_launch_ok(self, key, proc, card, cmd):
+        """Detect an exe that Popen accepted but crashed within 500ms.
+
+        Common causes on Windows: Windows Defender SmartScreen block,
+        missing runtime DLL from a Nuitka onefile build, antivirus
+        quarantine deleting the file mid-launch.
+        """
+        rc = proc.poll()
+        if rc is None:
+            # Still running — launch succeeded.
+            loader_log(f"_check_launch_ok key={key} still running — OK")
+            return
+        # Process already exited — grab stderr and surface a real reason.
+        try:
+            _, err_bytes = proc.communicate(timeout=1)
+            err_txt = (err_bytes or b"").decode("utf-8", errors="replace").strip()
+        except Exception:
+            err_txt = ""
+        loader_log(
+            f"_launch_tool crashed key={key} returncode={rc} "
+            f"stderr={err_txt[:500] if err_txt else '(empty)'}"
+        )
+        # Clean up the dead process from our bookkeeping.
+        self._processes.pop(key, None)
+        if key == "steamguard":
+            self._sg_process = None
+        elif key == "roblox":
+            self._roblox_process = None
+
+        # User-facing message. Windows exit code 0xc0000135 = missing DLL;
+        # 0xc000012f = corrupt exe; negative codes on POSIX = signal.
+        if rc in (-1, 0xc0000135, -1073741515):
+            msg = "Missing runtime DLL"
+            tip = ("The downloaded EXE is missing a required Windows runtime "
+                   "DLL (0xc0000135). Try running as admin or reinstalling "
+                   "the Visual C++ redistributable.")
+        elif rc in (0xc000012f, -1073741521):
+            msg = "Corrupt EXE"
+            tip = ("The downloaded EXE appears corrupt (0xc000012f). Delete "
+                   f"{cmd[-1]} and click Launch to re-download.")
+        elif rc == 1 and "smartscreen" in err_txt.lower():
+            msg = "Blocked by SmartScreen"
+            tip = ("Windows SmartScreen blocked the EXE. Right-click the file "
+                   "in File Explorer → Properties → check 'Unblock'.")
+        else:
+            msg = "Launch failed"
+            tip = (f"Exited immediately with code {rc}."
+                   + (f" Stderr: {err_txt[:200]}" if err_txt else "")
+                   + " See loader_debug.log for full details.")
+        card.reset_action(msg, RED)
+        try:
+            card.setToolTip(tip)
+        except Exception:
+            pass
 
     def _check_processes(self):
         if not self._processes:
