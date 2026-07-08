@@ -1,0 +1,33 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: sg-litellm
+  annotations:
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "3"
+        run.googleapis.com/cpu-throttling: "true"
+    spec:
+      containerConcurrency: 20
+      timeoutSeconds: 60
+      containers:
+        - image: us-central1-docker.pkg.dev/fabled-mystery-474200-i1/cloud-run-source-deploy/sg-litellm:latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          env:
+            - name: NVIDIA_NIM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: NVIDIA_NIM_API_KEY
+                  key: latest
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: LITELLM_MASTER_KEY
+                  key: latest

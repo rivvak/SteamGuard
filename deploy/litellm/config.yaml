@@ -1,0 +1,35 @@
+model_list:
+  - model_name: sg-primary
+    litellm_params:
+      model: nvidia_nim/z-ai/glm-5.2
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+  - model_name: sg-rag
+    litellm_params:
+      model: nvidia_nim/nvidia/nemotron-3-super-120b-a12b
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+  - model_name: sg-code
+    litellm_params:
+      model: nvidia_nim/deepseek-ai/deepseek-v4-pro
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+  - model_name: sg-embed
+    litellm_params:
+      model: nvidia_nim/nvidia/nv-embedqa-e5-v5
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+
+router_settings:
+  fallbacks:
+    - sg-primary: ["sg-code"]
+    - sg-rag: ["sg-primary"]
+  num_retries: 2
+  request_timeout: 30
+  allowed_fails: 2
+  cooldown_time: 30
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

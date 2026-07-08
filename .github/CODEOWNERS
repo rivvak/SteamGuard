@@ -1,0 +1,22 @@
+# CODEOWNERS — human review required for sensitive paths.
+#
+# Even when a change comes from an AI agent (rivvak-sg-heal[bot] etc.),
+# GitHub will require review from the owners listed below before merge.
+# The auto-commit-to-main allow-list in AI_AGENT_RULES.md defines paths
+# where the path-guard on sg-devbox may push directly without a PR;
+# every other path routes through PR + this file.
+
+# Default fallback — everything requires @rivvak
+* @rivvak
+
+# Explicit locks on security-critical paths (redundant with the fallback
+# but present so intent is unambiguous):
+/auth/                         @rivvak
+/server/main.py                @rivvak
+/server/bot.py                 @rivvak
+/server/Dockerfile             @rivvak
+/.github/workflows/            @rivvak
+/hashes.txt                    @rivvak
+/build.bat                     @rivvak
+/Dockerfile                    @rivvak
+/scripts/                      @rivvak
