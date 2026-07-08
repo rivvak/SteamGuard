@@ -318,6 +318,19 @@ async def on_ready():
     weekly_key_audit.start()
     weekly_key_cleanup.start()
     weekly_gen_audit.start()
+
+    # ── Register AI /ask cog (Phase 1) ──
+    # Wrapped so a missing dep never blocks the rest of on_ready.
+    if os.environ.get("AI_ASK_ENABLED", "false").lower() == "true":
+        try:
+            from server.bot.cogs.ask_cog import setup as setup_ask
+            await setup_ask(bot)
+            LOG.info("Registered /ask cog")
+        except Exception as e:
+            LOG.warning(f"Failed to register /ask cog: {e}")
+    else:
+        LOG.info("AI_ASK_ENABLED=false — /ask cog not registered")
+
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
