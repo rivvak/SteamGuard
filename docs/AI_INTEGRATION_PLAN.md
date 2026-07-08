@@ -11,7 +11,10 @@ All inference goes through **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`
 
 ---
 
-## 0. Locked Decisions (v3)
+## 0. Locked Decisions (v3.1)
+
+> **v3.1 patch (2026-07-08)**: Corrected `/ai/ask` auth from "JWT session token" to the actual **HMAC(SECRET_KEY, "key:hwid")** scheme used by `/verify` and other license-gated routes. `JWT_SECRET` is retained in Secret Manager for potential future use but is not the auth mechanism for AI endpoints in Phase 1.
+
 
 | Key | Value |
 |---|---|
@@ -28,7 +31,7 @@ All inference goes through **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`
 | GitHub App secrets | `SG_HEAL_APP_ID`, `SG_HEAL_INSTALLATION_ID`, `SG_HEAL_PRIVATE_KEY` |
 | Existing auth secrets | `JWT_SECRET`, `HMAC_SECRET_KEY`, `SECRET_KEY` |
 | Vector store | **Chroma** embedded in the FastAPI container, backed by a GCS bucket (`sg-rag-index`) — no Cloud SQL |
-| Auth on `/ai/ask` | Reuse existing JWT session token (Bearer), same middleware as other license-gated routes |
+| Auth on `/ai/ask` | Reuse existing **HMAC(SECRET_KEY, "key:hwid")** scheme — same as `/verify` and other license-gated routes. Loader signs `key:hwid` with the shared `SECRET_KEY`; server recomputes and compares. **Not JWT.** |
 | `/develop` PR reviewer | Auto-request review from `@rivvak` |
 | Commit signing | SSH (bot signing key stored on the VM) |
 | Chat panel UX | Modal from a "?" button in the PyQt5 loader |
@@ -102,7 +105,7 @@ flowchart LR
         EMB["nvidia/nv-embedqa-e5-v5"]
     end
 
-    UI -->|HTTPS + JWT| SG
+    UI -->|HTTPS + HMAC| SG
     ASK --> SG
     DEV --> SG
     CREATE --> SG
@@ -146,7 +149,7 @@ ai/
 
 server/
   routes/
-    ai_ask.py              # POST /ai/ask (JWT-gated, RAG, streaming)
+    ai_ask.py              # POST /ai/ask (HMAC-gated, RAG, streaming)
     ai_chat.py             # POST /ai/chat (multi-turn, session-scoped)
     ai_hooks.py            # /internal/develop, /internal/heal (HMAC-signed)
   bot/
@@ -280,7 +283,7 @@ Note: same `DISCORD_BOT_TOKEN` value from Secret Manager is used for FCC's built
 1. Deploy new Cloud Run service **`sg-litellm`** with `deploy/litellm/cloudrun.yaml`. Env: `NVIDIA_NIM_API_KEY` from Secret Manager. Ingress: internal. Invoker: `775181381055-compute@developer.gserviceaccount.com` only.
 2. Create GCS bucket **`sg-rag-index`** in `us-central1` for Chroma persistence.
 3. `ai/rag/ingest.py` — on release, embed `docs/**/*.md` with `sg-embed` and persist to Chroma at `gs://sg-rag-index/`.
-4. `POST /ai/ask` in `steamguard` — validates existing JWT session token, retrieves top-k from Chroma, calls `sg-litellm` model `sg-rag`, streams response.
+4. `POST /ai/ask` in `steamguard` — validates **HMAC(SECRET_KEY, `key:hwid`)** signature (same scheme as `/verify`), retrieves top-k from Chroma, calls `sg-litellm` model `sg-rag`, streams response.
 5. `/ask` slash command in the existing SG Discord bot, guild-scoped to `1513193335697838181` for instant sync.
 6. PyQt5 chat modal in the loader (`QWebEngineView`), launched from a "?" button. Calls `/ai/ask` with the existing session token.
 7. Feature-flagged with `AI_ASK_ENABLED=true` (env var on the `steamguard` service) so rollout is reversible.
@@ -358,7 +361,7 @@ Anything outside → PR + CODEOWNERS review.
 
 ### End-user assistant safety
 
-- `/ai/ask` requires valid JWT session token (same middleware as other license-gated routes) — no anonymous calls.
+- `/ai/ask` requires valid **HMAC signature** over `key:hwid` using the shared `SECRET_KEY` (same middleware as `/verify` and other license-gated routes) — no anonymous calls. Server also checks the license is active in Firestore before answering.
 - System prompt refuses to reveal license internals, HWID, admin dashboard details. Retrieval scoped to `docs/`.
 - Per-user 30 req/hour.
 
