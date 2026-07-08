@@ -1,35 +1,58 @@
 # AI Integration Plan — SteamGuard
 
-**Status:** Proposal · v2 · 2026-07-08
+**Status:** Approved · v3 · 2026-07-08
 **Owner:** @rivvak
-**Scope:** Add AI to the SteamGuard system across three surfaces — (1) a self-healing developer agent for the repo (Claude Code via [free-claude-code](https://github.com/Alishahryar1/free-claude-code)), (2) an in-product assistant for end users (loader + Discord `/ask`), and (3) an owner-only `/create` sandboxed code-gen command plus `/develop` for repo work.
+**GCP project:** `fabled-mystery-474200-i1`
+**Cloud Run region:** `us-central1`
 
-All inference is routed through **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`, OpenAI-compatible) — either directly via **LiteLLM** for the user-facing surfaces, or via the **free-claude-code proxy** which speaks the Anthropic Messages API to Claude Code CLI and translates to NIM.
+Adds AI across three surfaces: (1) a self-healing developer agent for the repo, (2) an in-product assistant for end users (loader + Discord `/ask`), and (3) two owner-only Discord commands — `/develop` (Claude Code on the repo) and `/create` (Claude Code in an E2B sandbox, returns a zip).
 
-Changes from v1: user chat panel is **free to all logged-in loader users** (not paywalled). `/create` always returns a **zip** attachment. New `/develop` command added — owner-only, runs Claude Code (via FCC) against the SteamGuard repo for autonomous multi-file work. The self-heal loop and `/develop` are now unified on Claude Code, not Aider.
+All inference goes through **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`, OpenAI-compatible) — either directly via **LiteLLM** for user-facing surfaces, or via the **[free-claude-code](https://github.com/Alishahryar1/free-claude-code) proxy** which speaks the Anthropic Messages API to Claude Code CLI.
 
 ---
 
-## 0. Reality Check (read this first)
+## 0. Locked Decisions (v3)
 
-- **"Uncensored Claude Opus 4.5 from Hugging Face" is not real.** Claude is Anthropic-proprietary. HF fine-tunes with names like `DavidAU/…-Claude-4.5-Opus-…` are Llama 3.3 8B derivatives with marketing names — they are not Claude and do not have Opus-level capability.
-- **The revised default** is **real Claude Code CLI** (the actual Anthropic product) running against **NIM-hosted GLM-5.2 / DeepSeek V4 / Nemotron 3** via the `free-claude-code` proxy. This gets you the world-class Claude Code UX for autonomous coding, billed against your free NIM key.
-- **Security note:** the NIM API key `nvapi-JjGi1zqt1AdcM1lszGOy_...` was pasted in a chat transcript and must be treated as compromised. Revoke `NVIDIABuild-Autogen-26` at [build.nvidia.com](https://build.nvidia.com/) before Phase 1.
+| Key | Value |
+|---|---|
+| GCP project | `fabled-mystery-474200-i1` |
+| Region | `us-central1` |
+| Existing Cloud Run service | `steamguard` |
+| Cloud Run service account | `775181381055-compute@developer.gserviceaccount.com` |
+| New Cloud Run service (this plan) | `sg-litellm` |
+| GCE VM (dev-side agent) | `sg-devbox`, `e2-small`, `us-central1-a` |
+| Discord guild ID | `1513193335697838181` |
+| Owner Discord user ID | `1513150836472021074` |
+| Discord bot token secret | `DISCORD_BOT_TOKEN` |
+| GitHub App | `rivvak-sg-heal` (App ID `4249863`, Installation ID `145288024`) |
+| GitHub App secrets | `SG_HEAL_APP_ID`, `SG_HEAL_INSTALLATION_ID`, `SG_HEAL_PRIVATE_KEY` |
+| Existing auth secrets | `JWT_SECRET`, `HMAC_SECRET_KEY`, `SECRET_KEY` |
+| Vector store | **Chroma** embedded in the FastAPI container, backed by a GCS bucket (`sg-rag-index`) — no Cloud SQL |
+| Auth on `/ai/ask` | Reuse existing JWT session token (Bearer), same middleware as other license-gated routes |
+| `/develop` PR reviewer | Auto-request review from `@rivvak` |
+| Commit signing | SSH (bot signing key stored on the VM) |
+| Chat panel UX | Modal from a "?" button in the PyQt5 loader |
+| Rate limits | 30 req/hr per user on `/ai/ask`; 5/hr on `/create` |
+| Voice notes | Off in Phase 3, revisit later |
+| Auto-commit allow-list | `docs/**`, `tests/**`, `**/*.md`, `requirements*.txt`, `pyproject.toml`, `dashboard/**` |
+
+**NIM key:** the user has chosen to keep using `nvapi-JjGi1zqt1AdcM1lszGOy_...` despite it appearing in chat transcripts. Documented here so the risk decision is explicit. Stored in Secret Manager as `NVIDIA_NIM_API_KEY`.
 
 ---
 
 ## 1. Goals
 
-1. **Self-healing dev loop** — when CI fails on `rivvak/SteamGuard`, Claude Code (via FCC → NIM) reads the logs, produces a patch, and commits it directly to `main` for **low-risk paths only** (docs, tests, lint/format, dependency lockfiles). Anything else opens a PR.
-2. **In-product assistant** — end users of the loader can ask questions about SteamGuard from either the PyQt5 UI or a `/ask` Discord slash command, backed by RAG over `docs/`. Free to all logged-in loader users.
-3. **Owner-only `/develop`** — Discord slash command scoped to your user ID. Streams a Claude Code session that operates on the SteamGuard repo directly — like the self-heal loop but user-initiated ("fix issue #12", "add a settings dialog", "refactor the loader auth flow"). Commits to a feature branch and opens a PR unless you say `--push-main` for allow-listed paths.
-4. **Owner-only `/create`** — Discord slash command that spins up an ephemeral E2B sandbox, has Claude Code write whatever you asked for (kernel driver skeleton, standalone tool, etc.), and returns the result as a **zip attachment** in the Discord reply.
+1. **Self-healing dev loop** — CI failure on `rivvak/SteamGuard` → Claude Code (via FCC → NIM) reads logs → commits patch directly to `main` for **allow-listed paths only**, otherwise opens a PR.
+2. **In-product assistant** — end users of the loader ask questions via a modal chat panel or a Discord `/ask` command. RAG-backed on `docs/`. Free to all logged-in loader users.
+3. **Owner-only `/develop`** — Discord command routed to Claude Code on the VM against the SteamGuard repo. Defaults to opening a PR on `ai/develop/<slug>`; `--push-main` allowed only when every changed path is inside the allow-list.
+4. **Owner-only `/create`** — Discord command that spins up an ephemeral E2B sandbox, runs Claude Code with your prompt, returns the output as a **zip attachment** in Discord.
 
 ## 2. Non-Goals
 
-- No AI access to license validation, HWID, or certificate-pinning code — hard-blocked via CODEOWNERS and a pre-commit path guard (§7).
+- No AI access to license validation, HWID, or certificate-pinning code — hard-blocked (§8).
 - No auto-merge of PRs that touch anything outside the allow-list.
-- No shipping of any NIM/HF/GitHub secret to the desktop client. All model calls go through the FastAPI backend or the FCC proxy.
+- No shipping of any NIM/GitHub secret to the desktop client. All model calls go through Cloud Run or the VM proxy.
+- No public exposure of the FCC Admin UI or the VM webhook — both bound to loopback / private ingress and reached through IAP or a signed HMAC.
 
 ---
 
@@ -38,77 +61,70 @@ Changes from v1: user chat panel is **free to all logged-in loader users** (not 
 ```mermaid
 flowchart LR
     subgraph Client["PyQt5 loader (user machine)"]
-        UI["Chat panel (QWebEngineView)"]
+        UI["Chat modal (QWebEngineView)"]
     end
 
-    subgraph Discord["Discord"]
-        ASK["/ask (any user)"]
+    subgraph Discord["Discord (guild 1513193335697838181)"]
+        ASK["/ask (any member)"]
         DEV["/develop (owner-only)"]
         CREATE["/create (owner-only)"]
     end
 
-    subgraph CloudRun["Cloud Run"]
-        API["FastAPI /ai/ask, /ai/chat"]
-        BOT["SG Discord bot (discord.py)"]
-        RAG["pgvector on Cloud SQL"]
+    subgraph CloudRun["Cloud Run · us-central1"]
+        SG["steamguard (existing) — FastAPI + Discord bot"]
+        LL["sg-litellm (new)"]
     end
 
-    subgraph VM["Always-on Fly Machine or GCE VM"]
-        FCC["free-claude-code proxy :8000"]
+    subgraph GCS["GCS"]
+        BUCKET["sg-rag-index (Chroma persist dir)"]
+    end
+
+    subgraph VM["GCE · sg-devbox (e2-small, us-central1-a)"]
+        FCC["free-claude-code :8000"]
         CC["Claude Code CLI (headless)"]
-        REPO[["SteamGuard git checkout"]]
+        REPO[["SteamGuard git worktrees"]]
+        HOOK["signed webhook :8443"]
     end
 
     subgraph GHA["GitHub Actions"]
         CI["Tests + lint"]
-        HEAL["ai-heal.yml → curl FCC → Claude Code"]
+        HEAL["ai-heal.yml → HMAC POST to VM"]
     end
 
-    subgraph Sandbox["E2B sandbox (per /create)"]
-        BOX["Claude Code inside firecracker microVM"]
+    subgraph Sandbox["E2B (per /create)"]
+        BOX["Claude Code in firecracker microVM"]
     end
 
-    subgraph NIM["NVIDIA NIM (integrate.api.nvidia.com/v1)"]
+    subgraph NIM["NVIDIA NIM"]
         GLM["z-ai/glm-5.2"]
         NEM["nvidia/nemotron-3-super"]
         DS["deepseek-ai/deepseek-v4-pro"]
         EMB["nvidia/nv-embedqa-e5-v5"]
     end
 
-    subgraph LiteLLM["LiteLLM proxy (user-facing)"]
-        LL["Model routing + virtual keys"]
-    end
-
-    UI -->|HTTPS + license token| API
-    ASK --> BOT
-    DEV --> BOT
-    CREATE --> BOT
-    API --> LiteLLM
-    BOT --> LiteLLM
-    BOT -->|/develop, /create| VM
-    LiteLLM --> NIM
-    VM --> NIM
+    UI -->|HTTPS + JWT| SG
+    ASK --> SG
+    DEV --> SG
+    CREATE --> SG
+    SG -->|Chroma reads| BUCKET
+    SG --> LL
+    SG -->|HMAC| HOOK
+    HOOK --> CC
     CC --> FCC --> NIM
     CC --- REPO
+    LL --> NIM
     CI -- on failure --> HEAL
-    HEAL --> VM
+    HEAL -->|HMAC| HOOK
     Sandbox --> FCC
 ```
 
-**Two inference paths, one NIM key:**
-
-1. **User-facing surfaces** (loader chat, `/ask`, RAG) → **LiteLLM proxy** on Cloud Run → NIM. Direct OpenAI-compat calls. Lightweight, stateless, scales to zero.
-2. **Developer surfaces** (self-heal CI, `/develop`, `/create`) → **free-claude-code proxy** on a small always-on VM → NIM. Speaks Anthropic Messages API to Claude Code CLI, which does the actual code editing.
-
-**Why not Cloud Run for FCC?** Its README explicitly says *"Do not open Docker integration PRs"* — the project targets local/VM installs with `uv`. Claude Code also needs a stateful working directory with a checked-out git tree. Cloud Run's ephemeral-container model fights both. A single small VM (Fly Machine at ~$2/mo shared CPU, or a `e2-small` GCE VM at ~$13/mo) is the right home. You already use GCP so a GCE VM in the same project as Cloud Run is the path of least resistance — but Fly Machines are cheaper and per-second billed. **Recommendation: Fly Machine.**
-
-**Models per surface** (defaults, swappable):
+**Models per surface** (swappable via LiteLLM/FCC config):
 
 | Surface | Model | Why |
 |---|---|---|
-| Self-heal + `/develop` (Claude Code via FCC) | `z-ai/glm-5.2` | Best open-weight SWE-bench Pro / Terminal-Bench; agentic reasoning + tool use |
+| Self-heal + `/develop` (Claude Code via FCC) | `z-ai/glm-5.2` | Leading open-weight SWE-bench Pro / Terminal-Bench |
 | User `/ask` + loader chat (RAG) | `nvidia/nemotron-3-super-120b-a12b` | NIM-native TensorRT throughput/cost for grounded Q&A |
-| `/create` code generation | `deepseek-ai/deepseek-v4-pro` | Highest raw coding accuracy; most permissive for low-level/systems code |
+| `/create` code generation | `deepseek-ai/deepseek-v4-pro` | Highest raw coding accuracy; permissive for low-level code |
 | Embeddings | `nvidia/nv-embedqa-e5-v5` | Same NIM key, `input_type=passage/query` |
 
 ---
@@ -120,72 +136,74 @@ ai/
   __init__.py
   client.py                # OpenAI() factory pointed at LiteLLM
   prompts/
-    ask_system.md          # RAG system prompt for user Q&A
-    create_system.md       # /create sandbox system prompt
-    develop_system.md      # /develop system prompt (Claude Code-facing)
+    ask_system.md
+    develop_system.md
+    create_system.md
   rag/
-    ingest.py              # markdown → chunks → embeddings → pgvector
+    ingest.py              # markdown → chunks → embeddings → Chroma → GCS
     retrieve.py
-    schema.sql
+    chroma_gcs.py          # thin GCS-backed persistent client
 
 server/
   routes/
-    ai_ask.py              # POST /ai/ask   (RAG, license-token gated)
-    ai_chat.py             # POST /ai/chat  (multi-turn, session-scoped)
+    ai_ask.py              # POST /ai/ask (JWT-gated, RAG, streaming)
+    ai_chat.py             # POST /ai/chat (multi-turn, session-scoped)
+    ai_hooks.py            # /internal/develop, /internal/heal (HMAC-signed)
   bot/
     cogs/
-      ask_cog.py           # /ask   (any guild member)
-      develop_cog.py       # /develop (owner-gated, forwards to VM)
-      create_cog.py        # /create (owner-gated, forwards to E2B)
+      ask_cog.py           # /ask
+      develop_cog.py       # /develop  (owner-gated, forwards to VM webhook)
+      create_cog.py        # /create   (owner-gated, forwards to E2B)
 
-vm/                        # deployed to Fly Machine, NOT Cloud Run
-  README.md                # how to deploy FCC + Claude Code
-  fly.toml
-  Dockerfile.fcc           # minimal wrapper around free-claude-code
+vm/                        # deployed to GCE sg-devbox, NOT Cloud Run
+  README.md
+  cloud-init.yaml          # provisions uv + FCC + Claude Code + webhook svc
   fcc-config/
-    settings.yaml          # provider = nim, model routing
+    settings.yaml          # provider=nim, model=z-ai/glm-5.2
   develop-webhook/
-    server.py              # tiny FastAPI that receives /develop + /heal jobs
-                           # from the Cloud Run bot and runs Claude Code
-                           # against a git worktree
+    server.py              # FastAPI on :8443, HMAC-signed
+    path_guard.py          # enforces auto-commit allow-list
 
 sandbox/
-  create_runner.py         # spawns E2B sandbox, injects FCC endpoint,
-                           # runs Claude Code with prompt, zips output
-  Dockerfile.claude        # E2B image with Claude Code + FCC client
+  create_runner.py         # E2B orchestration (called from create_cog.py)
+  Dockerfile.claude        # image with Claude Code + FCC client
 
 .github/
   workflows/
-    ai-heal.yml            # on CI failure, calls VM webhook with logs
+    ai-heal.yml            # on workflow_run failure → HMAC POST to VM
   CODEOWNERS
   AGENTOWNERS.md
 
 deploy/
   litellm/
-    config.yaml            # user-facing routing (NIM primary + fallbacks)
+    config.yaml
+    Dockerfile
+    cloudrun.yaml          # sg-litellm service manifest
+  cloudrun/
+    steamguard.yaml.patch  # patch existing steamguard service to add
+                           # SG_HEAL_APP_ID etc. env bindings
 
 docs/
   AI_INTEGRATION_PLAN.md   # this document
-  AI_USAGE.md              # user help for chat panel + /ask
+  AI_USAGE.md              # end-user help for /ask + chat modal
   AI_AGENT_RULES.md        # what agents may/may not touch
 ```
 
-Client-side additions (loader):
+Client-side (loader):
 
 ```
 loader/
   ai/
-    chat_panel.py          # QWebEngineView-hosted chat
-    chat_ui/index.html     # streaming widget (markdown + code blocks)
-    chat_ui/chat.js
-    chat_ui/chat.css
+    chat_panel.py          # QWebEngineView modal launched from "?" button
+    chat_ui/
+      index.html
+      chat.js
+      chat.css
 ```
 
 ---
 
-## 5. LiteLLM Configuration (`deploy/litellm/config.yaml`)
-
-Same as v1 — user-facing surfaces only:
+## 5. LiteLLM Config (`deploy/litellm/config.yaml`)
 
 ```yaml
 model_list:
@@ -204,11 +222,6 @@ model_list:
       model: nvidia_nim/deepseek-ai/deepseek-v4-pro
       api_key: os.environ/NVIDIA_NIM_API_KEY
 
-  - model_name: sg-code-fast
-    litellm_params:
-      model: nvidia_nim/deepseek-ai/deepseek-v4-flash
-      api_key: os.environ/NVIDIA_NIM_API_KEY
-
   - model_name: sg-embed
     litellm_params:
       model: nvidia_nim/nvidia/nv-embedqa-e5-v5
@@ -216,7 +229,7 @@ model_list:
 
 router_settings:
   fallbacks:
-    - sg-primary: ["sg-code", "sg-code-fast"]
+    - sg-primary: ["sg-code"]
     - sg-rag:     ["sg-primary"]
   num_retries: 2
   request_timeout: 30
@@ -228,31 +241,19 @@ general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
+Deployed as new Cloud Run service **`sg-litellm`** in `us-central1`, private ingress only, invocable only by the `steamguard` service's SA (`775181381055-compute@developer.gserviceaccount.com`).
+
 Reference: [LiteLLM NIM provider docs](https://docs.litellm.ai/docs/providers/nvidia_nim).
 
 ---
 
-## 6. free-claude-code Deployment (developer surfaces)
+## 6. free-claude-code on GCE `sg-devbox`
 
-Adopted from [Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code). MIT-licensed FastAPI middleware that speaks Anthropic Messages API to Claude Code CLI and translates the calls to NIM (or 20+ other providers). Its own tagline: *"Middleware between Claude Code CLI (Anthropic API) and NVIDIA NIM"*.
+`e2-small` VM in `us-central1-a` in the same project, ~$13/mo. Provisioned via `cloud-init.yaml` — installs `uv`, `free-claude-code`, Claude Code CLI, deploys the webhook FastAPI as a systemd unit.
 
-**Why this instead of Aider (v1 recommendation):**
-- Gives you the actual Claude Code CLI + VS Code extension experience — best-in-class autonomous coding agent UX today — but on your free NIM key.
-- Ships with a built-in Discord bot that runs Claude Code sessions remotely with `/stop`, `/clear`, `/stats` commands — much of the `/develop` UX is already built.
-- Also fronts Codex CLI (OpenAI Responses API shape) for a second opinion / A-B testing.
-- MIT license, Python 3.14, active development.
+**Why not Cloud Run for this piece:** FCC's README explicitly says *"Do not open Docker integration PRs"*. Claude Code needs a persistent working directory with a real git checkout. Cloud Run's ephemeral model fights both.
 
-**Deployment layout** (`vm/`):
-
-- Fly Machine, `shared-cpu-1x@256mb` region `iad` (near GitHub webhooks).
-- Runs `uv run fcc-server` in the foreground (per FCC's Quick Start).
-- FCC's Admin UI is bound to loopback only — expose it through Fly's `wireguard` for admin, never publicly.
-- A tiny FastAPI companion (`develop-webhook/server.py`) receives:
-  - `POST /heal` from GitHub Actions with CI logs + PR/branch context.
-  - `POST /develop` from the SG Discord bot with the owner's prompt.
-  - Both do: `git fetch && git worktree add …` for the target branch, then invoke Claude Code headless (`fcc-claude --prompt "…" --allow-write`) inside that worktree, then push.
-
-**FCC provider config** (`vm/fcc-config/settings.yaml`, applied via Admin UI on first run):
+**FCC provider config** (`vm/fcc-config/settings.yaml`):
 
 ```yaml
 provider: nim
@@ -262,66 +263,55 @@ api_key_env: NVIDIA_NIM_API_KEY
 
 messaging:
   platform: discord
-  discord_bot_token_env: SG_DEV_BOT_TOKEN     # separate from user-facing bot
+  discord_bot_token_env: SG_DEV_BOT_TOKEN   # reuses the same bot app,
+                                            # scoped to owner DM channel
   allowed_discord_channels: ["<owner-DM-channel-id>"]
   allowed_directory: /workspace/SteamGuard
 ```
 
-**Two Discord bots on purpose:**
-- The user-facing SG bot (`/ask`) lives on Cloud Run and never has git access.
-- FCC's built-in dev bot (`/stop`, `/clear`, `/stats` + free-form Claude Code sessions) lives on the Fly Machine with repo write access, and is scoped to your DM channel only.
-
-`/develop` in the SG bot forwards to the VM webhook and returns the PR URL; direct interactive Claude Code sessions still happen through FCC's own bot in your DM channel — you get both automated ticketed workflow and free-form REPL.
+Note: same `DISCORD_BOT_TOKEN` value from Secret Manager is used for FCC's built-in DM bot (surfaced there as `SG_DEV_BOT_TOKEN`), but restricted to the owner's DM channel. The Cloud-Run-hosted SG bot handles guild slash commands.
 
 ---
 
 ## 7. Phased Rollout
 
-### Phase 1 — User-facing `/ask` + loader chat panel (safest, ships first)
+### Phase 1 — `/ask` + loader chat panel (ships first, safest)
 
-1. Rotate the leaked NIM key. Store in Cloud Run secrets and GitHub Actions.
-2. Stand up LiteLLM on Cloud Run (private ingress) with `deploy/litellm/config.yaml`.
-3. `CREATE EXTENSION vector` on existing Cloud SQL; create `docs_chunks` table.
-4. `ai/rag/ingest.py` — runs on release, embeds all of `docs/` via `sg-embed`.
-5. `POST /ai/ask` in FastAPI — retrieves top-k chunks, calls `sg-rag`, streams response. Auth = existing license token so it's free to all logged-in users but not anonymous.
-6. Add `/ask` slash cog in the SG Discord bot.
-7. Build the `QWebEngineView` chat panel in the loader; wire to `/ai/ask`.
-8. Ship behind `AI_ASK_ENABLED` feature flag.
+1. Deploy new Cloud Run service **`sg-litellm`** with `deploy/litellm/cloudrun.yaml`. Env: `NVIDIA_NIM_API_KEY` from Secret Manager. Ingress: internal. Invoker: `775181381055-compute@developer.gserviceaccount.com` only.
+2. Create GCS bucket **`sg-rag-index`** in `us-central1` for Chroma persistence.
+3. `ai/rag/ingest.py` — on release, embed `docs/**/*.md` with `sg-embed` and persist to Chroma at `gs://sg-rag-index/`.
+4. `POST /ai/ask` in `steamguard` — validates existing JWT session token, retrieves top-k from Chroma, calls `sg-litellm` model `sg-rag`, streams response.
+5. `/ask` slash command in the existing SG Discord bot, guild-scoped to `1513193335697838181` for instant sync.
+6. PyQt5 chat modal in the loader (`QWebEngineView`), launched from a "?" button. Calls `/ai/ask` with the existing session token.
+7. Feature-flagged with `AI_ASK_ENABLED=true` (env var on the `steamguard` service) so rollout is reversible.
 
-### Phase 2 — Self-healing CI + `/develop` (both use FCC on the VM)
+### Phase 2 — Self-heal CI + `/develop`
 
-1. Create a dedicated GitHub App (`rivvak-sg-heal-bot`); install on `rivvak/SteamGuard` only. `contents:write` fine-grained scope, one repo.
-2. Spin up the Fly Machine, `uv tool install free-claude-code`, verify Claude Code CLI installs cleanly, configure FCC pointed at NIM via Admin UI over WireGuard.
-3. Deploy `vm/develop-webhook/server.py` on the same VM, listening on a signed webhook endpoint (HMAC with a shared secret in GitHub Actions + Cloud Run).
-4. Configure FCC's own Discord bot with `SG_DEV_BOT_TOKEN` + your DM channel ID — this is the free-form Claude Code REPL in Discord.
-5. `.github/workflows/ai-heal.yml` — on `workflow_run` failure, POSTs logs + branch to the VM webhook. VM checks out a worktree, runs Claude Code, path-guards the diff (§8), commits + pushes, or opens a PR.
-6. `/develop <prompt>` cog in the SG Discord bot — POSTs to the same webhook with `mode=develop`. VM creates `ai/develop/<slug>` branch, runs Claude Code, opens PR, returns URL.
-7. Dry-run everything on `tests/` and `docs/` before allowing any path in the auto-commit allow-list.
+1. Provision GCE VM `sg-devbox` from `vm/cloud-init.yaml`. Bind service account with `roles/secretmanager.secretAccessor` on `SG_HEAL_*` and `NVIDIA_NIM_API_KEY`.
+2. VM starts FCC (`uv run fcc-server`) + the signed webhook (`develop-webhook/server.py`) on `:8443` (mTLS internally, HMAC on the payload).
+3. `.github/workflows/ai-heal.yml` — on `workflow_run` failure, POSTs `{sha, branch, workflow_run_id, logs_url}` HMAC-signed to VM.
+4. VM webhook: creates `git worktree` on a `ai/heal/<sha>` branch, runs Claude Code headless with model `sg-primary`, path-guards the diff. If diff ⊆ allow-list → commit directly to `main` and push. Otherwise → push branch and open PR via GitHub App token, auto-request review from `@rivvak`.
+5. `/develop <prompt>` cog in the SG Discord bot → HMAC-signed POST to VM webhook with `mode=develop`. VM runs Claude Code on `ai/develop/<slug>`, opens PR, returns URL to Discord.
+6. Enable branch protection on `main` with `bypass_pull_request_allowances` restricted to the GitHub App identity.
 
-### Phase 3 — `/create` sandboxed code-gen
+### Phase 3 — `/create`
 
-1. Sign up for E2B — the $100 free hobby credit is more than enough (see [E2B pricing](https://e2b.dev/pricing)).
-2. Build `sandbox/Dockerfile.claude` — includes Claude Code CLI + FCC client + the NIM key mounted at runtime (never baked in).
-3. `sandbox/create_runner.py` — on `/create` from your Discord user ID (double-checked server-side + `@app_commands.default_permissions(administrator=True)` for UI hiding), spins up E2B sandbox, runs Claude Code with the prompt, waits for completion, zips the output tree, replies with the zip as a Discord attachment.
-4. Discord free-tier upload cap is 25 MB. If output exceeds that, fall back to uploading to a temporary private gist and returning the URL.
-5. Rate limit: 5 invocations/hour to keep sandbox spend bounded.
+1. E2B account ($100 hobby credit; see [E2B pricing](https://e2b.dev/pricing)).
+2. Build `sandbox/Dockerfile.claude` (Claude Code CLI + FCC client; NIM key injected at runtime, not baked in).
+3. `create_runner.py` orchestrates: owner ID double-check → spin up E2B sandbox → run Claude Code with prompt → zip output tree → Discord reply as attachment (fallback: private gist if >25 MB).
+4. Rate limit 5/hour on owner ID.
 
 ---
 
 ## 8. Security & Guardrails
 
-### Files agents must never modify
+### Files agents must never touch
 
-Enforced by (a) a pre-commit path guard on the VM before it pushes anything, (b) CODEOWNERS on GitHub requiring human review, (c) `AGENTOWNERS.md` as a prompt-level rule Claude Code is instructed to read.
+Enforced at three layers: (a) VM-side pre-commit path guard, (b) CODEOWNERS on GitHub, (c) `AGENTOWNERS.md` read by Claude Code.
 
-1. **License validation** — entitlement checks, key verification, subscription state.
-2. **HWID / hardware fingerprinting** — machine-binding and anti-sharing logic.
-3. **Certificate pinning / TLS trust** — a "helpful" relaxation is a critical vulnerability.
-4. **Secrets** — `.env*`, `*.pem`, `*.key`, service-account JSON.
-5. **CI/CD** — `.github/workflows/**`, deploy keys, Cloud Run bindings. The agent must never grant itself broader permissions by editing its own pipeline.
-6. **Anti-tamper / signing** — packing, obfuscation, code-signing steps.
+Categories: license validation, HWID / fingerprinting, cert pinning / TLS trust, secrets, CI/CD, anti-tamper / signing.
 
-Concrete SteamGuard paths currently in the deny-list:
+Concrete paths in the deny-list:
 
 ```
 auth/**
@@ -344,101 +334,90 @@ scripts/build*
 ```
 docs/**
 tests/**
+dashboard/**
 **/*.md
 requirements*.txt
 requirements_client.txt
-pyproject.toml       # dep bumps only; build-system edits require PR
+pyproject.toml
 ```
 
-Anything outside this list → PR + CODEOWNERS review, no exceptions.
+Anything outside → PR + CODEOWNERS review.
 
 ### `/develop` behavior
 
-- **Default:** commits to `ai/develop/<slug>` branch, opens PR, tags you for review. No direct push to `main`.
-- **`--push-main` flag:** allowed **only** when every changed path is in the auto-commit allow-list; otherwise the flag is rejected server-side and the run pivots to PR mode. This gives you a fast path for docs/test fixes while keeping guardrails intact.
+- Default: opens PR on `ai/develop/<slug>`, auto-requests review from `@rivvak`.
+- `--push-main`: honored only if every changed path is in the allow-list; otherwise silently pivots to PR mode.
 
-### GitHub token hygiene
+### GitHub App token hygiene
 
-- Fine-grained PAT or GitHub App, **one repo**, `contents:write` only. No `workflows` write.
-- 30-day expiration, calendared rotation.
-- Stored on the Fly Machine via `fly secrets` and in GitHub Actions secrets — never in code or logs.
-- Bot has an SSH signing key so every commit is cryptographically attributable.
-- Reference: [GitHub fine-grained PAT introduction](https://github.blog/security/application-security/introducing-fine-grained-personal-access-tokens-for-github/).
+- `rivvak-sg-heal` (App ID `4249863`, Installation ID `145288024`) — one repo, `contents:write` + `pull_requests:write`, no `workflows` write.
+- Private key stored only in Secret Manager (`SG_HEAL_PRIVATE_KEY`). Access granted to `775181381055-compute@developer.gserviceaccount.com` (Cloud Run) and the `sg-devbox` VM SA.
+- Installation tokens minted at runtime, ~1 hour TTL, never persisted.
+- Every commit signed with the VM's SSH signing key; tagged `[ai-heal]` or `[ai-develop]` in the subject for auditability.
+- Reference: [GitHub fine-grained PAT / App guidance](https://github.blog/security/application-security/introducing-fine-grained-personal-access-tokens-for-github/).
 
 ### End-user assistant safety
 
-- `/ai/ask` requires a valid loader session token — no anonymous calls.
-- System prompt refuses to reveal license internals, HWID logic, or admin details. Retrieval is restricted to `docs/`.
-- Per-user rate limit (30 req/hour) at the FastAPI layer.
+- `/ai/ask` requires valid JWT session token (same middleware as other license-gated routes) — no anonymous calls.
+- System prompt refuses to reveal license internals, HWID, admin dashboard details. Retrieval scoped to `docs/`.
+- Per-user 30 req/hour.
 
 ### `/create` isolation
 
-- Fresh E2B firecracker microVM per invocation — no persistent state, no network access to Cloud Run internals.
-- Sandbox only holds the NIM virtual key `sg-code`. No GitHub token — output is zipped and returned; nothing gets pushed anywhere unless you explicitly do it afterward.
-- Owner-ID check enforced server-side in the bot; Discord's UI hiding is defense-in-depth.
+- Fresh E2B firecracker microVM per invocation. No persistent state; no network access to Cloud Run internals.
+- Sandbox holds only the NIM virtual key for `sg-code`. No GitHub token.
+- Owner-ID check enforced server-side in the bot; Discord UI hiding via `default_permissions(administrator=True)` is defense-in-depth.
 
 ---
 
 ## 9. Cost Notes
 
-- **NIM free developer tier**: ~40 RPM per model, no per-token billing, keys valid 6 months. Sufficient for early usage.
-- **LiteLLM proxy on Cloud Run**: ~$5/mo idle.
-- **pgvector on existing Cloud SQL**: no extra cost.
-- **Fly Machine for FCC**: `shared-cpu-1x@256mb` ≈ $2/mo. Persistent volume for the repo checkout ≈ $0.15/GB/mo (1 GB = negligible).
-- **E2B**: Hobby $100 one-time credit; at ~5–20 `/create` runs/month the credit lasts about a year.
-- **Actions**: negligible; each self-heal run is a webhook + a few seconds of workflow.
+- NIM free tier: ~40 RPM/model, no per-token billing, keys valid 6 months.
+- `sg-litellm` on Cloud Run: ~$5/mo idle.
+- Chroma persist volume on GCS: negligible (< $0.02/mo).
+- GCE `sg-devbox` (`e2-small`): ~$13/mo + ~$0.04/mo disk.
+- E2B: $100 hobby credit → ~1 year at expected volume.
 
-Total expected marginal cost at steady state: **< $10–15/mo** across all three phases.
-
----
-
-## 10. Open Decisions (resolved from prior turns)
-
-- ✅ **Loader chat panel is free to all logged-in loader users**, license-token-gated (not anonymous, not paywalled). Rate-limited at 30 req/hour.
-- ✅ **`/create` always returns a zip attachment** in Discord; falls back to a temporary private gist URL only if output > 25 MB.
-- ✅ **`/develop` is the new owner-only repo-editing command** — Claude Code via FCC → NIM, defaults to PR, `--push-main` allowed only inside the allow-list.
-- ✅ **free-claude-code adopted** as the developer-side agent runner instead of Aider (v1's pick). Gets you the real Claude Code CLI experience on your NIM key.
-- **Deploy target for FCC**: Fly Machine, not Cloud Run — FCC explicitly does not support Docker/Cloud-Run-style deploys and Claude Code needs a persistent working directory. Cloud Run keeps hosting LiteLLM + FastAPI + user-facing bot as originally planned.
+Steady-state marginal: **~$20/mo** across all three phases.
 
 ---
 
-## 11. Rollout Checklist
+## 10. Rollout Checklist
 
-- [ ] **Phase 0 — prerequisites**
-  - [ ] Rotate the leaked NIM key at build.nvidia.com
-  - [ ] Store new key in Cloud Run secrets + GitHub Actions + Fly secrets
-  - [ ] Create bot GitHub App with fine-grained scope
-- [ ] **Phase 1 — /ask + loader chat**
-  - [ ] Deploy LiteLLM to Cloud Run (private)
-  - [ ] Provision pgvector, run `ingest.py`
-  - [ ] Ship `POST /ai/ask`
-  - [ ] Ship SG bot `/ask` cog
-  - [ ] Ship PyQt5 chat panel behind `AI_ASK_ENABLED`
-- [ ] **Phase 2 — self-heal + /develop (both via FCC on Fly)**
-  - [ ] Provision Fly Machine, install FCC, verify Claude Code end-to-end
-  - [ ] Deploy `develop-webhook/server.py` on the same VM (HMAC-signed)
-  - [ ] Configure FCC's own Discord bot for your DM channel (free-form REPL)
-  - [ ] Add CODEOWNERS + AGENTOWNERS.md + path-guard on the VM
+- [x] **Phase 0 — prerequisites**
+  - [x] NIM key present in Secret Manager (`NVIDIA_NIM_API_KEY`) — reused despite chat exposure per owner decision
+  - [x] Discord token secret confirmed: `DISCORD_BOT_TOKEN`
+  - [x] GitHub App `rivvak-sg-heal` created (App ID `4249863`, Installation `145288024`) on repo only
+  - [x] Secrets stored: `SG_HEAL_APP_ID`, `SG_HEAL_INSTALLATION_ID`, `SG_HEAL_PRIVATE_KEY`
+  - [x] Secret Accessor granted to `775181381055-compute@developer.gserviceaccount.com`
+- [ ] **Phase 1 — /ask + loader chat**  ← *in progress, opens as one PR*
+  - [ ] Deploy `sg-litellm` Cloud Run service
+  - [ ] Create GCS bucket `sg-rag-index`
+  - [ ] Ship `ai/rag/*`, `POST /ai/ask`, `/ask` cog
+  - [ ] Ship PyQt5 chat modal behind `AI_ASK_ENABLED`
+- [ ] **Phase 2 — self-heal + /develop**
+  - [ ] Provision GCE `sg-devbox`
+  - [ ] Deploy webhook + FCC + Claude Code + path guard
+  - [ ] Add CODEOWNERS + AGENTOWNERS.md
   - [ ] Add `.github/workflows/ai-heal.yml`
-  - [ ] Configure branch protection with narrow `bypass_pull_request_allowances` for the bot
-  - [ ] Ship SG bot `/develop` cog forwarding to the VM webhook
-  - [ ] Dry-run on `tests/` before enabling allow-listed paths
+  - [ ] Enable branch protection with narrow bypass for the App
+  - [ ] Ship `/develop` cog
+  - [ ] Dry-run on `tests/` before enabling allow-listed pushes
 - [ ] **Phase 3 — /create**
-  - [ ] E2B account, build `Dockerfile.claude` image
-  - [ ] Ship `sandbox/create_runner.py`
-  - [ ] Ship SG bot `/create` cog with owner-ID + `default_permissions` gate
+  - [ ] E2B account + `Dockerfile.claude`
+  - [ ] Ship `create_runner.py` + `/create` cog
   - [ ] Rate limit + spend cap
 
 ---
 
 ## Appendix — References
 
-- [free-claude-code](https://github.com/Alishahryar1/free-claude-code) — the Anthropic-API proxy in front of NIM. MIT license.
-- NIM catalog: [build.nvidia.com/models](https://build.nvidia.com/models); [NIM API guide](https://jaesolshin.com/posts/nvidia-nim-api/)
-- Open-weight coding benchmarks (GLM-5.2 vs DeepSeek V4 vs Qwen3): [Developers Digest](https://www.developersdigest.tech/blog/glm-5-2-vs-deepseek-v4-vs-qwen3-open-weights-coding-showdown)
-- LiteLLM NIM provider: [docs.litellm.ai](https://docs.litellm.ai/docs/providers/nvidia_nim); reliability/fallbacks: [reliability docs](https://docs.litellm.ai/docs/proxy/reliability)
-- Agentic CI/CD patterns: [AgentMarketCap on GitHub Agentic Workflows](https://agentmarketcap.ai/blog/2026/04/07/github-actions-agentic-ci-cd-ai-native-pipelines); [Zylos AI-agent code governance](https://zylos.ai/zh/research/2026-06-28-ai-agent-code-governance-branch-protection-review-gates/)
-- GitHub fine-grained PATs: [github.blog announcement](https://github.blog/security/application-security/introducing-fine-grained-personal-access-tokens-for-github/)
-- Sandbox comparison for `/create`: [AgentMarketCap sandbox roundup](https://agentmarketcap.ai/blog/2026/04/07/ai-agent-sandbox-infrastructure-e2b-modal-daytona-fly-machines-secure-code-execution); [E2B pricing](https://e2b.dev/pricing)
+- [free-claude-code](https://github.com/Alishahryar1/free-claude-code) — MIT-licensed Anthropic-Messages proxy in front of NIM.
+- NIM catalog: [build.nvidia.com/models](https://build.nvidia.com/models); [API guide](https://jaesolshin.com/posts/nvidia-nim-api/)
+- Open-weight coding benchmarks: [Developers Digest — GLM 5.2 vs DeepSeek V4 vs Qwen3](https://www.developersdigest.tech/blog/glm-5-2-vs-deepseek-v4-vs-qwen3-open-weights-coding-showdown)
+- LiteLLM NIM provider: [docs.litellm.ai](https://docs.litellm.ai/docs/providers/nvidia_nim); [reliability/fallbacks](https://docs.litellm.ai/docs/proxy/reliability)
+- GitHub Apps auth: [Authenticating as a GitHub App](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
+- Agentic CI/CD governance: [AgentMarketCap](https://agentmarketcap.ai/blog/2026/04/07/github-actions-agentic-ci-cd-ai-native-pipelines); [Zylos](https://zylos.ai/zh/research/2026-06-28-ai-agent-code-governance-branch-protection-review-gates/)
+- Sandboxes: [E2B pricing](https://e2b.dev/pricing); [AgentMarketCap sandbox roundup](https://agentmarketcap.ai/blog/2026/04/07/ai-agent-sandbox-infrastructure-e2b-modal-daytona-fly-machines-secure-code-execution)
 - Discord slash commands: [discord.py masterclass](https://fallendeity.github.io/discord.py-masterclass/slash-commands/)
-- CODEOWNERS: [GitHub docs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners); [Agent Rule Gen guide](https://agentrulegen.com/guides/how-to-protect-files-from-ai-agents)
+- CODEOWNERS: [GitHub docs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
