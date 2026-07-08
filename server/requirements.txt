@@ -5,3 +5,8 @@ pydantic==2.7.1
 google-cloud-firestore==2.16.0
 python-jose[cryptography]==3.3.0
 aiofiles==23.2.1
+
+# --- Phase 1: /ai/ask ---
+openai>=1.40.0
+chromadb>=0.5.0
+google-cloud-storage>=2.14.0

@@ -1,0 +1,86 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #161a22;
+  --border: #262b36;
+  --text: #e6e8ee;
+  --muted: #8a92a3;
+  --accent: #4b9fff;
+  --user: #1c3a5f;
+  --assistant: #1e2330;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+header .sub { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+#log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.msg.user { background: var(--user); align-self: flex-end; max-width: 80%; }
+.msg.assistant { background: var(--assistant); align-self: flex-start; max-width: 92%; }
+.msg .sources { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.msg pre { background: #0a0d13; padding: 8px; border-radius: 6px; overflow-x: auto; }
+.msg code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12px; }
+
+#composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+#q {
+  flex: 1;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+#q:focus { outline: none; border-color: var(--accent); }
+#send {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-weight: 600;
+}
+#send:disabled { opacity: 0.5; cursor: default; }
