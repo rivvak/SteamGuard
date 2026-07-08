@@ -395,6 +395,20 @@ def _get_iso_week() -> str:
 
 app = FastAPI(title="SteamGuard License Server", docs_url=None, redoc_url=None)
 
+# ── AI Assistant router (Phase 1) ─────────────────────────────────────────────
+# POST /ai/ask — RAG-backed Q&A. Feature-flagged via env AI_ASK_ENABLED.
+# Auth: HMAC(SECRET_KEY, "key:hwid") — same scheme as /verify. Bot path uses
+# X-Admin-Key header. Import is wrapped so a missing dep (openai/chromadb)
+# never breaks the license server.
+try:
+    from server.routes.ai_ask import router as _ai_ask_router  # noqa: E402
+    app.include_router(_ai_ask_router)
+except Exception as _ai_e:  # pragma: no cover
+    import logging as _ai_log
+    _ai_log.getLogger(__name__).warning(
+        "AI router not mounted: %s (this is fine if AI_ASK_ENABLED=false)", _ai_e
+    )
+
 # ── Dashboard static files ─────────────────────────────────────────────────
 import os as _os
 _dashboard_path = _os.path.abspath(

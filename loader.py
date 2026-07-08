@@ -1866,6 +1866,70 @@ class Dashboard(QWidget):
         self._stack.addWidget(self._build_settings_tab())     # 3
         main.addWidget(self._stack, 1)
 
+        # ── AI chat "?" button (Phase 1) ───────────────────────────────────────────────────
+        # Overlay floating "?" pinned to the bottom-right corner. Wrapped in
+        # try/except so a missing PyQtWebEngine or module import failure never
+        # breaks the dashboard load.
+        try:
+            self._ai_help_btn = QPushButton("?", self)
+            self._ai_help_btn.setFixedSize(44, 44)
+            self._ai_help_btn.setCursor(Qt.PointingHandCursor)
+            self._ai_help_btn.setToolTip("Ask the SteamGuard assistant")
+            self._ai_help_btn.setStyleSheet(
+                "QPushButton { border-radius: 22px; background: #3B82F6; "
+                "color: white; font-size: 20pt; font-weight: 700; border: none; } "
+                "QPushButton:hover { background: #60A5FA; } "
+                "QPushButton:pressed { background: #2563EB; }"
+            )
+            self._ai_help_btn.clicked.connect(self._open_ai_chat)
+            self._ai_help_btn.raise_()
+            self._position_ai_help_btn()
+        except Exception as _e:
+            self._ai_help_btn = None
+
+    def _position_ai_help_btn(self):
+        if getattr(self, "_ai_help_btn", None):
+            self._ai_help_btn.move(self.width() - 60, self.height() - 60)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_ai_help_btn()
+
+    def _open_ai_chat(self):
+        """Open the AI chat modal. Import lazily to avoid a hard PyQtWebEngine
+        dep at loader startup."""
+        try:
+            from loader.ai.chat_panel import open_chat_modal
+            from auth.hwid import get_hwid
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "AI Assistant",
+                f"Chat panel unavailable: {e}\n\n"
+                "Try reinstalling with PyQtWebEngine included.",
+            )
+            return
+        key = self._session.get("key", "")
+        if not key:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "AI Assistant",
+                "You must be signed in with an active license to use the assistant.",
+            )
+            return
+        try:
+            hwid = get_hwid()
+        except Exception as e:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "AI Assistant", f"Could not read HWID: {e}")
+            return
+        open_chat_modal(
+            parent=self,
+            key=key,
+            hwid=hwid,
+            server_url=self._server,
+        )
+
     def _switch_tab(self, idx):
         self._sidebar.set_active(idx)
         self._stack.setCurrentIndex(idx)
