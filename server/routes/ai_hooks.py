@@ -56,6 +56,14 @@ class DevelopBody(BaseModel):
     thread_id: Optional[str] = None
 
 
+class CreateBody(BaseModel):
+    discord_user_id: str
+    prompt: str = Field(min_length=1, max_length=32000)
+    model: Optional[str] = None
+    max_turns: int = 200
+    max_thinking_tokens: int = 32000
+
+
 class HealBody(BaseModel):
     run_id: str
     head_sha: str
@@ -172,6 +180,128 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
             "initiator": body.discord_user_id,
         }
     )
+
+
+_ENABLED_CREATE = os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
+_CREATE_RATE = int(os.environ.get("AI_CREATE_RATE_PER_DAY", "20"))
+
+
+async def _devbox_request(method: str, path: str, json_body: Optional[dict] = None) -> dict:
+    """Generic devbox HTTP call over IAP tunnel (or direct in dev). Used by
+    /create + /create/status — the /develop path uses `_post_session` which
+    is specialised for the synchronous /session endpoint."""
+    if _DEVBOX_URL_DIRECT:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.request(
+                method, f"{_DEVBOX_URL_DIRECT}{path}",
+                headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
+                json=json_body,
+            )
+            r.raise_for_status()
+            return r.json()
+
+    local_port = _pick_free_port()
+    tunnel = await asyncio.create_subprocess_exec(
+        "gcloud", "compute", "start-iap-tunnel", _INSTANCE, "9090",
+        f"--local-host-port=localhost:{local_port}",
+        f"--zone={_ZONE}", f"--project={_PROJECT}",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        await _wait_tunnel_ready(tunnel, local_port, timeout=15)
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.request(
+                method, f"http://localhost:{local_port}{path}",
+                headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
+                json=json_body,
+            )
+            if r.status_code >= 500:
+                raise HTTPException(502, f"devbox {r.status_code}: {r.text[:300]}")
+            r.raise_for_status()
+            return r.json()
+    finally:
+        tunnel.terminate()
+        try:
+            await asyncio.wait_for(tunnel.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            tunnel.kill()
+
+
+@router.post("/create")
+async def create(body: CreateBody, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    _check_admin(x_admin_key)
+    if not _ENABLED_CREATE:
+        raise HTTPException(503, "create disabled")
+
+    if body.discord_user_id != _OWNER_ID:
+        _rate_check(f"create_{body.discord_user_id}_day", _CREATE_RATE)
+
+    payload = {
+        "prompt": body.prompt,
+        "initiator": body.discord_user_id,
+        "max_turns": body.max_turns,
+        "max_thinking_tokens": body.max_thinking_tokens,
+    }
+    if body.model:
+        payload["model"] = body.model
+    return await _devbox_request("POST", "/create", payload)
+
+
+@router.get("/create/status/{sid}")
+async def create_status(sid: str, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    _check_admin(x_admin_key)
+    if not _ENABLED_CREATE:
+        raise HTTPException(503, "create disabled")
+    return await _devbox_request("GET", f"/create/status/{sid}")
+
+
+@router.get("/create/artifact/{sid}")
+async def create_artifact(sid: str, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    """Stream the build.zip artifact through the IAP tunnel so the Discord
+    cog can attach it. Only used for artifacts ≤25MB — larger ones use signed URLs."""
+    from fastapi.responses import StreamingResponse
+    _check_admin(x_admin_key)
+    if not _ENABLED_CREATE:
+        raise HTTPException(503, "create disabled")
+
+    # Validate sid shape
+    import re as _re
+    if not _re.match(r"^[a-z0-9]{6,32}$", sid):
+        raise HTTPException(400, "invalid sid")
+
+    local_port = _pick_free_port()
+    tunnel = await asyncio.create_subprocess_exec(
+        "gcloud", "compute", "start-iap-tunnel", _INSTANCE, "9090",
+        f"--local-host-port=localhost:{local_port}",
+        f"--zone={_ZONE}", f"--project={_PROJECT}",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        await _wait_tunnel_ready(tunnel, local_port, timeout=15)
+        client = httpx.AsyncClient(timeout=300.0)
+        req = client.build_request(
+            "GET", f"http://localhost:{local_port}/create/artifact/{sid}",
+            headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
+        )
+        resp = await client.send(req, stream=True)
+
+        async def _stream():
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await resp.aclose()
+                await client.aclose()
+                tunnel.terminate()
+
+        return StreamingResponse(
+            _stream(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="sg-create-{sid}.zip"'},
+        )
+    except Exception:
+        tunnel.terminate()
+        raise
 
 
 @router.post("/heal")

@@ -269,6 +269,23 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
     }
 
 
+@router.get("/create/artifact/{sid}")
+def create_artifact(sid: str, authorization: Optional[str] = Header(default=None)):
+    """Return the build.zip artifact bytes. Used by the license-server route
+    to stream to Discord when the artifact fits under Discord's 25MB cap."""
+    _auth(authorization)
+    st = _load(sid)
+    zip_path = Path(st["out_dir"]) / "build.zip"
+    if not zip_path.exists():
+        raise HTTPException(404, "artifact not ready")
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=f"sg-create-{sid}.zip",
+    )
+
+
 @router.get("/create/status/{sid}")
 def create_status(sid: str, authorization: Optional[str] = Header(default=None)):
     _auth(authorization)
