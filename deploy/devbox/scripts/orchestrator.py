@@ -199,7 +199,10 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     # 5) stage + commit
     _run(["git", "add", "-A"], wt)
     commit_msg = _build_commit_msg(body, sid, cls.classification)
-    ci = _run(["git", "commit", "-S", "-m", commit_msg], wt)
+    # No -S: signing is disabled per operator preference (commit.gpgsign=false).
+    # If signing is later re-enabled, add a signing key + set commit.gpgsign=true
+    # in the sgagent git config and this commit will pick it up automatically.
+    ci = _run(["git", "commit", "-m", commit_msg], wt)
     if ci.returncode != 0:
         _cleanup(wt)
         return _error(sid, "git commit failed", ci.stderr)
