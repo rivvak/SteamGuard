@@ -77,11 +77,20 @@ def _consteq(a: str, b: str) -> bool:
     return r == 0
 
 
-def _run(cmd: list[str], cwd: Path, env: Optional[dict] = None, timeout: int = 900) -> subprocess.CompletedProcess:
+def _run(
+    cmd: list[str],
+    cwd: Path,
+    env: Optional[dict] = None,
+    timeout: int = 900,
+    stdin_data: Optional[str] = None,
+) -> subprocess.CompletedProcess:
+    # When env is provided, use it AS-IS (FCC launcher strips ANTHROPIC_* from parent).
+    # When env is None, inherit process env.
     return subprocess.run(
         cmd,
         cwd=cwd,
-        env={**os.environ, **(env or {})},
+        env=env if env is not None else None,
+        input=stdin_data,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -115,32 +124,57 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     if add.returncode != 0:
         return _error(sid, "git worktree add failed", add.stderr)
 
-    # 2) write task file (Claude Code reads from --task-file or stdin)
-    task_md = wt / ".sg-task.md"
-    header = (
+    # 2) build the prompt (Claude Code reads from stdin in -p mode)
+    prompt = (
         f"# SteamGuard AI task ({body.source})\n\n"
         f"Session id: {sid}\n"
         f"Initiator: {body.initiator or 'unknown'}\n\n"
         "## Rules\n"
         "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
         ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
-        "- Prefer minimal, testable changes.\n"
+        "- Prefer minimal, testable changes. Edit files in the current working directory.\n"
         "- After you finish, exit — do not commit; the orchestrator handles git.\n\n"
         "## Task\n\n"
+        + body.task
+        + (f"\n\n## Context\n\n{body.context}\n" if body.context else "")
     )
-    task_md.write_text(header + body.task + (f"\n\n## Context\n\n{body.context}\n" if body.context else ""))
+    # Also drop a copy on disk for debugging.
+    (wt / ".sg-task.md").write_text(prompt)
 
-    # 3) invoke Claude Code (headless)
+    # 3) invoke Claude Code in headless print mode via FCC proxy.
+    # Env mirrors what `fcc-claude` sets: strip ANTHROPIC_* from parent, then
+    # add BASE_URL, AUTH_TOKEN, gateway model discovery, and compact window.
+    # FCC routes to the NIM model configured in its Admin UI (MODEL setting) —
+    # do NOT set ANTHROPIC_MODEL here; fcc-claude explicitly strips it.
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
     env = {
+        **base_env,
         "ANTHROPIC_BASE_URL": FCC_URL,
         "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
-        "ANTHROPIC_MODEL": "claude-code-latest",  # FCC maps this to the NIM model
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
     }
+    # Use --permission-mode acceptEdits so Claude Code auto-accepts file edits
+    # in this sandboxed worktree without requiring an interactive TTY. The
+    # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
+    # narrow allowedTools, and a path-guard classifier on the resulting diff.
     cc = _run(
-        ["claude-code", "--headless", "--task-file", str(task_md), "--max-turns", "30"],
+        [
+            "claude",
+            "-p",
+            "--max-turns",
+            "30",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools",
+            "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
+            "--output-format",
+            "text",
+        ],
         cwd=wt,
         env=env,
         timeout=1200,
+        stdin_data=prompt,
     )
     log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
 
