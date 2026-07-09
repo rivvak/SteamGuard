@@ -11,9 +11,10 @@ EnvironmentFile=/etc/sg-devbox/env
 Environment=PYTHONPATH=/home/sgagent/SteamGuard
 WorkingDirectory=/opt/sg-devbox
 
-# Loopback only. Cloud Run reaches us via IAP tunnel.
+# Bound to 0.0.0.0 so IAP tunnel from Cloud Run can connect.
+# Only IAP source range 35.235.240.0/20 can reach tcp:9090 via allow-iap-sg-devbox firewall rule (target-tags=sg-devbox).
 ExecStart=/opt/sg-devbox/venv/bin/uvicorn orchestrator:app \
-  --host 127.0.0.1 --port 9090 \
+  --host 0.0.0.0 --port 9090 \
   --workers 1 --log-level info
 
 Restart=on-failure
