@@ -56,7 +56,7 @@ class CreateCog(commands.Cog):
     )
     @app_commands.describe(
         prompt="What to build (max 32000 chars)",
-        model="Optional model override (e.g. nvidia_nim/moonshotai/kimi-k2.5)",
+        model="Optional model override (default: z-ai/glm-5.2 via NVIDIA NIM)",
     )
     @app_commands.guilds(GUILD)
     async def create(
