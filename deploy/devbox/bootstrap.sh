@@ -17,18 +17,18 @@ set -euo pipefail
 
 REPO_SLUG="${REPO_SLUG:-rivvak/SteamGuard}"
 
-echo "[1/10] apt update + base packages"
+echo "[1/12] apt update + base packages"
 apt-get update
 apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg git jq python3 python3-venv python3-pip \
     python3-jwt tini uuid-runtime
 
-echo "[2/10] create sgagent user"
+echo "[2/12] create sgagent user"
 if ! id sgagent >/dev/null 2>&1; then
     useradd --system --create-home --shell /bin/bash sgagent
 fi
 
-echo "[3/10] install gh CLI"
+echo "[3/12] install gh CLI"
 if ! command -v gh >/dev/null 2>&1; then
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
@@ -39,7 +39,7 @@ if ! command -v gh >/dev/null 2>&1; then
     apt-get install -y gh
 fi
 
-echo "[4/10] install Claude Code CLI (Anthropic)"
+echo "[4/12] install Claude Code CLI (Anthropic)"
 if ! command -v claude-code >/dev/null 2>&1; then
     apt-get install -y nodejs npm
     npm install -g @anthropic-ai/claude-code || true
@@ -50,12 +50,12 @@ if ! command -v claude-code >/dev/null 2>&1; then
     fi
 fi
 
-echo "[5/10] install uv (needed for FCC's Python 3.14 pin)"
+echo "[5/12] install uv (needed for FCC's Python 3.14 pin)"
 if ! sudo -u sgagent test -x /home/sgagent/.local/bin/uv; then
     sudo -u sgagent bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 fi
 
-echo "[6/10] install free-claude-code (native Python, not Docker)"
+echo "[6/12] install free-claude-code (native Python, not Docker)"
 FCC_SRC=/opt/free-claude-code
 install -d -o sgagent -g sgagent "$FCC_SRC"
 if [[ ! -d "$FCC_SRC/.git" ]]; then
@@ -64,7 +64,7 @@ fi
 sudo -u sgagent git -C "$FCC_SRC" config --global --add safe.directory "$FCC_SRC"
 sudo -u sgagent bash -c "cd $FCC_SRC && /home/sgagent/.local/bin/uv sync 2>&1 | tail -5"
 
-echo "[7/10] clone the SteamGuard repo into the agent home (via GitHub App token)"
+echo "[7/12] clone the SteamGuard repo into the agent home (via GitHub App token)"
 # Mint a short-lived App installation token to bootstrap the initial clone.
 # Steady-state operations use per-session tokens minted by the orchestrator.
 if [[ ! -d /home/sgagent/SteamGuard/.git ]]; then
@@ -109,7 +109,7 @@ mkdir -p /var/lib/sg-devbox/work
 EOF
 chown -R sgagent:sgagent /var/lib/sg-devbox
 
-echo "[8/10] install repo scripts under /opt/sg-devbox"
+echo "[8/12] install repo scripts under /opt/sg-devbox"
 install -d -o sgagent -g sgagent /opt/sg-devbox
 install -m 0755 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/run-session.sh"   /opt/sg-devbox/run-session.sh
@@ -127,7 +127,7 @@ sudo -u sgagent python3 -m venv /opt/sg-devbox/venv
 sudo -u sgagent /opt/sg-devbox/venv/bin/pip install --quiet \
     fastapi uvicorn httpx pyjwt cryptography pathspec
 
-echo "[9/10] install systemd units"
+echo "[9/12] install systemd units"
 install -m 0644 "$(dirname "$0")/systemd/sg-fcc.service"          /etc/systemd/system/sg-fcc.service
 install -m 0644 "$(dirname "$0")/systemd/sg-devbox-orch.service"  /etc/systemd/system/sg-devbox-orch.service
 install -m 0644 "$(dirname "$0")/systemd/sg-devbox-cleanup.service" /etc/systemd/system/sg-devbox-cleanup.service
@@ -136,7 +136,33 @@ install -m 0644 "$(dirname "$0")/systemd/sg-devbox-cleanup.timer"   /etc/systemd
 systemctl daemon-reload
 systemctl enable --now sg-fcc.service sg-devbox-orch.service sg-devbox-cleanup.timer
 
-echo "[10/10] smoke test"
+echo "[10/12] ensure Docker is installed for /create sandbox"
+if ! command -v docker >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends docker.io
+fi
+if ! id -nG sgagent | tr ' ' '\n' | grep -qx docker; then
+    usermod -aG docker sgagent
+fi
+systemctl enable --now docker
+
+echo "[11/12] build sg-sandbox:latest image for /create"
+# Build context includes the sandbox Dockerfile + entrypoint + a snapshot of FCC.
+# We snapshot FCC into the context so the image is reproducible even if upstream moves.
+SANDBOX_CTX=/var/lib/sg-devbox/sandbox-build
+install -d -o sgagent -g sgagent /var/lib/sg-devbox/sessions /var/lib/sg-devbox/artifacts
+rm -rf "$SANDBOX_CTX"
+install -d -o sgagent -g sgagent "$SANDBOX_CTX"
+install -m 0644 -o sgagent -g sgagent \
+    "$(dirname "$0")/sandbox/Dockerfile"    "$SANDBOX_CTX/Dockerfile"
+install -m 0755 -o sgagent -g sgagent \
+    "$(dirname "$0")/sandbox/entrypoint.sh" "$SANDBOX_CTX/entrypoint.sh"
+# Copy the already-cloned FCC source into the build context (skip .git + .venv to keep it small).
+# tar is always available; --exclude keeps the context lean.
+install -d -o sgagent -g sgagent "$SANDBOX_CTX/fcc"
+sudo -u sgagent bash -c "cd '$FCC_SRC' && tar --exclude='.git' --exclude='.venv' --exclude='__pycache__' -cf - . | tar -C '$SANDBOX_CTX/fcc' -xf -"
+docker build -t sg-sandbox:latest "$SANDBOX_CTX" 2>&1 | tail -20
+
+echo "[12/12] smoke test"
 # FCC needs ~30s on first boot to fetch Python 3.14 via uv
 for i in {1..12}; do
     sleep 5
