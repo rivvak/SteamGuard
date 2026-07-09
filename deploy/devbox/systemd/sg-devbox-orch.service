@@ -1,0 +1,29 @@
+[Unit]
+Description=SteamGuard dev-agent orchestrator (session dispatch, path-guard, PR opener)
+After=sg-fcc.service
+Requires=sg-fcc.service
+
+[Service]
+Type=simple
+User=sgagent
+Group=sgagent
+EnvironmentFile=/etc/sg-devbox/env
+WorkingDirectory=/opt/sg-devbox
+
+# Loopback only. Cloud Run reaches us via IAP tunnel.
+ExecStart=/opt/sg-devbox/venv/bin/uvicorn orchestrator:app \
+  --host 127.0.0.1 --port 9090 \
+  --workers 1 --log-level info
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectHome=false
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sg-devbox /home/sgagent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

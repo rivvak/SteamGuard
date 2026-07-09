@@ -10,3 +10,8 @@ aiofiles==23.2.1
 openai>=1.40.0
 chromadb>=0.5.0
 google-cloud-storage>=2.14.0
+
+# --- Phase 2: /develop + self-heal (path-guard + IAP tunnel) ---
+pathspec>=0.12.1
+# `gcloud` CLI is expected to be present in the container image; if not, the
+# ai_hooks router falls back to SG_DEVBOX_URL for non-prod dev.

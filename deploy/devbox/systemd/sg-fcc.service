@@ -1,0 +1,36 @@
+[Unit]
+Description=free-claude-code proxy (Anthropic Messages -> NIM z-ai/glm-5.2)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=sgagent
+Group=sgagent
+EnvironmentFile=/etc/sg-devbox/env
+
+# Bind ONLY to loopback. Never publish to 0.0.0.0.
+ExecStartPre=-/usr/bin/docker rm -f sg-fcc
+ExecStart=/usr/bin/docker run --rm --name sg-fcc \
+  --network host \
+  -e ANTHROPIC_PROXY_PORT=8787 \
+  -e ANTHROPIC_PROXY_BIND=127.0.0.1 \
+  -e NVIDIA_NIM_API_KEY=${NVIDIA_NIM_API_KEY} \
+  -e UPSTREAM_BASE_URL=https://integrate.api.nvidia.com/v1 \
+  -e UPSTREAM_MODEL=z-ai/glm-5.2 \
+  -e PROXY_AUTH_TOKEN=${DEVBOX_TOKEN} \
+  sg/free-claude-code:local
+ExecStop=/usr/bin/docker stop sg-fcc
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

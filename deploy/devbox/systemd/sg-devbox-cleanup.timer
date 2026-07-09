@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly cleanup of sg-devbox worktrees
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+Unit=sg-devbox-cleanup.service
+
+[Install]
+WantedBy=timers.target
