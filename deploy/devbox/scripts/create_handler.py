@@ -37,6 +37,8 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
+import memory_store
+
 # ─── config ─────────────────────────────────────────────────────────────────
 
 DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
@@ -71,10 +73,14 @@ _SID_RE = re.compile(r"^[a-z0-9]{6,32}$")
 class CreateBody(BaseModel):
     prompt: str = Field(min_length=1, max_length=32000)
     initiator: Optional[str] = None  # discord user id
+    channel_id: Optional[str] = None  # discord channel id for per-channel memory
     model: Optional[str] = None  # override DEFAULT_MODEL
     max_turns: int = Field(default=200, ge=1, le=500)
     max_thinking_tokens: int = Field(default=32000, ge=0, le=64000)
     wall_clock_seconds: int = Field(default=21600, ge=60, le=21600)  # 6h cap
+    # Phase 4 — opt-in "deep" mode. Bumps thinking tokens, extends watchdog,
+    # and injects a stronger reasoning system-preamble.
+    deep: bool = False
 
 
 router = APIRouter()
@@ -216,6 +222,39 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
     model = body.model or DEFAULT_MODEL
     gh_token = _fetch_gh_token()
 
+    # ── Phase 4: memory + deep-mode ───────────────────────────────────────
+    # Build PRIOR_CONTEXT.md from GCS-backed per-user + per-channel memory.
+    # This is best-effort — GCS outage never blocks a /create.
+    try:
+        preamble = memory_store.build_preamble(
+            user_id=body.initiator or "",
+            channel_id=body.channel_id or "",
+        )
+    except Exception:
+        preamble = ""
+
+    prior_ctx_path = out_dir / "PRIOR_CONTEXT.md"
+    if preamble:
+        prior_ctx_path.write_text(preamble)
+        try:
+            os.chmod(prior_ctx_path, 0o644)
+        except OSError:
+            pass
+
+    # Deep mode: bump thinking budget + tell the entrypoint to relax watchdog.
+    thinking = body.max_thinking_tokens
+    watchdog_idle = 300
+    reasoning_hint = ""
+    if body.deep:
+        thinking = max(thinking, 64000)
+        watchdog_idle = 900
+        reasoning_hint = (
+            "# Deep-reasoning mode is ENABLED for this request.\n"
+            "Take your time. Think through the problem thoroughly before coding.\n"
+            "Use WebSearch / WebFetch aggressively when facts, APIs, versions,\n"
+            "or docs may be relevant. Prefer correctness over speed.\n\n"
+        )
+
     # Spawn detached — do NOT block the request. The sandbox writes /out/status.json
     # and /out/build.zip; we poll from /create/status.
     # Ensure /out is writable by uid 1000 (the `builder` user inside the container).
@@ -247,8 +286,11 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
         "-e", f"MODEL={model}",
         "-e", f"SESSION_ID={sid}",
         "-e", f"MAX_TURNS={body.max_turns}",
-        "-e", f"MAX_THINKING_TOKENS={body.max_thinking_tokens}",
+        "-e", f"MAX_THINKING_TOKENS={thinking}",
+        "-e", f"WATCHDOG_IDLE_SECONDS={watchdog_idle}",
         "-e", f"WALL_CLOCK_SECONDS={body.wall_clock_seconds}",
+        "-e", f"DEEP_MODE={'1' if body.deep else '0'}",
+        "-e", f"REASONING_HINT={reasoning_hint}",
         # PROMPT via env is fine up to ~128KB on Linux; the schema caps at 32k.
         "-e", f"PROMPT={body.prompt}",
         SANDBOX_IMAGE,
@@ -286,6 +328,9 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
         "started_at": _now(),
         "model": model,
         "initiator": body.initiator,
+        "channel_id": body.channel_id,
+        "deep": body.deep,
+        "prompt": body.prompt[:4000],
         "prompt_len": len(body.prompt),
         "out_dir": str(out_dir),
     }
@@ -357,6 +402,33 @@ def create_status(sid: str, authorization: Optional[str] = Header(default=None))
             st["error"] = f"container exited with code {exit_code} and no artifact"
 
         st["ended_at"] = _now()
+
+        # Phase 4: record into memory once, when we first hit a terminal state.
+        if not st.get("memory_recorded"):
+            try:
+                artifact = st.get("artifact") or {}
+                artifact_url = None
+                if artifact.get("kind") == "signed_url":
+                    artifact_url = artifact.get("url")
+                elif artifact.get("kind") == "attachment":
+                    artifact_url = f"discord-attachment:sg-create-{sid}.zip"
+
+                log_path = out_dir / "claude.log"
+                log_tail = log_path.read_text(errors="replace")[-2000:] if log_path.exists() else ""
+
+                memory_store.record_completion(
+                    command="create",
+                    session_id=sid,
+                    prompt=st.get("prompt", ""),
+                    initiator=st.get("initiator") or "",
+                    channel_id=st.get("channel_id") or "",
+                    status=st["state"],
+                    artifact_url=artifact_url,
+                    log_tail=log_tail,
+                )
+                st["memory_recorded"] = True
+            except Exception as e:
+                st["memory_error"] = f"{type(e).__name__}: {e}"[:200]
 
     _save(sid, st)
     return _augment(st)

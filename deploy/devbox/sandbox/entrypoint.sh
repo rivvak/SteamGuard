@@ -61,6 +61,17 @@ MAX_TURNS="${MAX_TURNS:-200}"
 MAX_THINKING_TOKENS="${MAX_THINKING_TOKENS:-32000}"
 WATCHDOG_IDLE_SECONDS="${WATCHDOG_IDLE_SECONDS:-300}"
 WALL_CLOCK_SECONDS="${WALL_CLOCK_SECONDS:-21600}"
+DEEP_MODE="${DEEP_MODE:-0}"
+REASONING_HINT="${REASONING_HINT:-}"
+
+# Phase 4: PRIOR_CONTEXT.md is bind-mounted at /out/PRIOR_CONTEXT.md (if any
+# memory existed at spawn time). Copy it into /workspace so both (a) fcc-claude
+# can Read it via its file tools, and (b) it's baked into the effective prompt.
+PRIOR_CTX_SRC="/out/PRIOR_CONTEXT.md"
+PRIOR_CTX_WS="/workspace/PRIOR_CONTEXT.md"
+if [ -f "$PRIOR_CTX_SRC" ]; then
+    cp "$PRIOR_CTX_SRC" "$PRIOR_CTX_WS" 2>/dev/null || true
+fi
 
 # ─── gh auth (read-only research; sandbox cannot push) ──────────────────────
 export GH_TOKEN="$GITHUB_TOKEN"
@@ -194,11 +205,25 @@ WATCHDOG_PID=$!
 ) &
 CAP_PID=$!
 
+# Compose the effective prompt: reasoning hint (if any) + prior-context notice +
+# original PROMPT. `fcc-claude -p` reads from stdin.
+EFFECTIVE_PROMPT=""
+if [ -n "$REASONING_HINT" ]; then
+    EFFECTIVE_PROMPT+="$REASONING_HINT"$'\n'
+fi
+if [ -f "$PRIOR_CTX_WS" ]; then
+    EFFECTIVE_PROMPT+=$'You have prior context from previous commands. READ /workspace/PRIOR_CONTEXT.md FIRST. If the user refers to "the last thing you built", "like before", "add tests for it", etc., resolve those references against that file.\n\n'
+fi
+EFFECTIVE_PROMPT+="$PROMPT"
+
 # Run claude, teeing output to log + updating watchdog heartbeat
 set +e
 # Use `fcc-claude` (FCC's wrapper) rather than raw `claude`: it scrubs inherited
 # ANTHROPIC_* vars, points the CLI at the local FCC proxy, and forwards all argv.
-printf '%s' "$PROMPT" | fcc-claude \
+# Thinking mode is always on (--max-thinking-tokens > 0). WebSearch + WebFetch
+# are always in the tool allowlist. `deep:True` from Discord bumps thinking
+# from 32000 -> 64000 and widens the watchdog window (set at spawn time).
+printf '%s' "$EFFECTIVE_PROMPT" | fcc-claude \
     -p \
     --max-turns "$MAX_TURNS" \
     --max-thinking-tokens "$MAX_THINKING_TOKENS" \
