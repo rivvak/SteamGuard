@@ -66,7 +66,6 @@ Session branch: \`${BRANCH}\`
 
 - Path-guard on sg-devbox classified this diff as **PR-required** (files
   outside the direct-commit allow-list).
-- All commits in this PR are signed with the sg-heal-bot SSH key.
 - Human review required per CODEOWNERS.
 
 _This PR was opened by an autonomous agent. Do not merge without reading the diff._

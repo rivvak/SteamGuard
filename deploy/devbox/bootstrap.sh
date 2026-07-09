@@ -100,10 +100,16 @@ cd ~/SteamGuard
 git remote set-url origin https://github.com/${REPO_SLUG}.git
 git config user.name  "rivvak-sg-heal[bot]"
 git config user.email "rivvak-sg-heal[bot]@users.noreply.github.com"
+# Signing is intentionally disabled. If you want signed bot commits, drop
+# an SSH pub key at /etc/sg-devbox/sg-heal-bot.pub and set commit.gpgsign=true
+# — bootstrap will not overwrite operator-managed signing state.
 git config gpg.format ssh
+git config --unset commit.gpgsign 2>/dev/null || true
+git config commit.gpgsign false
+git config tag.gpgsign false
 if [[ -f /etc/sg-devbox/sg-heal-bot.pub ]]; then
     git config user.signingkey /etc/sg-devbox/sg-heal-bot.pub
-    git config commit.gpgsign true
+    # NOTE: leaving commit.gpgsign=false; flip manually to enable.
 fi
 mkdir -p /var/lib/sg-devbox/work
 EOF
