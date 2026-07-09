@@ -1,3 +1,0 @@
-# Dashboard is served directly from Cloud Run as StaticFiles.
-# No separate Cloudflare Pages deployment needed — removed.
-# The dashboard is live at https://rivvak.app/dashboard/

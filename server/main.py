@@ -464,9 +464,10 @@ async def favicon():
     return RedirectResponse("/dashboard/favicon.ico")
 
 # ── CORS (web dashboard) ──────────────────────────────────────────────────────
-# The static dashboard is hosted off Cloud Run (Cloudflare Pages) and is a
-# different origin from this API, so the browser requires permissive CORS
-# headers. List exact origins (do NOT mix "*" with allow_credentials=True).
+# The static dashboard is served from this Cloud Run service (see the
+# StaticFiles mount below) and may also be reached via the rivvak.app apex.
+# Browsers still require permissive CORS for the JSON endpoints. List exact
+# origins (do NOT mix "*" with allow_credentials=True).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -2174,9 +2175,10 @@ async def rewards_leaderboard():
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WEB DASHBOARD ENDPOINTS
-# Static dashboard (Cloudflare Pages) -> these JSON endpoints (CORS-enabled).
-# Auth uses a 24h HS256 JWT issued by /auth/login. The license key is hashed
-# (sha256) to form the Firestore doc id, matching the rest of this service.
+# Static dashboard (served from Cloud Run at /dashboard/) -> these JSON
+# endpoints (CORS-enabled). Auth uses a 24h HS256 JWT issued by /auth/login.
+# The license key is hashed (sha256) to form the Firestore doc id, matching
+# the rest of this service.
 # ══════════════════════════════════════════════════════════════════════════════
 
 from jose import jwt, JWTError
