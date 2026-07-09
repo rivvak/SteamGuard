@@ -342,6 +342,17 @@ async def on_ready():
     else:
         LOG.info("AI_DEVELOP_ENABLED=false — /develop cog not registered")
 
+    # ── Register AI /create cog (Phase 3) ──
+    if os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true":
+        try:
+            from server.bot.cogs.create_cog import setup as setup_create
+            await setup_create(bot)
+            LOG.info("Registered /create cog")
+        except Exception as e:
+            LOG.warning(f"Failed to register /create cog: {e}")
+    else:
+        LOG.info("AI_CREATE_ENABLED=false — /create cog not registered")
+
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
