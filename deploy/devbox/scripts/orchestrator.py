@@ -199,7 +199,9 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     # 5) stage + commit
     _run(["git", "add", "-A"], wt)
     commit_msg = _build_commit_msg(body, sid, cls.classification)
-    ci = _run(["git", "commit", "-S", "-m", commit_msg], wt)
+    # Signing is controlled by sgagent's git config (commit.gpgsign). We don't
+    # force -S here — SSH signing can be enabled per-VM without touching code.
+    ci = _run(["git", "commit", "-m", commit_msg], wt)
     if ci.returncode != 0:
         _cleanup(wt)
         return _error(sid, "git commit failed", ci.stderr)
