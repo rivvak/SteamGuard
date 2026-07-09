@@ -2,7 +2,7 @@
 
 Public API (used from loader.py):
 
-    from loader.ai.chat_panel import open_chat_modal
+    from loader_ai.chat_panel import open_chat_modal
     open_chat_modal(parent=self, key=session.key, hwid=session.hwid,
                     server_url=auth_client._SERVER_URL)
 
