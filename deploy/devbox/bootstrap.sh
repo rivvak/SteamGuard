@@ -121,6 +121,8 @@ install -m 0755 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/path-guard.py"    /opt/sg-devbox/path-guard.py
 install -m 0755 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/orchestrator.py"  /opt/sg-devbox/orchestrator.py
+install -m 0644 -o sgagent -g sgagent \
+    "$(dirname "$0")/scripts/create_handler.py" /opt/sg-devbox/create_handler.py
 
 # Python deps for the orchestrator
 sudo -u sgagent python3 -m venv /opt/sg-devbox/venv

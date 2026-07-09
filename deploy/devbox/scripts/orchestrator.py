@@ -51,6 +51,12 @@ OPEN_PR = Path("/opt/sg-devbox/open-pr.sh")
 
 app = FastAPI(title="sg-devbox orchestrator")
 
+# Register /create + /create/status/{sid} routes (Phase 3, async, containerised).
+# Kept in a separate module so this file stays focused on the /session flow.
+from create_handler import router as _create_router  # noqa: E402
+
+app.include_router(_create_router)
+
 
 class SessionBody(BaseModel):
     task: str = Field(min_length=1, max_length=8000)
