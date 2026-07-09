@@ -43,6 +43,11 @@ echo "[4/10] install Claude Code CLI (Anthropic)"
 if ! command -v claude-code >/dev/null 2>&1; then
     apt-get install -y nodejs npm
     npm install -g @anthropic-ai/claude-code || true
+    # Anthropic ships the binary as `claude` on Linux; orchestrator invokes it
+    # as `claude-code`, so provide a symlink for both names.
+    if [ -x /usr/local/bin/claude ] && [ ! -e /usr/local/bin/claude-code ]; then
+        ln -sf /usr/local/bin/claude /usr/local/bin/claude-code
+    fi
 fi
 
 echo "[5/10] install uv (needed for FCC's Python 3.14 pin)"
