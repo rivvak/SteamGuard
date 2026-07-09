@@ -54,14 +54,18 @@ class DevelopBody(BaseModel):
     discord_user_id: str
     task: str = Field(min_length=1, max_length=6000)
     thread_id: Optional[str] = None
+    channel_id: Optional[str] = None  # Phase 4: for per-channel memory scope
+    deep: bool = False                # Phase 4: deep-reasoning flag
 
 
 class CreateBody(BaseModel):
     discord_user_id: str
+    channel_id: Optional[str] = None  # Phase 4
     prompt: str = Field(min_length=1, max_length=32000)
     model: Optional[str] = None
     max_turns: int = 200
     max_thinking_tokens: int = 32000
+    deep: bool = False                # Phase 4
 
 
 class HealBody(BaseModel):
@@ -178,6 +182,8 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
             "source": "develop",
             "ref": "main",
             "initiator": body.discord_user_id,
+            "channel_id": body.channel_id or body.thread_id,
+            "deep": body.deep,
         }
     )
 
@@ -239,8 +245,10 @@ async def create(body: CreateBody, x_admin_key: Optional[str] = Header(default=N
     payload = {
         "prompt": body.prompt,
         "initiator": body.discord_user_id,
+        "channel_id": body.channel_id,
         "max_turns": body.max_turns,
         "max_thinking_tokens": body.max_thinking_tokens,
+        "deep": body.deep,
     }
     if body.model:
         payload["model"] = body.model
@@ -302,6 +310,63 @@ async def create_artifact(sid: str, x_admin_key: Optional[str] = Header(default=
     except Exception:
         tunnel.terminate()
         raise
+
+
+# ─── Phase 4: memory pass-through routes ─────────────────────────────────────
+
+
+class ForgetBody(BaseModel):
+    entry_id: str = Field(min_length=6, max_length=32)
+
+
+_OWNER_ID_ALIAS = os.environ.get("DISCORD_OWNER_ID", "1513150836472021074")
+
+
+def _mem_scope_guard(scope: str, scope_id: str, discord_user_id: str) -> None:
+    if scope not in ("user", "channel"):
+        raise HTTPException(400, "scope must be 'user' or 'channel'")
+    # For 'user' scope, only the owner may inspect/clear another user's memory.
+    if scope == "user" and scope_id != discord_user_id and discord_user_id != _OWNER_ID_ALIAS:
+        raise HTTPException(403, "can only manage your own user memory")
+
+
+@router.get("/memory/show/{scope}/{scope_id}")
+async def memory_show(
+    scope: str,
+    scope_id: str,
+    discord_user_id: str,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+):
+    _check_admin(x_admin_key)
+    _mem_scope_guard(scope, scope_id, discord_user_id)
+    return await _devbox_request("GET", f"/memory/show/{scope}/{scope_id}")
+
+
+@router.post("/memory/clear/{scope}/{scope_id}")
+async def memory_clear(
+    scope: str,
+    scope_id: str,
+    discord_user_id: str,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+):
+    _check_admin(x_admin_key)
+    _mem_scope_guard(scope, scope_id, discord_user_id)
+    return await _devbox_request("POST", f"/memory/clear/{scope}/{scope_id}")
+
+
+@router.post("/memory/forget/{scope}/{scope_id}")
+async def memory_forget(
+    scope: str,
+    scope_id: str,
+    discord_user_id: str,
+    body: ForgetBody,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+):
+    _check_admin(x_admin_key)
+    _mem_scope_guard(scope, scope_id, discord_user_id)
+    return await _devbox_request(
+        "POST", f"/memory/forget/{scope}/{scope_id}", {"entry_id": body.entry_id}
+    )
 
 
 @router.post("/heal")

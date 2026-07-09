@@ -57,6 +57,12 @@ from create_handler import router as _create_router  # noqa: E402
 
 app.include_router(_create_router)
 
+# Register /memory/* routes (Phase 4).
+from memory_routes import router as _memory_router  # noqa: E402
+import memory_store  # noqa: E402
+
+app.include_router(_memory_router)
+
 
 class SessionBody(BaseModel):
     task: str = Field(min_length=1, max_length=8000)
@@ -64,6 +70,8 @@ class SessionBody(BaseModel):
     ref: str = Field(default="main")
     context: Optional[str] = None  # e.g. failure log for heal
     initiator: Optional[str] = None  # discord user id or GH run id
+    channel_id: Optional[str] = None  # Phase 4: discord channel id (memory scope)
+    deep: bool = False                # Phase 4: deep-reasoning mode toggle
 
 
 def _auth(header: Optional[str]) -> None:
@@ -131,11 +139,32 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
         return _error(sid, "git worktree add failed", add.stderr)
 
     # 2) build the prompt (Claude Code reads from stdin in -p mode)
+    # Phase 4: prepend PRIOR_CONTEXT (per-user + per-channel memory) if any.
+    prior_ctx = ""
+    try:
+        prior_ctx = memory_store.build_preamble(
+            user_id=body.initiator or "",
+            channel_id=body.channel_id or "",
+        )
+    except Exception:
+        prior_ctx = ""
+
+    reasoning_hint = ""
+    if body.deep:
+        reasoning_hint = (
+            "## Deep-reasoning mode ENABLED\n"
+            "Take extra time. Think through edge cases before editing files.\n"
+            "Use WebSearch/WebFetch when APIs, versions, or docs may be relevant.\n"
+            "Prefer correctness over speed.\n\n"
+        )
+
     prompt = (
         f"# SteamGuard AI task ({body.source})\n\n"
         f"Session id: {sid}\n"
         f"Initiator: {body.initiator or 'unknown'}\n\n"
-        "## Rules\n"
+        + (f"## Prior context (Phase 4 memory)\n\n{prior_ctx}\n" if prior_ctx else "")
+        + reasoning_hint
+        + "## Rules\n"
         "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
         ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
         "- Prefer minimal, testable changes. Edit files in the current working directory.\n"
@@ -195,6 +224,7 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
 
     if cls.classification == "denied":
         _cleanup(wt)
+        _record_memory(body, sid, "refused", None, log_tail)
         return {
             "status": "refused",
             "session_id": sid,
@@ -220,11 +250,13 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
             return _error(sid, "git push (direct) failed", push.stderr)
         sha = _run(["git", "rev-parse", "HEAD"], wt).stdout.strip()
         _cleanup(wt)
+        commit_url = f"https://github.com/{REPO_SLUG}/commit/{sha}"
+        _record_memory(body, sid, "committed", commit_url, log_tail)
         return {
             "status": "committed",
             "session_id": sid,
             "commit_sha": sha,
-            "commit_url": f"https://github.com/{REPO_SLUG}/commit/{sha}",
+            "commit_url": commit_url,
             "files": files,
         }
 
@@ -241,6 +273,7 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
         return _error(sid, "open-pr.sh failed", pr.stdout + pr.stderr)
     pr_url = pr.stdout.strip().splitlines()[-1] if pr.stdout.strip() else ""
     _cleanup(wt)
+    _record_memory(body, sid, "pr_opened", pr_url, log_tail)
     return {
         "status": "pr_opened",
         "session_id": sid,
@@ -271,3 +304,26 @@ def _cleanup(wt: Path) -> None:
 
 def _error(sid: str, msg: str, tail: str):
     return {"status": "error", "session_id": sid, "error": msg, "log_tail": tail[-1500:]}
+
+
+def _record_memory(
+    body: SessionBody,
+    sid: str,
+    status: str,
+    artifact_url: Optional[str],
+    log_tail: str,
+) -> None:
+    """Best-effort append this /develop session into per-user + per-channel memory."""
+    try:
+        memory_store.record_completion(
+            command=body.source,
+            session_id=sid,
+            prompt=body.task,
+            initiator=body.initiator or "",
+            channel_id=body.channel_id or "",
+            status=status,
+            artifact_url=artifact_url,
+            log_tail=log_tail,
+        )
+    except Exception:
+        pass

@@ -56,6 +56,7 @@ class CreateCog(commands.Cog):
     )
     @app_commands.describe(
         prompt="What to build (max 32000 chars)",
+        deep="Deep-reasoning mode — more thinking tokens + longer watchdog. Slower but stronger.",
         model="Optional model override (default: nvidia_nim/z-ai/glm-5.2)",
     )
     @app_commands.guilds(GUILD)
@@ -63,6 +64,7 @@ class CreateCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         prompt: str,
+        deep: bool = False,
         model: str | None = None,
     ):
         if len(prompt) > 32000:
@@ -80,8 +82,10 @@ class CreateCog(commands.Cog):
                 headers={"X-Admin-Key": ADMIN_KEY, "Content-Type": "application/json"},
                 json={
                     "discord_user_id": str(interaction.user.id),
+                    "channel_id": (str(interaction.channel_id) if interaction.channel_id else None),
                     "prompt": prompt,
                     "model": model,
+                    "deep": deep,
                 },
             )
         except httpx.HTTPError as e:

@@ -129,6 +129,10 @@ install -m 0755 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/orchestrator.py"  /opt/sg-devbox/orchestrator.py
 install -m 0644 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/create_handler.py" /opt/sg-devbox/create_handler.py
+install -m 0644 -o sgagent -g sgagent \
+    "$(dirname "$0")/scripts/memory_store.py"  /opt/sg-devbox/memory_store.py
+install -m 0644 -o sgagent -g sgagent \
+    "$(dirname "$0")/scripts/memory_routes.py" /opt/sg-devbox/memory_routes.py
 
 # Python deps for the orchestrator
 sudo -u sgagent python3 -m venv /opt/sg-devbox/venv

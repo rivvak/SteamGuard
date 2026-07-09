@@ -35,9 +35,12 @@ class DevelopCog(commands.Cog):
         name="develop",
         description="Ask the AI dev agent to open a PR (or push a doc/test commit) that implements a task.",
     )
-    @app_commands.describe(task="What you want the agent to do (max 6000 chars)")
+    @app_commands.describe(
+        task="What you want the agent to do (max 6000 chars)",
+        deep="Deep-reasoning mode \u2014 spend more thinking tokens. Slower but stronger.",
+    )
     @app_commands.guilds(GUILD)
-    async def develop(self, interaction: discord.Interaction, task: str):
+    async def develop(self, interaction: discord.Interaction, task: str, deep: bool = False):
         if interaction.user.id != OWNER_ID:
             # Non-owners get rate-limited server-side but we also give them a
             # visible cap here as a UX nicety.
@@ -57,6 +60,8 @@ class DevelopCog(commands.Cog):
                     "discord_user_id": str(interaction.user.id),
                     "task": task,
                     "thread_id": (str(interaction.channel_id) if interaction.channel_id else None),
+                    "channel_id": (str(interaction.channel_id) if interaction.channel_id else None),
+                    "deep": deep,
                 },
             )
         except httpx.HTTPError as e:

@@ -353,6 +353,22 @@ async def on_ready():
     else:
         LOG.info("AI_CREATE_ENABLED=false — /create cog not registered")
 
+    # ── Register /memory cog (Phase 4) ──
+    # Only makes sense when at least one of /create or /develop is enabled;
+    # otherwise there's nothing writing to memory. We gate on either.
+    if (
+        os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
+        or os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
+    ):
+        try:
+            from server.bot.cogs.memory_cog import setup as setup_memory
+            await setup_memory(bot)
+            LOG.info("Registered /memory cog (Phase 4)")
+        except Exception as e:
+            LOG.warning(f"Failed to register /memory cog: {e}")
+    else:
+        LOG.info("AI_CREATE_ENABLED and AI_DEVELOP_ENABLED both false — /memory cog not registered")
+
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
