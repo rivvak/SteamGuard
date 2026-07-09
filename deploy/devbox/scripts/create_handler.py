@@ -43,9 +43,11 @@ DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
 SESSIONS_DIR = Path(os.environ.get("SG_SESSIONS_DIR", "/var/lib/sg-devbox/sessions"))
 ARTIFACTS_DIR = Path(os.environ.get("SG_ARTIFACTS_DIR", "/var/lib/sg-devbox/artifacts"))
 SANDBOX_IMAGE = os.environ.get("SG_SANDBOX_IMAGE", "sg-sandbox:latest")
-DEFAULT_MODEL = os.environ.get(
-    "SG_CREATE_MODEL", "nvidia_nim/moonshotai/kimi-k2.5"
-)
+# Default model for /create. We use z-ai/glm-5.2 on NVIDIA NIM — same model as
+# Phase 2 /develop, verified working via the OpenAI-compatible endpoint at
+# https://integrate.api.nvidia.com/v1. Override via SG_CREATE_MODEL env or per-
+# request `model` param.
+DEFAULT_MODEL = os.environ.get("SG_CREATE_MODEL", "z-ai/glm-5.2")
 NIM_KEY = os.environ["NVIDIA_NIM_API_KEY"]
 GCS_BUCKET = os.environ.get("SG_CREATE_BUCKET", "steamguard-create-artifacts")
 
@@ -215,6 +217,16 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
 
     # Spawn detached — do NOT block the request. The sandbox writes /out/status.json
     # and /out/build.zip; we poll from /create/status.
+    # Ensure /out is writable by uid 1000 (the `builder` user inside the container).
+    # The orchestrator runs as `sgagent`, so out_dir would default to sgagent-owned.
+    # We chmod 0777 for the bind mount to avoid uid-mismatch permission errors
+    # (the dir is per-session throwaway inside /var/lib/sg-devbox/artifacts/<sid>,
+    # so this is safe).
+    try:
+        os.chmod(out_dir, 0o777)
+    except OSError:
+        pass
+
     cmd = [
         "docker", "run", "--rm", "--detach",
         "--name", name,
@@ -222,9 +234,12 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
         "--memory", DOCKER_MEM,
         "--pids-limit", DOCKER_PIDS,
         "--read-only",  # sandbox writes only to explicit tmpfs + /out
-        "--tmpfs", "/tmp:rw,size=1g",
-        "--tmpfs", "/workspace:rw,size=8g",
-        "--tmpfs", "/home/builder:rw,size=512m",
+        # tmpfs mounts — CRITICAL: uid=1000/gid=1000 so `builder` user (UID 1000)
+        # can write to them. Without these opts, tmpfs mounts default to root:root
+        # and git config / claude / FCC all crash with EACCES in ~1s.
+        "--tmpfs", "/tmp:rw,size=1g,uid=1000,gid=1000,mode=1777",
+        "--tmpfs", "/workspace:rw,size=8g,uid=1000,gid=1000,mode=0755",
+        "--tmpfs", "/home/builder:rw,size=512m,uid=1000,gid=1000,mode=0755",
         "-v", f"{out_dir}:/out:rw",
         "-e", f"NVIDIA_NIM_API_KEY={NIM_KEY}",
         "-e", f"GITHUB_TOKEN={gh_token}",
@@ -240,10 +255,24 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
 
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
+        # Persist the failure so /create/status/{sid} can report it
+        err_state = {
+            "session_id": sid,
+            "container_name": name,
+            "state": "error",
+            "started_at": _now(),
+            "ended_at": _now(),
+            "model": model,
+            "initiator": body.initiator,
+            "prompt_len": len(body.prompt),
+            "out_dir": str(out_dir),
+            "error": f"docker run failed rc={r.returncode}: {(r.stdout + r.stderr)[-800:]}",
+        }
+        _save(sid, err_state)
         return {
             "status": "error",
             "session_id": sid,
-            "error": "docker run failed",
+            "error": err_state["error"],
             "log_tail": (r.stdout + r.stderr)[-1500:],
         }
     container_id = r.stdout.strip()

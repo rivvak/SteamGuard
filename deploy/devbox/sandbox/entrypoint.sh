@@ -19,6 +19,35 @@ set -euo pipefail
 
 log() { printf '[sandbox %s] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
+# ─── EARLY status writer ─────────────────────────────────────────────────────
+# The orchestrator polls /out/status.json to distinguish 'container crashed at
+# boot' (no status file) from 'container ran and reported terminal state'. We
+# write status.json IMMEDIATELY, before any command that could fail, so even
+# early crashes leave a trail.
+STATUS_FILE="/out/status.json"
+early_write_status() {
+    local state="$1" msg="${2:-}"
+    if [ -w /out ]; then
+        printf '{"session_id":"%s","state":"%s","message":%s,"ended_at":"%s"}\n' \
+            "${SESSION_ID:-unknown}" \
+            "$state" \
+            "$(printf '%s' "${msg}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')" \
+            "$(date -u +%FT%TZ)" \
+            > "$STATUS_FILE" 2>/dev/null || true
+    fi
+}
+early_write_status "booting" "entrypoint started"
+
+# On any early failure, dump the last log line into status.json before exiting
+_early_trap() {
+    local rc=$?
+    if [ -w /out ] && [ ! -f "/out/.past_early_init" ]; then
+        early_write_status "error" "early init failure rc=${rc} at line ${BASH_LINENO[0]:-?}"
+    fi
+    exit "$rc"
+}
+trap _early_trap EXIT
+
 : "${NVIDIA_NIM_API_KEY:?NVIDIA_NIM_API_KEY required}"
 : "${GITHUB_TOKEN:?GITHUB_TOKEN required}"
 : "${PROMPT:?PROMPT required}"
@@ -32,11 +61,16 @@ WALL_CLOCK_SECONDS="${WALL_CLOCK_SECONDS:-21600}"
 
 # ─── gh auth (read-only research; sandbox cannot push) ──────────────────────
 export GH_TOKEN="$GITHUB_TOKEN"
-git config --global user.name  "sg-sandbox"
-git config --global user.email "sg-sandbox@rivvak.app"
-git config --global commit.gpgsign false
-git config --global tag.gpgsign false
-git config --global init.defaultBranch main
+
+# git config is best-effort — sandbox does not push commits. If HOME isn't
+# writable (e.g. tmpfs mount permissions), don't kill the run over it.
+{
+    git config --global user.name  "sg-sandbox"
+    git config --global user.email "sg-sandbox@rivvak.app"
+    git config --global commit.gpgsign false
+    git config --global tag.gpgsign false
+    git config --global init.defaultBranch main
+} 2>/dev/null || log "WARN: git config failed (HOME=$HOME not writable?) — continuing; sandbox doesn't push anyway"
 
 # ─── FCC startup (background) ───────────────────────────────────────────────
 # FCC's launcher reads MODEL + ANTHROPIC_AUTH_TOKEN from env and proxies /v1/messages
@@ -75,9 +109,9 @@ if ! curl -sf -o /dev/null "${ANTHROPIC_BASE_URL}/v1/models"; then
 fi
 
 # ─── output & cleanup plumbing ──────────────────────────────────────────────
+# STATUS_FILE already set at top of script; ARTIFACT/LOG_ARTIFACT are new.
 ARTIFACT="/out/build.zip"
 LOG_ARTIFACT="/out/claude.log"
-STATUS_FILE="/out/status.json"
 : > "$LOG_ARTIFACT"
 
 write_status() {
@@ -86,6 +120,10 @@ write_status() {
 {"session_id":"${SESSION_ID}","state":"${state}","exit_code":${exit_code},"model":"${MODEL}","ended_at":"$(date -u +%FT%TZ)"}
 JSON
 }
+
+# Past the fragile early-init phase — reset trap to the final finish handler.
+touch /out/.past_early_init 2>/dev/null || true
+trap - EXIT
 write_status "running" "null"
 
 finish() {
