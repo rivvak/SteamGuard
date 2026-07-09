@@ -1,4 +1,4 @@
-"""/develop slash command \u2014 dispatches a dev-agent session on sg-devbox.
+"""/develop slash command — dispatches a dev-agent session on sg-devbox.
 
 Loaded from server/bot.py in on_ready():
 
@@ -37,7 +37,7 @@ class DevelopCog(commands.Cog):
     )
     @app_commands.describe(
         task="What you want the agent to do (max 6000 chars)",
-        deep="Deep-reasoning mode \u2014 spend more thinking tokens. Slower but stronger.",
+        deep="Deep-reasoning mode — spend more thinking tokens. Slower but stronger.",
     )
     @app_commands.guilds(GUILD)
     async def develop(self, interaction: discord.Interaction, task: str, deep: bool = False):
@@ -87,10 +87,23 @@ class DevelopCog(commands.Cog):
         data = r.json()
         status = data.get("status", "unknown")
         embed = self._format_result(task, status, data)
-        await interaction.followup.send(embed=embed)
+        
+        # --- THE TRICK: Fallback to direct channel message if 15 mins expired ---
+        try:
+            await interaction.followup.send(embed=embed)
+        except discord.HTTPException as e:
+            # Error code 50027 = Invalid Webhook Token (expired)
+            if e.code == 50027:
+                # Fall back to direct channel send (uses Bot's permanent credentials)
+                await interaction.channel.send(
+                    content=f"⚠️ {interaction.user.mention} the session took more than 15 minutes, but successfully completed! Here are your results:",
+                    embed=embed
+                )
+            else:
+                raise
 
     def _format_result(self, task: str, status: str, data: dict) -> discord.Embed:
-        title = f"/develop \u2014 {status}"
+        title = f"/develop — {status}"
         color = {
             "committed": discord.Color.green(),
             "pr_opened": discord.Color.blurple(),
@@ -104,15 +117,15 @@ class DevelopCog(commands.Cog):
         if status == "committed":
             emb.add_field(name="Commit", value=data.get("commit_url", data.get("commit_sha", "")), inline=False)
             if data.get("files"):
-                emb.add_field(name="Files", value="\n".join(f"\u2022 {f}" for f in data["files"][:15]), inline=False)
+                emb.add_field(name="Files", value="\n".join(f"• {f}" for f in data["files"][:15]), inline=False)
         elif status == "pr_opened":
             emb.add_field(name="PR", value=data.get("pr_url", ""), inline=False)
             if data.get("files"):
-                emb.add_field(name="Files", value="\n".join(f"\u2022 {f}" for f in data["files"][:15]), inline=False)
+                emb.add_field(name="Files", value="\n".join(f"• {f}" for f in data["files"][:15]), inline=False)
         elif status == "refused":
             emb.add_field(
                 name="Denied files",
-                value="\n".join(f"\u2022 {f}" for f in data.get("denied_files", [])[:15]) or "(none listed)",
+                value="\n".join(f"• {f}" for f in data.get("denied_files", [])[:15]) or "(none listed)",
                 inline=False,
             )
         elif status == "error":
