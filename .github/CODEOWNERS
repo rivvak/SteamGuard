@@ -20,3 +20,9 @@
 /build.bat                     @rivvak
 /Dockerfile                    @rivvak
 /scripts/                      @rivvak
+
+# Phase 2 additions — anything that could weaken the agent guardrails.
+/ai/guards/                    @rivvak
+/deploy/devbox/                @rivvak
+/server/routes/ai_hooks.py     @rivvak
+/docs/phase2/SECURITY.md       @rivvak

@@ -1,0 +1,66 @@
+# Self-heal: on a failed CI run of the main test workflow, ask sg-devbox to
+# propose a patch. Gated by repo secret AI_HEAL_ENABLED == "true" AND the
+# server env var of the same name. Either off = no-op.
+#
+# The workflow only READS the failure log and dispatches to the SG server.
+# All code changes come back as a PR from rivvak-sg-heal[bot], which is
+# reviewed by @rivvak per CODEOWNERS.
+name: ai-self-heal
+
+on:
+  workflow_run:
+    workflows: ["tests"]        # ← change if your main test workflow is named differently
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  dispatch:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && vars.AI_HEAL_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-self-heal-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Fetch failure log
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.event.workflow_run.id }}'
+          echo "Fetching log for run $RUN_ID"
+          gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed \
+              > failure.log 2>&1 || true
+          # Trim to last ~15k chars so we don't blow up the JSON payload
+          tail -c 15000 failure.log > failure.trim
+          wc -c failure.trim
+
+      - name: Call SG server /internal/heal
+        env:
+          LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${LICENSE_SERVER_URL:-}" || -z "${ADMIN_KEY:-}" ]]; then
+            echo "LICENSE_SERVER_URL / ADMIN_KEY not set — bailing gracefully"
+            exit 0
+          fi
+          jq -Rs \
+             --arg run_id "${{ github.event.workflow_run.id }}" \
+             --arg sha "${{ github.event.workflow_run.head_sha }}" \
+             '{run_id: $run_id, head_sha: $sha, failure_log: .}' \
+             < failure.trim > payload.json
+
+          curl -sS -X POST \
+              -H "X-Admin-Key: $ADMIN_KEY" \
+              -H "Content-Type: application/json" \
+              --data @payload.json \
+              --max-time 1500 \
+              "$LICENSE_SERVER_URL/internal/heal" \
+              | tee heal-response.json
+
+          # Non-zero if the SG server refused (e.g. AI_HEAL_ENABLED=false).
+          jq -e '.status' heal-response.json > /dev/null

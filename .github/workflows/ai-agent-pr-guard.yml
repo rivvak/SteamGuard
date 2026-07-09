@@ -1,0 +1,53 @@
+# Defense-in-depth: on any PR opened by rivvak-sg-heal[bot], re-run the
+# path-guard classification in GitHub's sandbox. This cannot be bypassed
+# even if the VM were compromised.
+name: ai-agent-pr-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    if: ${{ github.actor == 'rivvak-sg-heal[bot]' || startsWith(github.head_ref, 'sg-heal/') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pathspec
+        run: pip install --quiet pathspec
+
+      - name: Compute changed files
+        id: diff
+        run: |
+          set -euo pipefail
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          git diff --name-only "$base".."$head" > changed.txt
+          echo "--- changed files:"
+          cat changed.txt
+
+      - name: Run path-guard classification
+        run: |
+          set -euo pipefail
+          # Run as a module so the ai.guards package resolves correctly.
+          python -m ai.guards.diff_check --stdin < changed.txt || CODE=$?
+          CODE="${CODE:-0}"
+          echo "diff_check exit code: $CODE"
+          # 0=direct, 2=pr (fine for an agent PR), 3=denied (fail hard)
+          if [[ "$CODE" == "3" ]]; then
+            echo "::error::Agent PR touches deny-listed paths. Refusing."
+            exit 1
+          fi

@@ -11,8 +11,10 @@ All inference goes through **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`
 
 ---
 
-## 0. Locked Decisions (v3.1)
+## 0. Locked Decisions (v3.2)
 
+> **v3.2 patch (2026-07-08)**: Phase 1 shipped and is live in production (see [Issue #7](https://github.com/rivvak/SteamGuard/issues/7)). Phase 2 code has landed — sg-devbox VM + `/develop` + CI self-heal. See [`docs/phase2/`](./phase2/) for the sub-plan, [`docs/phase2/SECURITY.md`](./phase2/SECURITY.md) for the threat model, and [`docs/phase2/RUNBOOK.md`](./phase2/RUNBOOK.md) for the deploy steps.
+>
 > **v3.1 patch (2026-07-08)**: Corrected `/ai/ask` auth from "JWT session token" to the actual **HMAC(SECRET_KEY, "key:hwid")** scheme used by `/verify` and other license-gated routes. `JWT_SECRET` is retained in Secret Manager for potential future use but is not the auth mechanism for AI endpoints in Phase 1.
 
 

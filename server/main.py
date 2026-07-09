@@ -409,6 +409,17 @@ except Exception as _ai_e:  # pragma: no cover
         "AI router not mounted: %s (this is fine if AI_ASK_ENABLED=false)", _ai_e
     )
 
+# ── Dev-agent hooks (Phase 2) ──────────────────────────────────────────────
+try:
+    from server.routes.ai_hooks import router as _ai_hooks_router  # noqa: E402
+    app.include_router(_ai_hooks_router)
+except Exception as _hooks_e:  # pragma: no cover
+    import logging as _hooks_log
+    _hooks_log.getLogger(__name__).warning(
+        "AI hooks router not mounted: %s (fine if AI_DEVELOP_ENABLED=false and AI_HEAL_ENABLED=false)",
+        _hooks_e,
+    )
+
 # ── Dashboard static files ─────────────────────────────────────────────────
 import os as _os
 _dashboard_path = _os.path.abspath(

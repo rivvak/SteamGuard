@@ -1,0 +1,7 @@
+[Unit]
+Description=Prune old sg-devbox worktrees
+
+[Service]
+Type=oneshot
+User=sgagent
+ExecStart=/opt/sg-devbox/gc-worktrees.sh
