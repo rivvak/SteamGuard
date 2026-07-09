@@ -43,11 +43,12 @@ DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
 SESSIONS_DIR = Path(os.environ.get("SG_SESSIONS_DIR", "/var/lib/sg-devbox/sessions"))
 ARTIFACTS_DIR = Path(os.environ.get("SG_ARTIFACTS_DIR", "/var/lib/sg-devbox/artifacts"))
 SANDBOX_IMAGE = os.environ.get("SG_SANDBOX_IMAGE", "sg-sandbox:latest")
-# Default model for /create. We use z-ai/glm-5.2 on NVIDIA NIM — same model as
-# Phase 2 /develop, verified working via the OpenAI-compatible endpoint at
-# https://integrate.api.nvidia.com/v1. Override via SG_CREATE_MODEL env or per-
-# request `model` param.
-DEFAULT_MODEL = os.environ.get("SG_CREATE_MODEL", "z-ai/glm-5.2")
+# Default model for /create. Same underlying model as /develop (z-ai/glm-5.2 on
+# NVIDIA NIM), but FCC requires the provider prefix in the MODEL env: the
+# supported providers are 'nvidia_nim', 'zai', etc. Without the 'nvidia_nim/'
+# prefix FCC rejects the config with `Invalid provider: 'z-ai'`.
+# Override via SG_CREATE_MODEL env or per-request `model` param.
+DEFAULT_MODEL = os.environ.get("SG_CREATE_MODEL", "nvidia_nim/z-ai/glm-5.2")
 NIM_KEY = os.environ["NVIDIA_NIM_API_KEY"]
 GCS_BUCKET = os.environ.get("SG_CREATE_BUCKET", "steamguard-create-artifacts")
 

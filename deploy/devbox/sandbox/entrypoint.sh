@@ -6,7 +6,10 @@
 #                              upstream key when routing to nvidia_nim/*)
 #   GITHUB_TOKEN             — scoped App install token; injected into gh via GH_TOKEN
 #   PROMPT                   — user's /create prompt (full text)
-#   MODEL                    — e.g. nvidia_nim/moonshotai/kimi-k2.5
+#   MODEL                    — FCC-format "<provider>/<model-id>", e.g.
+#                              nvidia_nim/z-ai/glm-5.2 or nvidia_nim/moonshotai/kimi-k2.5.
+#                              MUST include the provider prefix or FCC rejects
+#                              the config with `Invalid provider: '<xxx>'`.
 #   SESSION_ID               — used purely for log tagging
 #
 # Optional:
@@ -88,9 +91,14 @@ fcc-server \
     >/tmp/fcc.log 2>&1 &
 FCC_PID=$!
 
-# Wait up to 60s for FCC /v1/models to respond
+# Wait up to 60s for FCC /v1/models to respond.
+# FCC gates all routes behind ANTHROPIC_AUTH_TOKEN — our health check MUST send
+# the bearer or FCC returns 401 forever (which is what happened in the first
+# Phase 3 smoke tests).
 for i in $(seq 1 60); do
-    if curl -sf -o /dev/null "${ANTHROPIC_BASE_URL}/v1/models"; then
+    if curl -sf -o /dev/null \
+        -H "Authorization: Bearer ${ANTHROPIC_AUTH_TOKEN}" \
+        "${ANTHROPIC_BASE_URL}/v1/models"; then
         log "FCC ready after ${i}s"
         break
     fi
@@ -102,7 +110,9 @@ for i in $(seq 1 60); do
     sleep 1
 done
 
-if ! curl -sf -o /dev/null "${ANTHROPIC_BASE_URL}/v1/models"; then
+if ! curl -sf -o /dev/null \
+    -H "Authorization: Bearer ${ANTHROPIC_AUTH_TOKEN}" \
+    "${ANTHROPIC_BASE_URL}/v1/models"; then
     log "FCC did not become ready in 60s"
     tail -50 /tmp/fcc.log >&2
     exit 72
