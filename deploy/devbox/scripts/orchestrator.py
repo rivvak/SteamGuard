@@ -43,7 +43,7 @@ sys.path.insert(0, str(REPO))
 from ai.guards.diff_check import classify_diff  # noqa: E402
 
 DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
-FCC_URL = os.environ.get("FCC_URL", "http://127.0.0.1:8787")
+FCC_URL = os.environ.get("FCC_URL", "http://127.0.0.1:8082")
 MODEL = os.environ.get("AI_DEVBOX_MODEL", "z-ai/glm-5.2")
 WORK_ROOT = Path(os.environ.get("SG_WORK_ROOT", "/var/lib/sg-devbox/work"))
 REPO_SLUG = os.environ.get("REPO_SLUG", "rivvak/SteamGuard")

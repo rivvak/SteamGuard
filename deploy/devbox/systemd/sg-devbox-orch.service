@@ -1,13 +1,14 @@
 [Unit]
 Description=SteamGuard dev-agent orchestrator (session dispatch, path-guard, PR opener)
-After=sg-fcc.service
-Requires=sg-fcc.service
+After=sg-fcc.service network-online.target
+Wants=sg-fcc.service
 
 [Service]
 Type=simple
 User=sgagent
 Group=sgagent
 EnvironmentFile=/etc/sg-devbox/env
+Environment=PYTHONPATH=/home/sgagent/SteamGuard
 WorkingDirectory=/opt/sg-devbox
 
 # Loopback only. Cloud Run reaches us via IAP tunnel.

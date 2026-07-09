@@ -7,7 +7,7 @@
 # Prereqs (do these BEFORE running this script):
 #   1. /etc/sg-devbox/env exists with NVIDIA_NIM_API_KEY, DEVBOX_TOKEN,
 #      SG_HEAL_APP_ID, SG_HEAL_INSTALLATION_ID, SG_HEAL_PRIVATE_KEY_B64,
-#      REPO_SLUG=rivvak/SteamGuard.
+#      REPO_SLUG=rivvak/SteamGuard, FCC_URL=http://127.0.0.1:8082.
 #   2. SSH signing key at /etc/sg-devbox/sg-heal-bot (0600, sgagent-owned).
 #   3. The `sgagent` user's public key is added as a **deploy key with write
 #      access** on rivvak/SteamGuard (used only as a signing identity; pushes
@@ -15,19 +15,20 @@
 
 set -euo pipefail
 
-echo "[1/9] apt update + base packages"
+REPO_SLUG="${REPO_SLUG:-rivvak/SteamGuard}"
+
+echo "[1/10] apt update + base packages"
 apt-get update
 apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg git jq python3 python3-venv python3-pip \
-    docker.io tini uuid-runtime
+    python3-jwt tini uuid-runtime
 
-echo "[2/9] create sgagent user"
+echo "[2/10] create sgagent user"
 if ! id sgagent >/dev/null 2>&1; then
     useradd --system --create-home --shell /bin/bash sgagent
 fi
-usermod -aG docker sgagent
 
-echo "[3/9] install gh CLI"
+echo "[3/10] install gh CLI"
 if ! command -v gh >/dev/null 2>&1; then
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
@@ -38,46 +39,72 @@ if ! command -v gh >/dev/null 2>&1; then
     apt-get install -y gh
 fi
 
-echo "[4/9] install Claude Code CLI (Anthropic)"
-# Anthropic ships Claude Code as a Node/npm CLI. We install via the official
-# tarball to avoid pulling all of Node's package ecosystem.
+echo "[4/10] install Claude Code CLI (Anthropic)"
 if ! command -v claude-code >/dev/null 2>&1; then
     apt-get install -y nodejs npm
-    npm install -g @anthropic-ai/claude-code
+    npm install -g @anthropic-ai/claude-code || true
 fi
 
-echo "[5/9] pull free-claude-code image"
-# free-claude-code is MIT, Anthropic-Messages-API proxy in front of NIM.
-# We build from source rather than pulling a random image to keep the supply
-# chain visible. Repo: https://github.com/Alishahryar1/free-claude-code
+echo "[5/10] install uv (needed for FCC's Python 3.14 pin)"
+if ! sudo -u sgagent test -x /home/sgagent/.local/bin/uv; then
+    sudo -u sgagent bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+fi
+
+echo "[6/10] install free-claude-code (native Python, not Docker)"
 FCC_SRC=/opt/free-claude-code
-if [[ ! -d "$FCC_SRC" ]]; then
-    git clone --depth 1 https://github.com/Alishahryar1/free-claude-code.git "$FCC_SRC"
+install -d -o sgagent -g sgagent "$FCC_SRC"
+if [[ ! -d "$FCC_SRC/.git" ]]; then
+    sudo -u sgagent git clone --depth 1 https://github.com/Alishahryar1/free-claude-code.git "$FCC_SRC"
 fi
-(cd "$FCC_SRC" && docker build -t sg/free-claude-code:local .)
+sudo -u sgagent git -C "$FCC_SRC" config --global --add safe.directory "$FCC_SRC"
+sudo -u sgagent bash -c "cd $FCC_SRC && /home/sgagent/.local/bin/uv sync 2>&1 | tail -5"
 
-echo "[6/9] clone the SteamGuard repo into the agent home"
-sudo -u sgagent bash <<'EOF'
-set -euo pipefail
-cd ~
-if [[ ! -d SteamGuard ]]; then
-    # Uses gh's default auth (we'll authenticate as the GitHub App per-session,
-    # this clone only needs read).
-    git clone https://github.com/rivvak/SteamGuard.git
+echo "[7/10] clone the SteamGuard repo into the agent home (via GitHub App token)"
+# Mint a short-lived App installation token to bootstrap the initial clone.
+# Steady-state operations use per-session tokens minted by the orchestrator.
+if [[ ! -d /home/sgagent/SteamGuard/.git ]]; then
+    APP_ID=$(awk -F= '/^SG_HEAL_APP_ID=/{print $2}' /etc/sg-devbox/env)
+    INSTALL_ID=$(awk -F= '/^SG_HEAL_INSTALLATION_ID=/{print $2}' /etc/sg-devbox/env)
+    PEM_B64=$(awk -F= '/^SG_HEAL_PRIVATE_KEY_B64=/{print $2}' /etc/sg-devbox/env)
+    if [[ -z "$APP_ID" || -z "$INSTALL_ID" || -z "$PEM_B64" ]]; then
+        echo "ERROR: SG_HEAL_* not set in /etc/sg-devbox/env — cannot clone private repo"
+        exit 1
+    fi
+    PEM=$(mktemp)
+    echo "$PEM_B64" | base64 -d > "$PEM"
+    chmod 600 "$PEM"
+    JWT=$(APP_ID="$APP_ID" PEM="$PEM" python3 <<'PY'
+import jwt, time, os
+now = int(time.time())
+with open(os.environ["PEM"]) as f: key = f.read()
+print(jwt.encode({"iat": now-60, "exp": now+540, "iss": os.environ["APP_ID"]}, key, algorithm="RS256"))
+PY
+)
+    TOKEN=$(curl -sS -X POST \
+        -H "Authorization: Bearer $JWT" \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/app/installations/$INSTALL_ID/access_tokens" \
+        | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+    rm -f "$PEM"
+    sudo -u sgagent bash -c "cd ~ && git clone https://x-access-token:${TOKEN}@github.com/${REPO_SLUG}.git SteamGuard"
+    unset TOKEN JWT
 fi
-cd SteamGuard
-git remote set-url origin https://github.com/rivvak/SteamGuard.git
+sudo -u sgagent bash <<EOF
+set -euo pipefail
+cd ~/SteamGuard
+git remote set-url origin https://github.com/${REPO_SLUG}.git
 git config user.name  "rivvak-sg-heal[bot]"
 git config user.email "rivvak-sg-heal[bot]@users.noreply.github.com"
-# SSH signing
 git config gpg.format ssh
-git config user.signingkey /etc/sg-devbox/sg-heal-bot.pub
-git config commit.gpgsign true
+if [[ -f /etc/sg-devbox/sg-heal-bot.pub ]]; then
+    git config user.signingkey /etc/sg-devbox/sg-heal-bot.pub
+    git config commit.gpgsign true
+fi
 mkdir -p /var/lib/sg-devbox/work
 EOF
 chown -R sgagent:sgagent /var/lib/sg-devbox
 
-echo "[7/9] install repo scripts under /opt/sg-devbox"
+echo "[8/10] install repo scripts under /opt/sg-devbox"
 install -d -o sgagent -g sgagent /opt/sg-devbox
 install -m 0755 -o sgagent -g sgagent \
     "$(dirname "$0")/scripts/run-session.sh"   /opt/sg-devbox/run-session.sh
@@ -95,7 +122,7 @@ sudo -u sgagent python3 -m venv /opt/sg-devbox/venv
 sudo -u sgagent /opt/sg-devbox/venv/bin/pip install --quiet \
     fastapi uvicorn httpx pyjwt cryptography pathspec
 
-echo "[8/9] install systemd units"
+echo "[9/10] install systemd units"
 install -m 0644 "$(dirname "$0")/systemd/sg-fcc.service"          /etc/systemd/system/sg-fcc.service
 install -m 0644 "$(dirname "$0")/systemd/sg-devbox-orch.service"  /etc/systemd/system/sg-devbox-orch.service
 install -m 0644 "$(dirname "$0")/systemd/sg-devbox-cleanup.service" /etc/systemd/system/sg-devbox-cleanup.service
@@ -104,11 +131,16 @@ install -m 0644 "$(dirname "$0")/systemd/sg-devbox-cleanup.timer"   /etc/systemd
 systemctl daemon-reload
 systemctl enable --now sg-fcc.service sg-devbox-orch.service sg-devbox-cleanup.timer
 
-echo "[9/9] smoke test"
-sleep 3
-# FCC should answer on loopback with a 401 (no bearer)
-curl -sf -o /dev/null -w "fcc:%{http_code}\n" http://127.0.0.1:8787/v1/messages || true
-# Orchestrator health
+echo "[10/10] smoke test"
+# FCC needs ~30s on first boot to fetch Python 3.14 via uv
+for i in {1..12}; do
+    sleep 5
+    if curl -sf -o /dev/null http://127.0.0.1:8082/v1/models; then
+        echo "FCC ready after ${i} attempts"
+        break
+    fi
+done
+curl -sf -o /dev/null -w "fcc-models:%{http_code}\n" http://127.0.0.1:8082/v1/models || true
 curl -sf http://127.0.0.1:9090/health && echo
 
 echo "bootstrap complete. Tail logs with:  journalctl -u sg-fcc -u sg-devbox-orch -f"

@@ -142,12 +142,27 @@ rivvak-sg-heal[bot] ssh-ed25519 AAAA... sg-heal-bot signing key
 
 Still on the VM:
 
+The SteamGuard repo is private, so the bootstrap needs the GitHub App creds to be
+in `/etc/sg-devbox/env` (Step 5). It uses them once to clone `/tmp/sg-bootstrap`;
+steady-state runs use per-session tokens.
+
 ```bash
-git clone --depth 1 https://github.com/rivvak/SteamGuard.git /tmp/sg-bootstrap
+# Clone bootstrap via the App token (same pattern bootstrap.sh uses internally)
+APP_ID=$(awk -F= '/^SG_HEAL_APP_ID=/{print $2}' /etc/sg-devbox/env)
+INSTALL_ID=$(awk -F= '/^SG_HEAL_INSTALLATION_ID=/{print $2}' /etc/sg-devbox/env)
+PEM_B64=$(awk -F= '/^SG_HEAL_PRIVATE_KEY_B64=/{print $2}' /etc/sg-devbox/env)
+PEM=$(mktemp) && echo "$PEM_B64" | base64 -d > "$PEM" && chmod 600 "$PEM"
+JWT=$(APP_ID="$APP_ID" PEM="$PEM" python3 -c 'import jwt,time,os; now=int(time.time()); k=open(os.environ["PEM"]).read(); print(jwt.encode({"iat":now-60,"exp":now+540,"iss":os.environ["APP_ID"]},k,algorithm="RS256"))')
+TOKEN=$(curl -sS -X POST -H "Authorization: Bearer $JWT" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/$INSTALL_ID/access_tokens" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+rm -f "$PEM"
+sudo git clone https://x-access-token:${TOKEN}@github.com/rivvak/SteamGuard.git /tmp/sg-bootstrap
+unset TOKEN JWT
+
 sudo bash /tmp/sg-bootstrap/deploy/devbox/bootstrap.sh
 ```
 
-Watch the smoke tests at the end print `fcc:401` and a JSON `/health`.
+FCC needs ~30 s on first boot (uv fetches Python 3.14). The smoke test at the
+end prints `fcc-models:200` and a JSON `/health` with `"fcc":"ok"`.
 
 ## 8. Wire the SG server for the VM
 
@@ -155,9 +170,10 @@ Back on your laptop:
 
 ```bash
 gcloud run services update steamguard --region us-central1 \
-    --set-env-vars \
-SG_DEVBOX_NAME=sg-devbox,\
-SG_DEVBOX_ZONE=us-central1-a,\
+    --update-env-vars \
+DEVBOX_HOST=sg-devbox,\
+DEVBOX_ZONE=us-central1-a,\
+DEVBOX_PROJECT=fabled-mystery-474200-i1,\
 AI_DEVELOP_ENABLED=false,\
 AI_HEAL_ENABLED=false \
     --update-secrets DEVBOX_TOKEN=DEVBOX_TOKEN:latest
@@ -167,8 +183,9 @@ AI_HEAL_ENABLED=false \
 
 ```bash
 gh secret set LICENSE_SERVER_URL --repo rivvak/SteamGuard \
-    --body "https://steamguard-<hash>-uc.a.run.app"
-gh secret set ADMIN_KEY --repo rivvak/SteamGuard   # paste from Secret Manager
+    --body "https://rivvak.app"
+gh secret set ADMIN_KEY --repo rivvak/SteamGuard \
+    --body "$(gcloud secrets versions access latest --secret=ADMIN_KEY --project=fabled-mystery-474200-i1)"
 gh variable set AI_HEAL_ENABLED --repo rivvak/SteamGuard --body "false"
 ```
 
