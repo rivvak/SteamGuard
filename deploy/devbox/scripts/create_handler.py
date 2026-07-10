@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 
 import memory_store
 
-# ─── config ─────────────────────────────────────────────────────────────────
+# ─── config ───────────────────────────────────────────────────────────[...]
 
 DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
 SESSIONS_DIR = Path(os.environ.get("SG_SESSIONS_DIR", "/var/lib/sg-devbox/sessions"))
@@ -67,7 +67,7 @@ DOCKER_PIDS = os.environ.get("SG_SANDBOX_PIDS", "512")
 _SID_RE = re.compile(r"^[a-z0-9]{6,32}$")
 
 
-# ─── models ─────────────────────────────────────────────────────────────────
+# ─── models ───────────────────────────────────────────────────────────[...]
 
 
 class CreateBody(BaseModel):
@@ -86,7 +86,7 @@ class CreateBody(BaseModel):
 router = APIRouter()
 
 
-# ─── helpers ────────────────────────────────────────────────────────────────
+# ─── helpers ──────────────────────────────────────────────────────────��[...]
 
 
 def _auth(header: Optional[str]) -> None:
@@ -206,7 +206,7 @@ def _human_bytes(n: int) -> str:
     return f"{n:.1f}TB"
 
 
-# ─── routes ─────────────────────────────────────────────────────────────────
+# ─── routes ──────────────────────────────────────────────────────────��[...]
 
 
 @router.post("/create")
@@ -247,7 +247,10 @@ def create(body: CreateBody, authorization: Optional[str] = Header(default=None)
     reasoning_hint = ""
     if body.deep:
         thinking = max(thinking, 64000)
-        watchdog_idle = 900
+        # Deep-reasoning mode requires longer idle allowance (default 15m).
+        # Bump to 20 minutes (1200s) so long "thinking" pauses don't trigger
+        # the sandbox watchdog prematurely.
+        watchdog_idle = 1200
         reasoning_hint = (
             "# Deep-reasoning mode is ENABLED for this request.\n"
             "Take your time. Think through the problem thoroughly before coding.\n"
@@ -434,7 +437,7 @@ def create_status(sid: str, authorization: Optional[str] = Header(default=None))
     return _augment(st)
 
 
-# ─── internals ──────────────────────────────────────────────────────────────
+# ─── internals ─────────────────────────────────────────────────────────��[...]
 
 
 def _read_sandbox_status(out_dir: Path) -> Optional[dict]:
