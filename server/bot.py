@@ -190,7 +190,69 @@ intents = discord.Intents.default()
 intents.members         = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+class SteamGuardBot(commands.Bot):
+    """SteamGuard bot subclass.
+
+    setup_hook fires exactly once before on_ready, so it's the right place
+    to load cogs — on_ready can fire multiple times (resume/reconnect) and
+    reloading cogs there would raise. The cog-registration blocks below
+    mirror the original on_ready loading exactly.
+    """
+
+    async def setup_hook(self) -> None:
+        # ── Register AI /ask cog (Phase 1) ──
+        # Wrapped so a missing dep never blocks the rest of setup.
+        if os.environ.get("AI_ASK_ENABLED", "false").lower() == "true":
+            try:
+                from server.bot.cogs.ask_cog import setup as setup_ask
+                await setup_ask(self)
+                LOG.info("Registered /ask cog")
+            except Exception as e:
+                LOG.warning(f"Failed to register /ask cog: {e}")
+        else:
+            LOG.info("AI_ASK_ENABLED=false — /ask cog not registered")
+
+        # ── Register AI /develop cog (Phase 2) ──
+        if os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true":
+            try:
+                from server.bot.cogs.develop_cog import setup as setup_develop
+                await setup_develop(self)
+                LOG.info("Registered /develop cog")
+            except Exception as e:
+                LOG.warning(f"Failed to register /develop cog: {e}")
+        else:
+            LOG.info("AI_DEVELOP_ENABLED=false — /develop cog not registered")
+
+        # ── Register AI /create cog (Phase 3) ──
+        if os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true":
+            try:
+                from server.bot.cogs.create_cog import setup as setup_create
+                await setup_create(self)
+                LOG.info("Registered /create cog")
+            except Exception as e:
+                LOG.warning(f"Failed to register /create cog: {e}")
+        else:
+            LOG.info("AI_CREATE_ENABLED=false — /create cog not registered")
+
+        # ── Register /memory cog (Phase 4) ──
+        # Only makes sense when at least one of /create or /develop is enabled;
+        # otherwise there's nothing writing to memory. We gate on either.
+        if (
+            os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
+            or os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
+        ):
+            try:
+                from server.bot.cogs.memory_cog import setup as setup_memory
+                await setup_memory(self)
+                LOG.info("Registered /memory cog (Phase 4)")
+            except Exception as e:
+                LOG.warning(f"Failed to register /memory cog: {e}")
+        else:
+            LOG.info("AI_CREATE_ENABLED and AI_DEVELOP_ENABLED both false — /memory cog not registered")
+
+
+bot = SteamGuardBot(command_prefix="!", intents=intents)
 
 
 def in_getkey_channel():
@@ -319,56 +381,6 @@ async def on_ready():
     weekly_key_cleanup.start()
     weekly_gen_audit.start()
 
-    # ── Register AI /ask cog (Phase 1) ──
-    # Wrapped so a missing dep never blocks the rest of on_ready.
-    if os.environ.get("AI_ASK_ENABLED", "false").lower() == "true":
-        try:
-            from server.bot.cogs.ask_cog import setup as setup_ask
-            await setup_ask(bot)
-            LOG.info("Registered /ask cog")
-        except Exception as e:
-            LOG.warning(f"Failed to register /ask cog: {e}")
-    else:
-        LOG.info("AI_ASK_ENABLED=false — /ask cog not registered")
-
-    # ── Register AI /develop cog (Phase 2) ──
-    if os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true":
-        try:
-            from server.bot.cogs.develop_cog import setup as setup_develop
-            await setup_develop(bot)
-            LOG.info("Registered /develop cog")
-        except Exception as e:
-            LOG.warning(f"Failed to register /develop cog: {e}")
-    else:
-        LOG.info("AI_DEVELOP_ENABLED=false — /develop cog not registered")
-
-    # ── Register AI /create cog (Phase 3) ──
-    if os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true":
-        try:
-            from server.bot.cogs.create_cog import setup as setup_create
-            await setup_create(bot)
-            LOG.info("Registered /create cog")
-        except Exception as e:
-            LOG.warning(f"Failed to register /create cog: {e}")
-    else:
-        LOG.info("AI_CREATE_ENABLED=false — /create cog not registered")
-
-    # ── Register /memory cog (Phase 4) ──
-    # Only makes sense when at least one of /create or /develop is enabled;
-    # otherwise there's nothing writing to memory. We gate on either.
-    if (
-        os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
-        or os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
-    ):
-        try:
-            from server.bot.cogs.memory_cog import setup as setup_memory
-            await setup_memory(bot)
-            LOG.info("Registered /memory cog (Phase 4)")
-        except Exception as e:
-            LOG.warning(f"Failed to register /memory cog: {e}")
-    else:
-        LOG.info("AI_CREATE_ENABLED and AI_DEVELOP_ENABLED both false — /memory cog not registered")
-
     # Sync slash commands to the guild
     try:
         guild_obj = discord.Object(id=GUILD_ID)
@@ -437,6 +449,17 @@ async def on_ready():
             LOG.info(f"Startup hard-delete: {uid} → {deleted} key(s) erased. Reason: {reason}")
         except Exception as e:
             LOG.warning(f"Startup hard-delete failed for {uid}: {e}")
+
+
+@bot.event
+async def on_disconnect():
+    LOG.warning("Discord WebSocket disconnected — Cloud Run may be cycling the container.")
+
+
+@bot.event
+async def on_resumed():
+    LOG.info("Discord WebSocket resumed — bot reconnected without a cold start.")
+
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -2835,7 +2858,30 @@ async def cmd_grant_reward(ctx: commands.Context, user: discord.Member, trigger:
 
 # ── Slash command error handler ───────────────────────────────────────────────
 
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError) -> None:
+    LOG.exception("Unhandled slash command error: %s", error)
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=_embed_error("Command Error", f"`{error}`"),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=_embed_error("Command Error", f"`{error}`"),
+                ephemeral=True,
+            )
+    except discord.HTTPException:
+        pass  # interaction token expired; nothing we can do
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    bot.run(BOT_TOKEN)
+    try:
+        bot.run(BOT_TOKEN)
+    except Exception:
+        LOG.exception("bot.run() exited with unhandled exception — Cloud Run will restart the container")
+        raise

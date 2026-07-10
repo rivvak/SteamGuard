@@ -22,9 +22,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server/bot_requirements.txt ./bot_requirements.txt
 RUN pip install --no-cache-dir -r bot_requirements.txt
 
+# Install supervisord for process supervision (bot + API must not die silently)
+RUN pip install --no-cache-dir supervisor
+
 # Copy application code
 COPY server/ ./server/
 COPY server/bot.py ./bot.py
+COPY supervisord.conf /app/supervisord.conf
 
 # Copy dashboard static files
 COPY dashboard/ ./dashboard/
@@ -34,4 +38,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "python bot.py & uvicorn server.main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["supervisord", "-c", "/app/supervisord.conf"]
