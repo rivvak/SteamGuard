@@ -1,0 +1,52 @@
+# Target manifest for the standalone SG bot service.
+# Currently the bot and license API ship together as the `steamguard` service
+# (see .github/workflows/deploy.yml). This manifest documents the recommended
+# config for the future bot-only split — single always-on instance, 1GiB RAM,
+# 1 vCPU — because the Discord gateway WebSocket cannot tolerate scale-to-zero
+# or competing second instances.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: steamguard-bot
+  annotations:
+    run.googleapis.com/region: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: gcr.io/fabled-mystery-474200-i1/steamguard-bot:latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          env:
+            - name: ADMIN_USER_IDS
+              value: "1513150836472021074"
+            - name: LICENSE_SERVER_URL
+              value: "https://rivvak.app"
+            - name: DISCORD_INVITE
+              value: "https://discord.gg/RTHM8YhpE"
+            - name: OFF_TOPIC_CHANNEL_ID
+              value: "1513193890117714182"
+            - name: MOD_CHANNEL_ID
+              value: "1513296463197769770"
+            - name: SG_DEVBOX_NAME
+              value: "sg-devbox"
+            - name: SG_DEVBOX_ZONE
+              value: "us-central1-a"
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "fabled-mystery-474200-i1"
+            - name: AI_DEVELOP_ENABLED
+              value: "true"
+            - name: AI_HEAL_ENABLED
+              value: "false"
+            - name: AI_CREATE_ENABLED
+              value: "true"
+            - name: AI_CREATE_RATE_PER_DAY
+              value: "20"
