@@ -141,11 +141,18 @@ async def _post_session(payload: dict) -> dict:
             r.raise_for_status()
             return r.json()
     finally:
-        tunnel.terminate()
+        if tunnel.returncode is None:
+            try:
+                tunnel.terminate()
+            except ProcessLookupError:
+                pass
         try:
             await asyncio.wait_for(tunnel.wait(), timeout=5)
         except asyncio.TimeoutError:
-            tunnel.kill()
+            try:
+                tunnel.kill()
+            except ProcessLookupError:
+                pass
 
 
 def _pick_free_port() -> int:
@@ -291,11 +298,18 @@ async def _devbox_request(method: str, path: str, json_body: Optional[dict] = No
                 raise HTTPException(r.status_code, f"devbox {r.status_code}: {r.text[:300]}")
             return r.json()
     finally:
-        tunnel.terminate()
+        if tunnel.returncode is None:
+            try:
+                tunnel.terminate()
+            except ProcessLookupError:
+                pass
         try:
             await asyncio.wait_for(tunnel.wait(), timeout=5)
         except asyncio.TimeoutError:
-            tunnel.kill()
+            try:
+                tunnel.kill()
+            except ProcessLookupError:
+                pass
 
 
 async def _devbox_request_retry(
