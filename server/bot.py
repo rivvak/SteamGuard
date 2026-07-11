@@ -205,7 +205,7 @@ class SteamGuardBot(commands.Bot):
         # Wrapped so a missing dep never blocks the rest of setup.
         if os.environ.get("AI_ASK_ENABLED", "false").lower() == "true":
             try:
-                from server.bot.cogs.ask_cog import setup as setup_ask
+                from bot.cogs.ask_cog import setup as setup_ask
                 await setup_ask(self)
                 LOG.info("Registered /ask cog")
             except Exception as e:
@@ -216,7 +216,7 @@ class SteamGuardBot(commands.Bot):
         # ── Register AI /develop cog (Phase 2) ──
         if os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true":
             try:
-                from server.bot.cogs.develop_cog import setup as setup_develop
+                from bot.cogs.develop_cog import setup as setup_develop
                 await setup_develop(self)
                 LOG.info("Registered /develop cog")
             except Exception as e:
@@ -227,7 +227,7 @@ class SteamGuardBot(commands.Bot):
         # ── Register AI /create cog (Phase 3) ──
         if os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true":
             try:
-                from server.bot.cogs.create_cog import setup as setup_create
+                from bot.cogs.create_cog import setup as setup_create
                 await setup_create(self)
                 LOG.info("Registered /create cog")
             except Exception as e:
@@ -243,7 +243,7 @@ class SteamGuardBot(commands.Bot):
             or os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
         ):
             try:
-                from server.bot.cogs.memory_cog import setup as setup_memory
+                from bot.cogs.memory_cog import setup as setup_memory
                 await setup_memory(self)
                 LOG.info("Registered /memory cog (Phase 4)")
             except Exception as e:
