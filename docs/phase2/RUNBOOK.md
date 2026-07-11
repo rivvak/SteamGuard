@@ -97,6 +97,11 @@ sudo mkdir -p /etc/sg-devbox
 sudo tee /etc/sg-devbox/env <<'EOF'
 REPO_SLUG=rivvak/SteamGuard
 AI_DEVBOX_MODEL=nvidia_nim/z-ai/glm-5.2
+AI_DEVBOX_MODELS=nvidia_nim/z-ai/glm-5.2,nvidia_nim/deepseek-ai/deepseek-v4-pro,nvidia_nim/deepseek-ai/deepseek-v4-flash
+AI_DEVBOX_MAX_RUNTIME_SECONDS=2400
+AI_DEVBOX_PLAN_RUNTIME_SECONDS=900
+AI_DEVBOX_MAX_TURNS=40
+AI_DEVBOX_PLAN_MAX_TURNS=18
 EOF
 
 # Pull each secret from Secret Manager and append. The VM's default SA
@@ -105,6 +110,12 @@ for S in NVIDIA_NIM_API_KEY DEVBOX_TOKEN SG_HEAL_APP_ID SG_HEAL_INSTALLATION_ID;
     VAL=$(gcloud secrets versions access latest --secret="$S")
     printf '%s=%s\n' "$S" "$VAL" | sudo tee -a /etc/sg-devbox/env
 done
+
+# Optional auth-token failover slots for FCC proxy gate (recommended):
+# mirror DEVBOX_TOKEN initially, then rotate independently if desired.
+TOK=$(gcloud secrets versions access latest --secret=DEVBOX_TOKEN)
+printf 'AI_DEVBOX_AUTH_TOKEN_A=%s\nAI_DEVBOX_AUTH_TOKEN_B=%s\nAI_DEVBOX_AUTH_TOKEN_C=%s\n' \
+  "$TOK" "$TOK" "$TOK" | sudo tee -a /etc/sg-devbox/env
 
 # GitHub App private key: store as base64 (PEM contains newlines that break
 # EnvironmentFile parsing).

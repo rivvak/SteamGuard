@@ -111,6 +111,7 @@ docs/phase2/
 4. `sg-devbox` orchestrator:
    - Creates a fresh git worktree at `/var/lib/sg-devbox/work/<uuid>/`.
    - Uses free-claude-code with provider-qualified model defaults (for example `nvidia_nim/z-ai/glm-5.2`) and NVIDIA NIM auth flow.
+   - Uses model/token fallback for retryable upstream failures (`timeout`, malformed response, `429/5xx`) so long tasks can continue on backup slots.
    - Runs Claude Code in headless mode, then records terminal session result to persisted develop status JSON.
    - When Claude Code finishes, runs `path-guard.py` on the diff.
      - If any file matches DENY → abort, return `refused` to bot.

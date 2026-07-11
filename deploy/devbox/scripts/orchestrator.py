@@ -49,6 +49,14 @@ DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
 FCC_URL = os.environ.get("FCC_URL", "http://127.0.0.1:8082")
 NIM_KEY = os.environ.get("NVIDIA_NIM_API_KEY", "")
 MODEL = os.environ.get("AI_DEVBOX_MODEL", "nvidia_nim/z-ai/glm-5.2")
+MODELS_RAW = os.environ.get(
+    "AI_DEVBOX_MODELS",
+    "nvidia_nim/z-ai/glm-5.2,nvidia_nim/deepseek-ai/deepseek-v4-pro,nvidia_nim/deepseek-ai/deepseek-v4-flash",
+)
+MAX_RUNTIME_SECONDS = int(os.environ.get("AI_DEVBOX_MAX_RUNTIME_SECONDS", "2400"))
+PLAN_RUNTIME_SECONDS = int(os.environ.get("AI_DEVBOX_PLAN_RUNTIME_SECONDS", "900"))
+MAX_TURNS = int(os.environ.get("AI_DEVBOX_MAX_TURNS", "40"))
+PLAN_MAX_TURNS = int(os.environ.get("AI_DEVBOX_PLAN_MAX_TURNS", "18"))
 WORK_ROOT = Path(os.environ.get("SG_WORK_ROOT", "/var/lib/sg-devbox/work"))
 REPO_SLUG = os.environ.get("REPO_SLUG", "rivvak/SteamGuard")
 OPEN_PR = Path("/opt/sg-devbox/open-pr.sh")
@@ -92,6 +100,33 @@ class FollowupBody(BaseModel):
 
 _develop_locks_guard = threading.Lock()
 _develop_locks: dict[str, threading.Lock] = {}
+
+
+def _split_csv(raw: str) -> list[str]:
+    return [x.strip() for x in (raw or "").split(",") if x.strip()]
+
+
+def _candidate_models() -> list[str]:
+    vals = _split_csv(MODELS_RAW)
+    if not vals:
+        vals = [MODEL]
+    if MODEL and MODEL not in vals:
+        vals.insert(0, MODEL)
+    return vals
+
+
+def _candidate_auth_tokens() -> list[str]:
+    vals = [
+        os.environ.get("AI_DEVBOX_AUTH_TOKEN_A", ""),
+        os.environ.get("AI_DEVBOX_AUTH_TOKEN_B", ""),
+        os.environ.get("AI_DEVBOX_AUTH_TOKEN_C", ""),
+        DEVBOX_TOKEN,
+    ]
+    out: list[str] = []
+    for v in vals:
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def _auth(header: Optional[str]) -> None:
@@ -320,9 +355,10 @@ def _get_develop_lock(sid: str) -> threading.Lock:
         return lk
 
 
-def _wait_fcc_ready(timeout_s: int = 45) -> Optional[str]:
+def _wait_fcc_ready(timeout_s: int = 45, auth_token: Optional[str] = None) -> Optional[str]:
     end = time.monotonic() + timeout_s
-    auth = {"Authorization": f"Bearer {DEVBOX_TOKEN}"}
+    token = auth_token or DEVBOX_TOKEN
+    auth = {"Authorization": f"Bearer {token}"}
     last_err = "unknown"
     while time.monotonic() < end:
         try:
@@ -393,49 +429,15 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
     # Also drop a copy on disk for debugging.
     (wt / ".sg-task.md").write_text(prompt)
 
-    # 3) invoke Claude Code in headless print mode via FCC proxy.
-    fcc_err = _wait_fcc_ready()
-    if fcc_err:
+    # 3) invoke Claude Code with model/token failover for reliability.
+    cc, log_tail, attempt_meta = _run_claude_with_failover(wt, body, prompt)
+    if cc is None:
         _cleanup(wt)
-        return _error(sid, "fcc not ready", fcc_err)
-
-    # Env mirrors what `fcc-claude` sets: strip ANTHROPIC_* from parent, then
-    # add BASE_URL, AUTH_TOKEN, gateway model discovery, and compact window.
-    # FCC routes to the NIM model configured in its Admin UI (MODEL setting) —
-    # do NOT set ANTHROPIC_MODEL here; fcc-claude explicitly strips it.
-    base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
-    env = {
-        **base_env,
-        "ANTHROPIC_BASE_URL": FCC_URL,
-        "MODEL": MODEL,
-        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
-        # FCC client auth token (proxy gate), not upstream NIM key.
-        "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
-    }
-    # Use --permission-mode acceptEdits so Claude Code auto-accepts file edits
-    # in this sandboxed worktree without requiring an interactive TTY. The
-    # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
-    # narrow allowedTools, and a path-guard classifier on the resulting diff.
-    cc = _run(
-        [
-            "claude",
-            "-p",
-            "--max-turns",
-            "30",
-            "--permission-mode",
-            "acceptEdits",
-            "--allowedTools",
-            "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
-            "--output-format",
-            "text",
-        ],
-        cwd=wt,
-        env=env,
-        timeout=1200,
-        stdin_data=prompt,
-    )
-    log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
+        return _error(
+            sid,
+            "claude run failed on all model/token attempts",
+            log_tail,
+        )
 
     # 4) classify diff
     diff = _run(["git", "diff", "--name-only"], wt)
@@ -448,8 +450,17 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
                 "session_id": sid,
                 "plan": _extract_plan(cc.stdout),
                 "log_tail": log_tail,
+                "attempts": attempt_meta,
             }
-        return {"status": "empty", "session_id": sid, "log_tail": log_tail}
+        return {
+            "status": "empty",
+            "session_id": sid,
+            "log_tail": log_tail,
+            "attempts": attempt_meta,
+            "next_step_hint": (
+                "No diff produced. For big tasks, run plan_only first, then continue_last with a specific step."
+            ),
+        }
 
     if body.plan_only:
         _cleanup(wt)
@@ -460,6 +471,7 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
             "warning": "Plan mode produced file edits; changes were discarded.",
             "proposed_files": files[:30],
             "log_tail": log_tail,
+            "attempts": attempt_meta,
         }
 
     cls = classify_diff(files)
@@ -472,6 +484,7 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
             "session_id": sid,
             "denied_files": cls.denied_files,
             "log_tail": log_tail,
+            "attempts": attempt_meta,
         }
 
     # 5) stage + commit
@@ -500,6 +513,7 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
             "commit_sha": sha,
             "commit_url": commit_url,
             "files": files,
+            "attempts": attempt_meta,
         }
 
     # else pr
@@ -521,6 +535,7 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
         "session_id": sid,
         "pr_url": pr_url,
         "files": files,
+        "attempts": attempt_meta,
     }
 
 
@@ -603,3 +618,129 @@ def _result_summary(result: dict) -> str:
     if status == "refused":
         return f"Refused due to denied files: {', '.join(result.get('denied_files', [])[:8])}"
     return f"Run completed with status: {status}"
+
+
+def _run_claude_with_failover(
+    wt: Path,
+    body: SessionBody,
+    prompt: str,
+) -> tuple[Optional[subprocess.CompletedProcess], str, list[dict]]:
+    models = _candidate_models()
+    tokens = _candidate_auth_tokens()
+    attempts: list[dict] = []
+    last_tail = ""
+    per_attempt_timeout = PLAN_RUNTIME_SECONDS if body.plan_only else MAX_RUNTIME_SECONDS
+    per_attempt_turns = PLAN_MAX_TURNS if body.plan_only else MAX_TURNS
+
+    for model_name in models:
+        for auth_token in tokens:
+            fcc_err = _wait_fcc_ready(timeout_s=25, auth_token=auth_token)
+            if fcc_err:
+                attempts.append(
+                    {
+                        "model": model_name,
+                        "auth_slot": _mask_token(auth_token),
+                        "ready": False,
+                        "error": fcc_err[:200],
+                    }
+                )
+                continue
+
+            base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+            env = {
+                **base_env,
+                "ANTHROPIC_BASE_URL": FCC_URL,
+                "MODEL": model_name,
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+                "ANTHROPIC_AUTH_TOKEN": auth_token,
+            }
+            try:
+                cc = _run(
+                    [
+                        "claude",
+                        "-p",
+                        "--max-turns",
+                        str(per_attempt_turns),
+                        "--permission-mode",
+                        "acceptEdits",
+                        "--allowedTools",
+                        "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg),WebSearch,WebFetch",
+                        "--output-format",
+                        "text",
+                    ],
+                    cwd=wt,
+                    env=env,
+                    timeout=per_attempt_timeout,
+                    stdin_data=prompt,
+                )
+                log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
+                last_tail = log_tail
+                retryable = _is_retryable_agent_failure(cc.returncode, log_tail)
+                attempts.append(
+                    {
+                        "model": model_name,
+                        "auth_slot": _mask_token(auth_token),
+                        "ready": True,
+                        "returncode": cc.returncode,
+                        "retryable_failure": retryable,
+                    }
+                )
+                if retryable:
+                    continue
+                return cc, log_tail, attempts
+            except subprocess.TimeoutExpired as e:
+                tail = f"timeout after {per_attempt_timeout}s: {type(e).__name__}: {e}"
+                last_tail = tail
+                attempts.append(
+                    {
+                        "model": model_name,
+                        "auth_slot": _mask_token(auth_token),
+                        "ready": True,
+                        "timeout": per_attempt_timeout,
+                    }
+                )
+                continue
+            except Exception as e:
+                tail = f"{type(e).__name__}: {e}"
+                last_tail = tail
+                attempts.append(
+                    {
+                        "model": model_name,
+                        "auth_slot": _mask_token(auth_token),
+                        "ready": True,
+                        "error": tail[:200],
+                    }
+                )
+                continue
+
+    return None, last_tail, attempts
+
+
+def _is_retryable_agent_failure(returncode: int, log_tail: str) -> bool:
+    txt = (log_tail or "").lower()
+    retryable_signals = (
+        "timed out",
+        "timeout",
+        "empty or malformed response",
+        "api error",
+        "429",
+        "502",
+        "503",
+        "504",
+        "connection reset",
+        "temporarily unavailable",
+        "upstream",
+    )
+    has_signal = any(sig in txt for sig in retryable_signals)
+    if has_signal:
+        return True
+    return returncode != 0
+
+
+def _mask_token(tok: str) -> str:
+    if not tok:
+        return "none"
+    if tok == DEVBOX_TOKEN:
+        return "default"
+    return f"slot:{tok[-6:]}"
