@@ -104,18 +104,18 @@ docs/phase2/
    - Rate-limits per Discord user (5/hr; owner `1513150836472021074` unlimited).
    - Calls SG server `POST /internal/develop` with `X-Admin-Key`, `{discord_user_id, task, thread_id}`.
 3. SG server (Cloud Run):
-   - Opens **IAP TCP tunnel** to `sg-devbox:8787` using the runtime SA (which has `roles/iap.tunnelResourceAccessor` on the VM).
-   - Actually: SG server just tunnels to a small local HTTP orchestrator on the VM (port 9090) that manages Claude Code sessions. Port 8787 stays FCC-only.
-   - POSTs `{task, ref: "main"}` to `http://localhost:9090/session` (via tunnel).
-4. `sg-devbox` orchestrator (`run-session.sh`, invoked over HTTP):
+   - Opens **IAP TCP tunnel** to the local HTTP orchestrator on `sg-devbox:9090` (runtime SA must have `roles/iap.tunnelResourceAccessor`).
+   - Calls kickoff `POST /develop` and returns immediately with `{session_id, state:"starting"}`.
+   - Bot then polls `GET /develop/status/{sid}` through the same short-lived tunnel path.
+4. `sg-devbox` orchestrator:
    - Creates a fresh git worktree at `/var/lib/sg-devbox/work/<uuid>/`.
-   - Sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`, `ANTHROPIC_AUTH_TOKEN=<devbox-token>`.
-   - Runs `claude-code --headless --task-file /tmp/task-<uuid>.md`.
+   - Uses free-claude-code with provider-qualified model defaults (for example `nvidia_nim/z-ai/glm-5.2`) and NVIDIA NIM auth flow.
+   - Runs Claude Code in headless mode, then records terminal session result to persisted develop status JSON.
    - When Claude Code finishes, runs `path-guard.py` on the diff.
      - If any file matches DENY → abort, return `refused` to bot.
      - If **all** changed files are inside ALLOW_DIRECT → `git push origin main` directly, return `committed` with commit SHA.
      - Otherwise → `git push origin sg-heal/<uuid>`, `gh pr create --reviewer rivvak`, return `pr_opened` with PR URL.
-5. SG bot replies in Discord with commit link or PR link.
+5. SG bot sends heartbeat updates while polling, then posts terminal result embed (commit URL / PR URL / refused / error).
 
 ## 4. CI self-heal flow
 

@@ -40,6 +40,8 @@ _ENABLED_DEV = os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
 _ENABLED_HEAL = os.environ.get("AI_HEAL_ENABLED", "false").lower() == "true"
 _OWNER_ID = os.environ.get("DISCORD_OWNER_ID", "1513150836472021074")
 _RATE_LIMIT = int(os.environ.get("AI_DEVELOP_RATE_PER_HOUR", "5"))
+_DEVBOX_RETRIES = int(os.environ.get("AI_DEVBOX_RETRIES", "3"))
+_DEVBOX_BACKOFF_SECONDS = float(os.environ.get("AI_DEVBOX_BACKOFF_SECONDS", "0.8"))
 
 # Firestore for rate limiting
 try:
@@ -176,7 +178,9 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
     if body.discord_user_id != _OWNER_ID:
         _rate_check(f"develop_{body.discord_user_id}", _RATE_LIMIT)
 
-    return await _post_session(
+    return await _devbox_request_retry(
+        "POST",
+        "/develop",
         {
             "task": body.task,
             "source": "develop",
@@ -184,8 +188,16 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
             "initiator": body.discord_user_id,
             "channel_id": body.channel_id or body.thread_id,
             "deep": body.deep,
-        }
+        },
     )
+
+
+@router.get("/develop/status/{sid}")
+async def develop_status(sid: str, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    _check_admin(x_admin_key)
+    if not _ENABLED_DEV:
+        raise HTTPException(503, "develop disabled")
+    return await _devbox_request_retry("GET", f"/develop/status/{sid}")
 
 
 _ENABLED_CREATE = os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
@@ -193,11 +205,9 @@ _CREATE_RATE = int(os.environ.get("AI_CREATE_RATE_PER_DAY", "20"))
 
 
 async def _devbox_request(method: str, path: str, json_body: Optional[dict] = None) -> dict:
-    """Generic devbox HTTP call over IAP tunnel (or direct in dev). Used by
-    /create + /create/status — the /develop path uses `_post_session` which
-    is specialised for the synchronous /session endpoint."""
+    """Generic devbox HTTP call over IAP tunnel (or direct in dev)."""
     if _DEVBOX_URL_DIRECT:
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        async with httpx.AsyncClient(timeout=25.0) as c:
             r = await c.request(
                 method, f"{_DEVBOX_URL_DIRECT}{path}",
                 headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
@@ -215,7 +225,7 @@ async def _devbox_request(method: str, path: str, json_body: Optional[dict] = No
     )
     try:
         await _wait_tunnel_ready(tunnel, local_port, timeout=15)
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        async with httpx.AsyncClient(timeout=25.0) as c:
             r = await c.request(
                 method, f"http://localhost:{local_port}{path}",
                 headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
@@ -231,6 +241,26 @@ async def _devbox_request(method: str, path: str, json_body: Optional[dict] = No
             await asyncio.wait_for(tunnel.wait(), timeout=5)
         except asyncio.TimeoutError:
             tunnel.kill()
+
+
+async def _devbox_request_retry(
+    method: str, path: str, json_body: Optional[dict] = None
+) -> dict:
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max(1, _DEVBOX_RETRIES) + 1):
+        try:
+            return await _devbox_request(method, path, json_body)
+        except (httpx.HTTPError, HTTPException) as e:
+            last_error = e
+            retryable = isinstance(e, httpx.HTTPError) or (
+                isinstance(e, HTTPException) and e.status_code in (502, 503, 504)
+            )
+            if attempt >= _DEVBOX_RETRIES or not retryable:
+                raise
+            await asyncio.sleep(_DEVBOX_BACKOFF_SECONDS * attempt)
+    if last_error:
+        raise last_error
+    raise HTTPException(502, "devbox request failed")
 
 
 @router.post("/create")
@@ -252,7 +282,7 @@ async def create(body: CreateBody, x_admin_key: Optional[str] = Header(default=N
     }
     if body.model:
         payload["model"] = body.model
-    return await _devbox_request("POST", "/create", payload)
+    return await _devbox_request_retry("POST", "/create", payload)
 
 
 @router.get("/create/status/{sid}")
@@ -260,7 +290,7 @@ async def create_status(sid: str, x_admin_key: Optional[str] = Header(default=No
     _check_admin(x_admin_key)
     if not _ENABLED_CREATE:
         raise HTTPException(503, "create disabled")
-    return await _devbox_request("GET", f"/create/status/{sid}")
+    return await _devbox_request_retry("GET", f"/create/status/{sid}")
 
 
 @router.get("/create/artifact/{sid}")
@@ -339,7 +369,7 @@ async def memory_show(
 ):
     _check_admin(x_admin_key)
     _mem_scope_guard(scope, scope_id, discord_user_id)
-    return await _devbox_request("GET", f"/memory/show/{scope}/{scope_id}")
+    return await _devbox_request_retry("GET", f"/memory/show/{scope}/{scope_id}")
 
 
 @router.post("/memory/clear/{scope}/{scope_id}")
@@ -351,7 +381,7 @@ async def memory_clear(
 ):
     _check_admin(x_admin_key)
     _mem_scope_guard(scope, scope_id, discord_user_id)
-    return await _devbox_request("POST", f"/memory/clear/{scope}/{scope_id}")
+    return await _devbox_request_retry("POST", f"/memory/clear/{scope}/{scope_id}")
 
 
 @router.post("/memory/forget/{scope}/{scope_id}")
@@ -364,7 +394,7 @@ async def memory_forget(
 ):
     _check_admin(x_admin_key)
     _mem_scope_guard(scope, scope_id, discord_user_id)
-    return await _devbox_request(
+    return await _devbox_request_retry(
         "POST", f"/memory/forget/{scope}/{scope_id}", {"entry_id": body.entry_id}
     )
 
