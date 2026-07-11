@@ -34,7 +34,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -57,6 +57,14 @@ MAX_RUNTIME_SECONDS = int(os.environ.get("AI_DEVBOX_MAX_RUNTIME_SECONDS", "2400"
 PLAN_RUNTIME_SECONDS = int(os.environ.get("AI_DEVBOX_PLAN_RUNTIME_SECONDS", "900"))
 MAX_TURNS = int(os.environ.get("AI_DEVBOX_MAX_TURNS", "40"))
 PLAN_MAX_TURNS = int(os.environ.get("AI_DEVBOX_PLAN_MAX_TURNS", "18"))
+ATTEMPT_TIMEOUT_SECONDS = int(os.environ.get("AI_DEVBOX_ATTEMPT_TIMEOUT_SECONDS", "900"))
+PLAN_ATTEMPT_TIMEOUT_SECONDS = int(
+    os.environ.get("AI_DEVBOX_PLAN_ATTEMPT_TIMEOUT_SECONDS", "180")
+)
+MAX_ATTEMPTS = int(os.environ.get("AI_DEVBOX_MAX_ATTEMPTS", "4"))
+PLAN_MAX_ATTEMPTS = int(os.environ.get("AI_DEVBOX_PLAN_MAX_ATTEMPTS", "2"))
+PROGRESS_UPDATE_SECONDS = max(5, int(os.environ.get("AI_DEVBOX_PROGRESS_UPDATE_SECONDS", "15")))
+STATUS_LOG_TAIL_CHARS = max(400, int(os.environ.get("AI_DEVBOX_STATUS_LOG_TAIL_CHARS", "1200")))
 WORK_ROOT = Path(os.environ.get("SG_WORK_ROOT", "/var/lib/sg-devbox/work"))
 REPO_SLUG = os.environ.get("REPO_SLUG", "rivvak/SteamGuard")
 OPEN_PR = Path("/opt/sg-devbox/open-pr.sh")
@@ -199,6 +207,11 @@ def develop(body: SessionBody, authorization: Optional[str] = Header(default=Non
         "channel_id": body.channel_id,
         "task": body.task,
         "active_objective": body.active_objective or body.task,
+        "progress": {
+            "stage": "queued",
+            "detail": "Session queued; worker starting.",
+            "updated_at": int(time.time()),
+        },
         "messages": [
             {"role": "user", "content": body.task, "ts": int(time.time()), "kind": "objective"}
         ],
@@ -226,14 +239,24 @@ def develop_status(sid: str, authorization: Optional[str] = Header(default=None)
 def develop_message(sid: str, body: FollowupBody, authorization: Optional[str] = Header(default=None)):
     _auth(authorization)
     st = _develop_load(sid)
-    if st.get("state") == "running":
+    if st.get("state") in ("starting", "running"):
         raise HTTPException(409, "session is currently running")
     messages = st.get("messages") or []
     messages.append({"role": "user", "content": body.message, "ts": int(time.time()), "kind": "follow_up"})
     st["messages"] = messages[-20:]
+    st["active_objective"] = body.message
     st["state"] = "starting"
     st["started_at"] = int(time.time())
     st.pop("ended_at", None)
+    st.pop("error", None)
+    st.pop("log_tail", None)
+    st.pop("result", None)
+    st["attempts"] = []
+    st["progress"] = {
+        "stage": "queued",
+        "detail": "Follow-up accepted; worker starting.",
+        "updated_at": int(time.time()),
+    }
     _develop_save(sid, st)
 
     followup_context = (
@@ -271,6 +294,8 @@ def develop_history(sid: str, authorization: Optional[str] = Header(default=None
         "session_id": sid,
         "state": st.get("state"),
         "active_objective": st.get("active_objective"),
+        "progress": st.get("progress"),
+        "attempts": st.get("attempts", []),
         "messages": st.get("messages", []),
         "last_result": st.get("result"),
     }
@@ -280,10 +305,11 @@ def _develop_save(sid: str, state: dict) -> None:
     DEVELOP_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     if not _SID_RE.match(sid):
         raise HTTPException(400, "invalid session id")
-    (DEVELOP_SESSIONS_DIR / f"{sid}.json").write_text(
-        json.dumps(state),
-        encoding="utf-8",
-    )
+    state["updated_at"] = int(time.time())
+    target = DEVELOP_SESSIONS_DIR / f"{sid}.json"
+    temp = DEVELOP_SESSIONS_DIR / f"{sid}.json.tmp"
+    temp.write_text(json.dumps(state), encoding="utf-8")
+    temp.replace(target)
 
 
 def _develop_load(sid: str) -> dict:
@@ -302,14 +328,45 @@ def _develop_worker(sid: str, body_data: dict) -> None:
 
 
 def _develop_worker_locked(sid: str, body_data: dict) -> None:
+    def progress_cb(update: dict) -> None:
+        st = _develop_load(sid)
+        progress = st.get("progress") or {}
+        progress.update(update.get("progress") or {})
+        if progress:
+            progress["updated_at"] = int(time.time())
+            st["progress"] = progress
+        if "log_tail" in update:
+            st["log_tail"] = str(update["log_tail"] or "")[-STATUS_LOG_TAIL_CHARS:]
+        if "attempts" in update:
+            st["attempts"] = list(update["attempts"] or [])[-8:]
+        if "error" in update:
+            st["error"] = update["error"]
+        _develop_save(sid, st)
+
     try:
         st = _develop_load(sid)
         st["state"] = "running"
+        st["attempts"] = []
+        st.pop("error", None)
+        st["progress"] = {
+            "stage": "preparing",
+            "detail": "Preparing worktree and prompt.",
+            "updated_at": int(time.time()),
+        }
         _develop_save(sid, st)
-        result = _execute_session(SessionBody(**body_data), sid)
+        result = _execute_session(SessionBody(**body_data), sid, progress_cb=progress_cb)
         st["result"] = result
         st["state"] = "error" if result.get("status") == "error" else "finished"
         st["ended_at"] = int(time.time())
+        if st["state"] != "error":
+            st.pop("error", None)
+        st["attempts"] = result.get("attempts", st.get("attempts", []))
+        st["log_tail"] = str(result.get("log_tail") or st.get("log_tail") or "")[-STATUS_LOG_TAIL_CHARS:]
+        st["progress"] = {
+            "stage": "finished" if st["state"] == "finished" else "error",
+            "detail": _result_summary(result)[:240],
+            "updated_at": int(time.time()),
+        }
         msgs = st.get("messages") or []
         msgs.append(
             {
@@ -328,6 +385,11 @@ def _develop_worker_locked(sid: str, body_data: dict) -> None:
             st = {"session_id": sid, "started_at": int(time.time())}
         st["state"] = "error"
         st["ended_at"] = int(time.time())
+        st["progress"] = {
+            "stage": "error",
+            "detail": f"Worker exception: {type(e).__name__}: {e}",
+            "updated_at": int(time.time()),
+        }
         st["result"] = {
             "status": "error",
             "session_id": sid,
@@ -372,14 +434,28 @@ def _wait_fcc_ready(timeout_s: int = 45, auth_token: Optional[str] = None) -> Op
     return last_err
 
 
-def _execute_session(body: SessionBody, sid: str) -> dict:
+def _execute_session(
+    body: SessionBody,
+    sid: str,
+    progress_cb: Optional[Callable[[dict], None]] = None,
+) -> dict:
     wt = WORK_ROOT / sid
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
     # 1) fresh worktree from origin/<ref>
+    _progress(
+        progress_cb,
+        stage="preparing_worktree",
+        detail=f"Fetching origin/{body.ref}.",
+    )
     up = _run(["git", "fetch", "origin", body.ref], REPO)
     if up.returncode != 0:
         return _error(sid, "git fetch failed", up.stderr)
+    _progress(
+        progress_cb,
+        stage="preparing_worktree",
+        detail=f"Creating fresh worktree from origin/{body.ref}.",
+    )
     add = _run(["git", "worktree", "add", "-f", str(wt), f"origin/{body.ref}"], REPO)
     if add.returncode != 0:
         return _error(sid, "git worktree add failed", add.stderr)
@@ -428,18 +504,31 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
     )
     # Also drop a copy on disk for debugging.
     (wt / ".sg-task.md").write_text(prompt)
+    _progress(
+        progress_cb,
+        stage="starting_agent",
+        detail="Prompt prepared; starting Claude Code.",
+    )
 
     # 3) invoke Claude Code with model/token failover for reliability.
-    cc, log_tail, attempt_meta = _run_claude_with_failover(wt, body, prompt)
+    cc, log_tail, attempt_meta = _run_claude_with_failover(wt, body, prompt, progress_cb=progress_cb)
     if cc is None:
         _cleanup(wt)
         return _error(
             sid,
             "claude run failed on all model/token attempts",
             log_tail,
+            attempts=attempt_meta,
         )
 
     # 4) classify diff
+    _progress(
+        progress_cb,
+        stage="classifying_diff",
+        detail="Claude Code finished; inspecting repository changes.",
+        log_tail=log_tail,
+        attempts=attempt_meta,
+    )
     diff = _run(["git", "diff", "--name-only"], wt)
     files = [ln for ln in diff.stdout.splitlines() if ln.strip()]
     if not files:
@@ -488,6 +577,13 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
         }
 
     # 5) stage + commit
+    _progress(
+        progress_cb,
+        stage="committing",
+        detail=f"Preparing {cls.classification} git commit.",
+        attempts=attempt_meta,
+        log_tail=log_tail,
+    )
     _run(["git", "add", "-A"], wt)
     commit_msg = _build_commit_msg(body, sid, cls.classification)
     # No -S: signing is disabled per operator preference (commit.gpgsign=false).
@@ -499,6 +595,12 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
         return _error(sid, "git commit failed", ci.stderr)
 
     if cls.classification == "direct":
+        _progress(
+            progress_cb,
+            stage="pushing",
+            detail=f"Pushing changes directly to {body.ref}.",
+            attempts=attempt_meta,
+        )
         push = _run(["git", "push", "origin", f"HEAD:{body.ref}"], wt)
         if push.returncode != 0:
             _cleanup(wt)
@@ -519,6 +621,12 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
     # else pr
     branch = f"sg-heal/{body.source}-{sid}"
     _run(["git", "branch", "-M", branch], wt)
+    _progress(
+        progress_cb,
+        stage="opening_pr",
+        detail=f"Pushing branch {branch} and opening PR.",
+        attempts=attempt_meta,
+    )
     pr = _run(
         ["/opt/sg-devbox/open-pr.sh", branch, body.task[:72].replace("\n", " "), body.source],
         wt,
@@ -559,8 +667,11 @@ def _cleanup(wt: Path) -> None:
         pass
 
 
-def _error(sid: str, msg: str, tail: str):
-    return {"status": "error", "session_id": sid, "error": msg, "log_tail": tail[-1500:]}
+def _error(sid: str, msg: str, tail: str, attempts: Optional[list[dict]] = None):
+    out = {"status": "error", "session_id": sid, "error": msg, "log_tail": tail[-1500:]}
+    if attempts:
+        out["attempts"] = attempts
+    return out
 
 
 def _record_memory(
@@ -624,102 +735,194 @@ def _run_claude_with_failover(
     wt: Path,
     body: SessionBody,
     prompt: str,
+    progress_cb: Optional[Callable[[dict], None]] = None,
 ) -> tuple[Optional[subprocess.CompletedProcess], str, list[dict]]:
     models = _candidate_models()
     tokens = _candidate_auth_tokens()
     attempts: list[dict] = []
     last_tail = ""
-    per_attempt_timeout = PLAN_RUNTIME_SECONDS if body.plan_only else MAX_RUNTIME_SECONDS
+    total_budget_seconds = PLAN_RUNTIME_SECONDS if body.plan_only else MAX_RUNTIME_SECONDS
+    per_attempt_timeout = (
+        PLAN_ATTEMPT_TIMEOUT_SECONDS if body.plan_only else ATTEMPT_TIMEOUT_SECONDS
+    )
     per_attempt_turns = PLAN_MAX_TURNS if body.plan_only else MAX_TURNS
+    max_attempts = PLAN_MAX_ATTEMPTS if body.plan_only else MAX_ATTEMPTS
+    total_budget_seconds = max(30, total_budget_seconds)
+    per_attempt_timeout = max(30, min(per_attempt_timeout, total_budget_seconds))
+    max_attempts = max(1, max_attempts)
+    started = time.monotonic()
+    claude_attempts = 0
+    auth_index = _first_ready_auth_token(
+        tokens,
+        attempts,
+        progress_cb,
+        detail="Checking Claude gateway auth token.",
+        started=started,
+        total_budget_seconds=total_budget_seconds,
+    )
+    if auth_index is None:
+        return None, "Claude gateway did not accept any configured auth token.", attempts
 
-    for model_name in models:
-        for auth_token in tokens:
-            fcc_err = _wait_fcc_ready(timeout_s=25, auth_token=auth_token)
-            if fcc_err:
-                attempts.append(
-                    {
-                        "model": model_name,
-                        "auth_slot": _mask_token(auth_token),
-                        "ready": False,
-                        "error": fcc_err[:200],
-                    }
-                )
-                continue
+    model_index = 0
+    while claude_attempts < max_attempts and model_index < len(models):
+        elapsed = int(time.monotonic() - started)
+        remaining = max(0, total_budget_seconds - elapsed)
+        if remaining < 30:
+            last_tail = (
+                f"total runtime budget exhausted after {elapsed}s "
+                f"(budget {total_budget_seconds}s)"
+            )
+            attempts.append(
+                {
+                    "error": "budget_exhausted",
+                    "elapsed_s": elapsed,
+                    "budget_s": total_budget_seconds,
+                }
+            )
+            break
 
-            base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
-            env = {
-                **base_env,
-                "ANTHROPIC_BASE_URL": FCC_URL,
-                "MODEL": model_name,
-                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
-                "ANTHROPIC_AUTH_TOKEN": auth_token,
+        model_name = models[model_index]
+        auth_token = tokens[auth_index]
+        timeout_s = min(per_attempt_timeout, remaining)
+        claude_attempts += 1
+        attempt_no = claude_attempts
+        _progress(
+            progress_cb,
+            stage="running_agent",
+            detail=(
+                f"Claude attempt {attempt_no}/{max_attempts} on {model_name} "
+                f"(timeout {timeout_s}s, budget left {remaining}s)."
+            ),
+            attempts=attempts,
+            progress={
+                "attempt": attempt_no,
+                "attempt_limit": max_attempts,
+                "model": model_name,
+                "auth_slot": _mask_token(auth_token),
+                "timeout_s": timeout_s,
+                "budget_remaining_s": remaining,
+            },
+        )
+
+        base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+        env = {
+            **base_env,
+            "ANTHROPIC_BASE_URL": FCC_URL,
+            "MODEL": model_name,
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+            "ANTHROPIC_AUTH_TOKEN": auth_token,
+        }
+        try:
+            cc = _run_claude_attempt(
+                [
+                    "claude",
+                    "-p",
+                    "--max-turns",
+                    str(per_attempt_turns),
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--allowedTools",
+                    "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg),WebSearch,WebFetch",
+                    "--output-format",
+                    "text",
+                ],
+                cwd=wt,
+                env=env,
+                timeout=timeout_s,
+                stdin_data=prompt,
+                progress_cb=progress_cb,
+                attempt_no=attempt_no,
+                attempt_limit=max_attempts,
+                model_name=model_name,
+                auth_slot=_mask_token(auth_token),
+            )
+            log_tail = _combine_log_tail(cc.stdout, cc.stderr)
+            last_tail = log_tail
+            failure_kind = _classify_agent_failure(cc.returncode, log_tail)
+            attempt = {
+                "model": model_name,
+                "auth_slot": _mask_token(auth_token),
+                "ready": True,
+                "returncode": cc.returncode,
+                "failure_kind": failure_kind,
+                "timeout_s": timeout_s,
             }
-            try:
-                cc = _run(
-                    [
-                        "claude",
-                        "-p",
-                        "--max-turns",
-                        str(per_attempt_turns),
-                        "--permission-mode",
-                        "acceptEdits",
-                        "--allowedTools",
-                        "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg),WebSearch,WebFetch",
-                        "--output-format",
-                        "text",
-                    ],
-                    cwd=wt,
-                    env=env,
-                    timeout=per_attempt_timeout,
-                    stdin_data=prompt,
-                )
-                log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
-                last_tail = log_tail
-                retryable = _is_retryable_agent_failure(cc.returncode, log_tail)
-                attempts.append(
-                    {
-                        "model": model_name,
-                        "auth_slot": _mask_token(auth_token),
-                        "ready": True,
-                        "returncode": cc.returncode,
-                        "retryable_failure": retryable,
-                    }
-                )
-                if retryable:
-                    continue
+            attempts.append(attempt)
+            _progress(progress_cb, attempts=attempts, log_tail=log_tail)
+            if failure_kind == "success":
                 return cc, log_tail, attempts
-            except subprocess.TimeoutExpired as e:
-                tail = f"timeout after {per_attempt_timeout}s: {type(e).__name__}: {e}"
-                last_tail = tail
-                attempts.append(
-                    {
-                        "model": model_name,
-                        "auth_slot": _mask_token(auth_token),
-                        "ready": True,
-                        "timeout": per_attempt_timeout,
-                    }
+            if failure_kind == "auth":
+                next_auth_index = _next_ready_auth_token(
+                    tokens,
+                    auth_index + 1,
+                    attempts,
+                    progress_cb,
+                    detail="Primary Claude gateway auth failed; checking backup token.",
+                    started=started,
+                    total_budget_seconds=total_budget_seconds,
                 )
+                if next_auth_index is not None:
+                    auth_index = next_auth_index
+                    continue
+                break
+            if failure_kind == "transient":
+                model_index += 1
                 continue
-            except Exception as e:
-                tail = f"{type(e).__name__}: {e}"
-                last_tail = tail
-                attempts.append(
-                    {
-                        "model": model_name,
-                        "auth_slot": _mask_token(auth_token),
-                        "ready": True,
-                        "error": tail[:200],
-                    }
-                )
-                continue
+            break
+        except subprocess.TimeoutExpired as e:
+            tail = _combine_log_tail(
+                e.output if isinstance(e.output, str) else "",
+                e.stderr if isinstance(e.stderr, str) else "",
+            )
+            if not tail:
+                tail = f"timeout after {timeout_s}s: {type(e).__name__}: {e}"
+            last_tail = tail
+            attempts.append(
+                {
+                    "model": model_name,
+                    "auth_slot": _mask_token(auth_token),
+                    "ready": True,
+                    "timeout": timeout_s,
+                    "failure_kind": "transient",
+                }
+            )
+            _progress(progress_cb, attempts=attempts, log_tail=tail)
+            model_index += 1
+            continue
+        except Exception as e:
+            tail = f"{type(e).__name__}: {e}"
+            last_tail = tail
+            attempts.append(
+                {
+                    "model": model_name,
+                    "auth_slot": _mask_token(auth_token),
+                    "ready": True,
+                    "error": tail[:200],
+                    "failure_kind": "fatal",
+                }
+            )
+            _progress(progress_cb, attempts=attempts, log_tail=tail)
+            break
 
     return None, last_tail, attempts
 
 
-def _is_retryable_agent_failure(returncode: int, log_tail: str) -> bool:
+def _classify_agent_failure(returncode: int, log_tail: str) -> str:
+    if returncode == 0:
+        return "success"
     txt = (log_tail or "").lower()
-    retryable_signals = (
+    auth_signals = (
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "authentication",
+        "invalid api key",
+        "invalid bearer",
+        "bad bearer",
+    )
+    transient_signals = (
         "timed out",
         "timeout",
         "empty or malformed response",
@@ -732,10 +935,11 @@ def _is_retryable_agent_failure(returncode: int, log_tail: str) -> bool:
         "temporarily unavailable",
         "upstream",
     )
-    has_signal = any(sig in txt for sig in retryable_signals)
-    if has_signal:
-        return True
-    return returncode != 0
+    if any(sig in txt for sig in auth_signals):
+        return "auth"
+    if any(sig in txt for sig in transient_signals):
+        return "transient"
+    return "fatal"
 
 
 def _mask_token(tok: str) -> str:
@@ -744,3 +948,197 @@ def _mask_token(tok: str) -> str:
     if tok == DEVBOX_TOKEN:
         return "default"
     return f"slot:{tok[-6:]}"
+
+
+def _first_ready_auth_token(
+    tokens: list[str],
+    attempts: list[dict],
+    progress_cb: Optional[Callable[[dict], None]],
+    detail: str,
+    started: float,
+    total_budget_seconds: int,
+) -> Optional[int]:
+    return _next_ready_auth_token(
+        tokens,
+        0,
+        attempts,
+        progress_cb,
+        detail,
+        started=started,
+        total_budget_seconds=total_budget_seconds,
+    )
+
+
+def _next_ready_auth_token(
+    tokens: list[str],
+    start_index: int,
+    attempts: list[dict],
+    progress_cb: Optional[Callable[[dict], None]],
+    detail: str,
+    started: float,
+    total_budget_seconds: int,
+) -> Optional[int]:
+    for idx in range(start_index, len(tokens)):
+        token = tokens[idx]
+        remaining = max(0, total_budget_seconds - int(time.monotonic() - started))
+        if remaining < 5:
+            attempts.append(
+                {
+                    "auth_slot": _mask_token(token),
+                    "ready": False,
+                    "error": "budget exhausted before gateway probe",
+                }
+            )
+            _progress(progress_cb, attempts=attempts)
+            return None
+        _progress(
+            progress_cb,
+            stage="checking_gateway",
+            detail=f"{detail} Slot {_mask_token(token)} (budget left {remaining}s).",
+            attempts=attempts,
+            progress={"auth_slot": _mask_token(token), "budget_remaining_s": remaining},
+        )
+        fcc_err = _wait_fcc_ready(timeout_s=min(25, remaining), auth_token=token)
+        if not fcc_err:
+            return idx
+        attempts.append(
+            {
+                "auth_slot": _mask_token(token),
+                "ready": False,
+                "error": fcc_err[:200],
+            }
+        )
+        _progress(progress_cb, attempts=attempts)
+    return None
+
+
+def _run_claude_attempt(
+    cmd: list[str],
+    cwd: Path,
+    env: dict,
+    timeout: int,
+    stdin_data: str,
+    progress_cb: Optional[Callable[[dict], None]],
+    attempt_no: int,
+    attempt_limit: int,
+    model_name: str,
+    auth_slot: str,
+) -> subprocess.CompletedProcess:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert proc.stdin is not None
+    proc.stdin.write(stdin_data)
+    proc.stdin.close()
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _reader(pipe, store: list[str]) -> None:
+        try:
+            for line in iter(pipe.readline, ""):
+                store.append(line)
+        finally:
+            pipe.close()
+
+    stdout_thread = threading.Thread(target=_reader, args=(proc.stdout, stdout_lines), daemon=True)
+    stderr_thread = threading.Thread(target=_reader, args=(proc.stderr, stderr_lines), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    started = time.monotonic()
+    last_update = 0.0
+    while True:
+        rc = proc.poll()
+        elapsed = int(time.monotonic() - started)
+        now = time.monotonic()
+        if progress_cb and now - last_update >= PROGRESS_UPDATE_SECONDS:
+            _progress(
+                progress_cb,
+                stage="running_agent",
+                detail=(
+                    f"Claude attempt {attempt_no}/{attempt_limit} is still running on {model_name} "
+                    f"({elapsed}s elapsed)."
+                ),
+                log_tail=_combine_log_tail("".join(stdout_lines), "".join(stderr_lines)),
+                progress={
+                    "attempt": attempt_no,
+                    "attempt_limit": attempt_limit,
+                    "model": model_name,
+                    "auth_slot": auth_slot,
+                    "attempt_elapsed_s": elapsed,
+                    "timeout_s": timeout,
+                },
+            )
+            last_update = now
+        if rc is not None:
+            break
+        if elapsed >= timeout:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
+            raise subprocess.TimeoutExpired(
+                cmd,
+                timeout,
+                output="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+        time.sleep(1)
+
+    stdout_thread.join(timeout=2)
+    stderr_thread.join(timeout=2)
+    return subprocess.CompletedProcess(
+        args=cmd,
+        returncode=proc.returncode,
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines),
+    )
+
+
+def _combine_log_tail(stdout_text: str, stderr_text: str) -> str:
+    left = (stdout_text or "")[-1000:]
+    right = (stderr_text or "")[-800:]
+    if left and right:
+        return f"{left}\n---STDERR---\n{right}"[-1800:]
+    return (left or right)[-1800:]
+
+
+def _progress(
+    progress_cb: Optional[Callable[[dict], None]],
+    *,
+    stage: Optional[str] = None,
+    detail: Optional[str] = None,
+    log_tail: Optional[str] = None,
+    attempts: Optional[list[dict]] = None,
+    progress: Optional[dict] = None,
+    error: Optional[str] = None,
+) -> None:
+    if progress_cb is None:
+        return
+    payload: dict = {}
+    progress_block = dict(progress or {})
+    if stage is not None:
+        progress_block["stage"] = stage
+    if detail is not None:
+        progress_block["detail"] = detail
+    if progress_block:
+        payload["progress"] = progress_block
+    if log_tail is not None:
+        payload["log_tail"] = log_tail[-STATUS_LOG_TAIL_CHARS:]
+    if attempts is not None:
+        payload["attempts"] = attempts
+    if error is not None:
+        payload["error"] = error
+    if payload:
+        progress_cb(payload)

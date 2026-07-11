@@ -111,14 +111,16 @@ docs/phase2/
 4. `sg-devbox` orchestrator:
    - Creates a fresh git worktree at `/var/lib/sg-devbox/work/<uuid>/`.
    - Uses free-claude-code with provider-qualified model defaults (for example `nvidia_nim/z-ai/glm-5.2`) and NVIDIA NIM auth flow.
-   - Uses model/token fallback for retryable upstream failures (`timeout`, malformed response, `429/5xx`) so long tasks can continue on backup slots.
-   - Runs Claude Code in headless mode, then records terminal session result to persisted develop status JSON.
+   - Uses bounded failover instead of a model×token Cartesian retry loop: `plan_only` defaults to a 180 s per-attempt cap, 2 Claude attempts max, and a shared total runtime budget so one bad model cannot stall Discord for 30+ minutes.
+   - Only rotates gateway auth tokens for auth-style failures; transient model/upstream failures move to the next backup model instead of multiplying waits across every token slot.
+   - Runs Claude Code in headless mode and continuously records `progress`, `attempts`, and `log_tail` into persisted develop status JSON so Discord heartbeats show the active attempt/model.
    - When Claude Code finishes, runs `path-guard.py` on the diff.
      - If any file matches DENY → abort, return `refused` to bot.
      - If **all** changed files are inside ALLOW_DIRECT → `git push origin main` directly, return `committed` with commit SHA.
      - Otherwise → `git push origin sg-heal/<uuid>`, `gh pr create --reviewer rivvak`, return `pr_opened` with PR URL.
 5. SG bot sends heartbeat updates while polling, then posts terminal result embed (commit URL / PR URL / refused / error / planned).
    - `plan_only` requests return a structured plan without committing changes.
+   - In-flight heartbeats and `/develop_history` now surface the current stage, active model, recent log tail, and attempt summary for debugging.
    - Follow-up turns can continue an existing session id for back-and-forth iteration.
 
 ## 4. CI self-heal flow
