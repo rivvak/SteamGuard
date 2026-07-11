@@ -178,18 +178,23 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
     if body.discord_user_id != _OWNER_ID:
         _rate_check(f"develop_{body.discord_user_id}", _RATE_LIMIT)
 
-    return await _devbox_request_retry(
-        "POST",
-        "/develop",
-        {
-            "task": body.task,
-            "source": "develop",
-            "ref": "main",
-            "initiator": body.discord_user_id,
-            "channel_id": body.channel_id or body.thread_id,
-            "deep": body.deep,
-        },
-    )
+    try:
+        return await _devbox_request_retry(
+            "POST",
+            "/develop",
+            {
+                "task": body.task,
+                "source": "develop",
+                "ref": "main",
+                "initiator": body.discord_user_id,
+                "channel_id": body.channel_id or body.thread_id,
+                "deep": body.deep,
+            },
+        )
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise _develop_upgrade_required_error()
+        raise
 
 
 @router.get("/develop/status/{sid}")
@@ -197,7 +202,12 @@ async def develop_status(sid: str, x_admin_key: Optional[str] = Header(default=N
     _check_admin(x_admin_key)
     if not _ENABLED_DEV:
         raise HTTPException(503, "develop disabled")
-    return await _devbox_request_retry("GET", f"/develop/status/{sid}")
+    try:
+        return await _devbox_request_retry("GET", f"/develop/status/{sid}")
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise _develop_upgrade_required_error()
+        raise
 
 
 _ENABLED_CREATE = os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
@@ -213,7 +223,10 @@ async def _devbox_request(method: str, path: str, json_body: Optional[dict] = No
                 headers={"Authorization": f"Bearer {_DEVBOX_TOKEN}"},
                 json=json_body,
             )
-            r.raise_for_status()
+            if r.status_code >= 500:
+                raise HTTPException(502, f"devbox {r.status_code}: {r.text[:300]}")
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"devbox {r.status_code}: {r.text[:300]}")
             return r.json()
 
     local_port = _pick_free_port()
@@ -233,7 +246,8 @@ async def _devbox_request(method: str, path: str, json_body: Optional[dict] = No
             )
             if r.status_code >= 500:
                 raise HTTPException(502, f"devbox {r.status_code}: {r.text[:300]}")
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, f"devbox {r.status_code}: {r.text[:300]}")
             return r.json()
     finally:
         tunnel.terminate()
@@ -256,11 +270,31 @@ async def _devbox_request_retry(
                 isinstance(e, HTTPException) and e.status_code in (502, 503, 504)
             )
             if attempt >= _DEVBOX_RETRIES or not retryable:
-                raise
+                if isinstance(e, HTTPException):
+                    raise
+                raise HTTPException(502, f"devbox transport error: {type(e).__name__}: {e}")
+            await asyncio.sleep(_DEVBOX_BACKOFF_SECONDS * attempt)
+        except Exception as e:
+            last_error = e
+            if attempt >= _DEVBOX_RETRIES:
+                raise HTTPException(502, f"devbox request failed: {type(e).__name__}: {e}")
             await asyncio.sleep(_DEVBOX_BACKOFF_SECONDS * attempt)
     if last_error:
-        raise last_error
+        if isinstance(last_error, HTTPException):
+            raise last_error
+        raise HTTPException(502, f"devbox request failed: {type(last_error).__name__}: {last_error}")
     raise HTTPException(502, "devbox request failed")
+
+
+def _develop_upgrade_required_error() -> HTTPException:
+    return HTTPException(
+        503,
+        (
+            "devbox is out of date: missing async /develop endpoints. "
+            "Upgrade sg-devbox to a build that provides /develop and /develop/status/{sid}, "
+            "then redeploy the app and devbox together."
+        ),
+    )
 
 
 @router.post("/create")

@@ -222,6 +222,10 @@ gcloud run services update steamguard --region us-central1 \
     --update-env-vars AI_HEAL_ENABLED=true
 ```
 
+Rollout note: `/develop` is now async (`/develop` + `/develop/status/{sid}` on
+sg-devbox). Deploy the app and sg-devbox together; if only the app is updated,
+`/internal/develop` may return a 503 upgrade-required error until devbox is upgraded.
+
 Test in Discord:
 ```
 /develop task: add a hello-world sample to docs/samples.md
