@@ -57,6 +57,7 @@ import json
 import asyncio
 import logging
 import time
+import sys
 import hmac
 import hashlib
 import httpx
@@ -64,9 +65,17 @@ import discord
 import discord.app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timezone
+from pathlib import Path
 
 LOG = logging.getLogger("sg-bot")
 logging.basicConfig(level=logging.INFO)
+
+# Ensure cog imports resolve when bot.py is executed as a script in containers.
+_COGS_ROOT = Path(__file__).resolve().parent / "bot"
+if _COGS_ROOT.is_dir():
+    _cogs_path = str(_COGS_ROOT)
+    if _cogs_path not in sys.path:
+        sys.path.insert(0, _cogs_path)
 
 # ── Env vars (original) ───────────────────────────────────────────────────────
 
@@ -205,7 +214,7 @@ class SteamGuardBot(commands.Bot):
         # Wrapped so a missing dep never blocks the rest of setup.
         if os.environ.get("AI_ASK_ENABLED", "false").lower() == "true":
             try:
-                from bot.cogs.ask_cog import setup as setup_ask
+                from cogs.ask_cog import setup as setup_ask
                 await setup_ask(self)
                 LOG.info("Registered /ask cog")
             except Exception as e:
@@ -216,7 +225,7 @@ class SteamGuardBot(commands.Bot):
         # ── Register AI /develop cog (Phase 2) ──
         if os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true":
             try:
-                from bot.cogs.develop_cog import setup as setup_develop
+                from cogs.develop_cog import setup as setup_develop
                 await setup_develop(self)
                 LOG.info("Registered /develop cog")
             except Exception as e:
@@ -227,7 +236,7 @@ class SteamGuardBot(commands.Bot):
         # ── Register AI /create cog (Phase 3) ──
         if os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true":
             try:
-                from bot.cogs.create_cog import setup as setup_create
+                from cogs.create_cog import setup as setup_create
                 await setup_create(self)
                 LOG.info("Registered /create cog")
             except Exception as e:
@@ -243,7 +252,7 @@ class SteamGuardBot(commands.Bot):
             or os.environ.get("AI_DEVELOP_ENABLED", "false").lower() == "true"
         ):
             try:
-                from bot.cogs.memory_cog import setup as setup_memory
+                from cogs.memory_cog import setup as setup_memory
                 await setup_memory(self)
                 LOG.info("Registered /memory cog (Phase 4)")
             except Exception as e:
