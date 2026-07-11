@@ -157,14 +157,13 @@ class DevelopCog(commands.Cog):
         while True:
             elapsed = int(time.monotonic() - started)
             if elapsed > self.MAX_JOB_SECONDS:
-                await msg.edit(
-                    embed=self._heartbeat_embed(
-                        task,
-                        sid,
-                        "timeout",
-                        elapsed,
-                        "Client-side timeout — session may still be running.",
-                    )
+                msg = await self._safe_edit_or_repost(
+                    interaction,
+                    msg,
+                    self._heartbeat_embed(
+                        task, sid, "timeout", elapsed, "Client-side timeout — session may still be running."
+                    ),
+                    timeout_notice=True,
                 )
                 return
 
@@ -173,14 +172,12 @@ class DevelopCog(commands.Cog):
                 state_data = await self._poll(sid)
             except Exception as e:
                 if time.monotonic() - last_edit > self.HEARTBEAT_EDIT_EVERY:
-                    await msg.edit(
-                        embed=self._heartbeat_embed(
-                            task,
-                            sid,
-                            last_state,
-                            elapsed,
-                            f"(poll error, retrying: {type(e).__name__})",
-                        )
+                    msg = await self._safe_edit_or_repost(
+                        interaction,
+                        msg,
+                        self._heartbeat_embed(
+                            task, sid, last_state, elapsed, f"(poll error, retrying: {type(e).__name__})"
+                        ),
                     )
                     last_edit = time.monotonic()
                 continue
@@ -191,14 +188,16 @@ class DevelopCog(commands.Cog):
                 return
 
             if time.monotonic() - last_edit > self.HEARTBEAT_EDIT_EVERY or state != last_state:
-                await msg.edit(
-                    embed=self._heartbeat_embed(
+                msg = await self._safe_edit_or_repost(
+                    interaction,
+                    msg,
+                    self._heartbeat_embed(
                         task,
                         sid,
                         state,
                         elapsed,
                         (state_data.get("result") or {}).get("log_tail") or state_data.get("error"),
-                    )
+                    ),
                 )
                 last_edit = time.monotonic()
                 last_state = state
@@ -276,16 +275,29 @@ class DevelopCog(commands.Cog):
         if state_data.get("elapsed_s"):
             embed.add_field(name="Elapsed", value=f"{state_data['elapsed_s']}s", inline=True)
 
+        await self._safe_edit_or_repost(interaction, msg, embed, timeout_notice=True)
+
+    async def _safe_edit_or_repost(
+        self,
+        interaction: discord.Interaction,
+        msg: discord.Message,
+        embed: discord.Embed,
+        timeout_notice: bool = False,
+    ) -> discord.Message:
         try:
             await msg.edit(embed=embed)
+            return msg
         except discord.HTTPException as e:
-            if e.code == 50027:
-                await interaction.channel.send(
-                    content=f"⚠️ {interaction.user.mention} the session took more than 15 minutes, but successfully completed! Here are your results:",
-                    embed=embed
-                )
-            else:
+            if e.code != 50027:
                 raise
+            content = None
+            if timeout_notice:
+                content = (
+                    f"⚠️ {interaction.user.mention} interaction token expired; "
+                    "switching to channel updates for this /develop session."
+                )
+            new_msg = await interaction.channel.send(content=content, embed=embed)
+            return new_msg
 
     def _heartbeat_embed(
         self, task: str, sid: str, state: str, elapsed: int, note: str | None
