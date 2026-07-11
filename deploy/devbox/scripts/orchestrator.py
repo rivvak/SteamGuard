@@ -701,7 +701,7 @@ def _extract_plan(stdout_text: str) -> str:
     text = (stdout_text or "").strip()
     if not text:
         return "No plan text was produced."
-    return text[-3000:]
+    return text[:12000]
 
 
 def _conversation_block(conversation: list[dict]) -> str:

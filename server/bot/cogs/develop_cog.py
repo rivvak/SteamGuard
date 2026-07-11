@@ -13,6 +13,7 @@ also enforces owner-vs-user rate limits.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import time
 
@@ -295,6 +296,13 @@ class DevelopCog(commands.Cog):
             embed.add_field(name="Elapsed", value=f"{state_data['elapsed_s']}s", inline=True)
 
         await self._safe_edit_or_repost(interaction, msg, embed, timeout_notice=True)
+        if status == "planned":
+            plan_text = str(data_for_embed.get("plan") or "").strip()
+            if plan_text and len(plan_text) > 2800 and interaction.channel is not None:
+                buf = io.BytesIO(plan_text.encode("utf-8"))
+                await interaction.channel.send(
+                    file=discord.File(buf, filename=f"develop-plan-{sid}.md")
+                )
 
     async def _safe_edit_or_repost(
         self,
@@ -394,7 +402,12 @@ class DevelopCog(commands.Cog):
             if data.get("log_tail"):
                 emb.add_field(name="Log tail", value=f"```\n{data['log_tail'][-800:]}\n```", inline=False)
         elif status == "planned":
-            emb.add_field(name="Plan", value=str(data.get("plan", "No plan text"))[:1000], inline=False)
+            plan_text = str(data.get("plan", "No plan text"))
+            emb.add_field(name="Plan", value=plan_text[:1000], inline=False)
+            if len(plan_text) > 1000:
+                emb.add_field(name="Plan (cont. 1)", value=plan_text[1000:2000], inline=False)
+            if len(plan_text) > 2000:
+                emb.add_field(name="Plan (cont. 2)", value=plan_text[2000:3000], inline=False)
             if data.get("warning"):
                 emb.add_field(name="Warning", value=str(data["warning"])[:1000], inline=False)
             if data.get("proposed_files"):
