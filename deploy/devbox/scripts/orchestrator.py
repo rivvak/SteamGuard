@@ -322,12 +322,12 @@ def _get_develop_lock(sid: str) -> threading.Lock:
 
 def _wait_fcc_ready(timeout_s: int = 45) -> Optional[str]:
     end = time.monotonic() + timeout_s
-    auth = {"Authorization": f"Bearer {NIM_KEY}"} if NIM_KEY else {}
+    auth = {"Authorization": f"Bearer {DEVBOX_TOKEN}"}
     last_err = "unknown"
     while time.monotonic() < end:
         try:
             r = httpx.get(f"{FCC_URL}/v1/models", headers=auth, timeout=3.0)
-            if r.status_code < 500:
+            if r.status_code == 200:
                 return None
             last_err = f"fcc {r.status_code}: {r.text[:180]}"
         except Exception as e:
@@ -410,11 +410,9 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
         "MODEL": MODEL,
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+        # FCC client auth token (proxy gate), not upstream NIM key.
+        "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
     }
-    if NIM_KEY:
-        env["ANTHROPIC_AUTH_TOKEN"] = NIM_KEY
-    else:
-        env["ANTHROPIC_AUTH_TOKEN"] = DEVBOX_TOKEN
     # Use --permission-mode acceptEdits so Claude Code auto-accepts file edits
     # in this sandboxed worktree without requiring an interactive TTY. The
     # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
