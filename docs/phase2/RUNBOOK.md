@@ -96,7 +96,7 @@ On the VM:
 sudo mkdir -p /etc/sg-devbox
 sudo tee /etc/sg-devbox/env <<'EOF'
 REPO_SLUG=rivvak/SteamGuard
-AI_DEVBOX_MODEL=z-ai/glm-5.2
+AI_DEVBOX_MODEL=nvidia_nim/z-ai/glm-5.2
 EOF
 
 # Pull each secret from Secret Manager and append. The VM's default SA
@@ -204,7 +204,7 @@ gcloud compute start-iap-tunnel sg-devbox 9090 \
     --local-host-port=localhost:19090 --zone us-central1-a &
 sleep 3
 curl -s -H "Authorization: Bearer $DEVBOX_TOKEN" \
-    -X POST http://localhost:19090/session \
+    -X POST http://localhost:19090/develop \
     -d '{"task":"echo","source":"develop","initiator":"smoke"}' \
     -H 'Content-Type: application/json'
 ```
@@ -227,7 +227,8 @@ Test in Discord:
 /develop task: add a hello-world sample to docs/samples.md
 ```
 
-Expect a bot embed with a commit URL (docs/** is auto-commit) within 30 s.
+Expect an immediate "starting/running" heartbeat embed, then a terminal result
+embed with commit/PR output when the session finishes.
 
 ## Rollback
 

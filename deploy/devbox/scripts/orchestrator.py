@@ -24,10 +24,13 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -44,10 +47,15 @@ from ai.guards.diff_check import classify_diff  # noqa: E402
 
 DEVBOX_TOKEN = os.environ["DEVBOX_TOKEN"]
 FCC_URL = os.environ.get("FCC_URL", "http://127.0.0.1:8082")
-MODEL = os.environ.get("AI_DEVBOX_MODEL", "z-ai/glm-5.2")
+NIM_KEY = os.environ.get("NVIDIA_NIM_API_KEY", "")
+MODEL = os.environ.get("AI_DEVBOX_MODEL", "nvidia_nim/z-ai/glm-5.2")
 WORK_ROOT = Path(os.environ.get("SG_WORK_ROOT", "/var/lib/sg-devbox/work"))
 REPO_SLUG = os.environ.get("REPO_SLUG", "rivvak/SteamGuard")
 OPEN_PR = Path("/opt/sg-devbox/open-pr.sh")
+DEVELOP_SESSIONS_DIR = Path(
+    os.environ.get("SG_DEVELOP_SESSIONS_DIR", "/var/lib/sg-devbox/develop-sessions")
+)
+_SID_RE = re.compile(r"^[a-z0-9]{6,32}$")
 
 app = FastAPI(title="sg-devbox orchestrator")
 
@@ -125,8 +133,104 @@ def health():
 @app.post("/session")
 def session(body: SessionBody, authorization: Optional[str] = Header(default=None)):
     _auth(authorization)
-
     sid = uuid.uuid4().hex[:12]
+    return _execute_session(body, sid)
+
+
+@app.post("/develop")
+def develop(body: SessionBody, authorization: Optional[str] = Header(default=None)):
+    _auth(authorization)
+    sid = uuid.uuid4().hex[:12]
+    state = {
+        "session_id": sid,
+        "state": "starting",
+        "started_at": int(time.time()),
+        "source": body.source,
+        "initiator": body.initiator,
+        "ref": body.ref,
+        "deep": body.deep,
+        "channel_id": body.channel_id,
+    }
+    _develop_save(sid, state)
+    t = threading.Thread(
+        target=_develop_worker,
+        args=(sid, body.dict()),
+        daemon=True,
+        name=f"develop-{sid}",
+    )
+    t.start()
+    return {"status": "queued", "session_id": sid, "state": "starting"}
+
+
+@app.get("/develop/status/{sid}")
+def develop_status(sid: str, authorization: Optional[str] = Header(default=None)):
+    _auth(authorization)
+    st = _develop_load(sid)
+    st["elapsed_s"] = max(0, int(time.time()) - int(st.get("started_at", int(time.time()))))
+    return st
+
+
+def _develop_save(sid: str, state: dict) -> None:
+    DEVELOP_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    if not _SID_RE.match(sid):
+        raise HTTPException(400, "invalid session id")
+    (DEVELOP_SESSIONS_DIR / f"{sid}.json").write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+
+
+def _develop_load(sid: str) -> dict:
+    if not _SID_RE.match(sid):
+        raise HTTPException(400, "invalid session id")
+    p = DEVELOP_SESSIONS_DIR / f"{sid}.json"
+    if not p.exists():
+        raise HTTPException(404, "unknown session")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _develop_worker(sid: str, body_data: dict) -> None:
+    try:
+        st = _develop_load(sid)
+        st["state"] = "running"
+        _develop_save(sid, st)
+        result = _execute_session(SessionBody(**body_data), sid)
+        st["result"] = result
+        st["state"] = "error" if result.get("status") == "error" else "finished"
+        st["ended_at"] = int(time.time())
+        _develop_save(sid, st)
+    except Exception as e:
+        try:
+            st = _develop_load(sid)
+        except Exception:
+            st = {"session_id": sid, "started_at": int(time.time())}
+        st["state"] = "error"
+        st["ended_at"] = int(time.time())
+        st["result"] = {
+            "status": "error",
+            "session_id": sid,
+            "error": f"develop worker exception: {type(e).__name__}: {e}",
+        }
+        _develop_save(sid, st)
+
+
+def _wait_fcc_ready(timeout_s: int = 45) -> Optional[str]:
+    end = time.monotonic() + timeout_s
+    auth = {"Authorization": f"Bearer {NIM_KEY}"} if NIM_KEY else {}
+    last_err = "unknown"
+    while time.monotonic() < end:
+        try:
+            r = httpx.get(f"{FCC_URL}/v1/models", headers=auth, timeout=3.0)
+            if r.status_code < 500:
+                return None
+            last_err = f"fcc {r.status_code}: {r.text[:180]}"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+        time.sleep(0.8)
+    return last_err
+
+
+def _execute_session(body: SessionBody, sid: str) -> dict:
     wt = WORK_ROOT / sid
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -177,6 +281,11 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     (wt / ".sg-task.md").write_text(prompt)
 
     # 3) invoke Claude Code in headless print mode via FCC proxy.
+    fcc_err = _wait_fcc_ready()
+    if fcc_err:
+        _cleanup(wt)
+        return _error(sid, "fcc not ready", fcc_err)
+
     # Env mirrors what `fcc-claude` sets: strip ANTHROPIC_* from parent, then
     # add BASE_URL, AUTH_TOKEN, gateway model discovery, and compact window.
     # FCC routes to the NIM model configured in its Admin UI (MODEL setting) —
@@ -185,10 +294,14 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     env = {
         **base_env,
         "ANTHROPIC_BASE_URL": FCC_URL,
-        "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
+        "MODEL": MODEL,
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
     }
+    if NIM_KEY:
+        env["ANTHROPIC_AUTH_TOKEN"] = NIM_KEY
+    else:
+        env["ANTHROPIC_AUTH_TOKEN"] = DEVBOX_TOKEN
     # Use --permission-mode acceptEdits so Claude Code auto-accepts file edits
     # in this sandboxed worktree without requiring an interactive TTY. The
     # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
