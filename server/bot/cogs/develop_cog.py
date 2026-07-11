@@ -29,6 +29,72 @@ OWNER_ID = int(os.environ.get("DISCORD_OWNER_ID", "1513150836472021074"))
 GUILD = discord.Object(id=GUILD_ID)
 
 
+class _PlanPagerView(discord.ui.View):
+    def __init__(
+        self,
+        cog: "DevelopCog",
+        *,
+        task: str,
+        sid: str,
+        chunks: list[str],
+        owner_id: int,
+        warning: str | None,
+        proposed_files: list[str],
+        attempts_text: str | None,
+    ):
+        super().__init__(timeout=1800)
+        self._cog = cog
+        self._task = task
+        self._sid = sid
+        self._chunks = chunks
+        self._owner_id = owner_id
+        self._warning = warning
+        self._proposed_files = proposed_files
+        self._attempts_text = attempts_text
+        self._idx = 0
+        self.message: discord.Message | None = None
+
+    def _embed(self) -> discord.Embed:
+        return self._cog._planned_embed_page(
+            self._task,
+            self._sid,
+            self._chunks,
+            self._idx,
+            warning=self._warning,
+            proposed_files=self._proposed_files,
+            attempts_text=self._attempts_text,
+        )
+
+    @discord.ui.button(label="Next part ▶", style=discord.ButtonStyle.primary)
+    async def next_part(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self._owner_id:
+            await interaction.response.send_message(
+                "Only the user who started this /develop run can page through this plan.",
+                ephemeral=True,
+            )
+            return
+        if self._idx >= len(self._chunks) - 1:
+            button.disabled = True
+            button.label = "End reached"
+            await interaction.response.edit_message(view=self)
+            return
+        self._idx += 1
+        if self._idx >= len(self._chunks) - 1:
+            button.disabled = True
+            button.label = "End reached"
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+
 class DevelopCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -298,6 +364,25 @@ class DevelopCog(commands.Cog):
         await self._safe_edit_or_repost(interaction, msg, embed, timeout_notice=True)
         if status == "planned":
             plan_text = str(data_for_embed.get("plan") or "").strip()
+            chunks = self._plan_chunks(plan_text)
+            attempts_text = self._attempt_summary(data_for_embed.get("attempts") or [])
+            warning = str(data_for_embed.get("warning") or "").strip() or None
+            proposed_files = list(data_for_embed.get("proposed_files") or [])
+
+            if len(chunks) > 1 and interaction.channel is not None:
+                pager = _PlanPagerView(
+                    self,
+                    task=task,
+                    sid=sid,
+                    chunks=chunks,
+                    owner_id=interaction.user.id,
+                    warning=warning,
+                    proposed_files=proposed_files,
+                    attempts_text=attempts_text,
+                )
+                pager_msg = await interaction.channel.send(embed=pager._embed(), view=pager)
+                pager.message = pager_msg
+
             if plan_text and len(plan_text) > 2800 and interaction.channel is not None:
                 buf = io.BytesIO(plan_text.encode("utf-8"))
                 await interaction.channel.send(
@@ -403,11 +488,14 @@ class DevelopCog(commands.Cog):
                 emb.add_field(name="Log tail", value=f"```\n{data['log_tail'][-800:]}\n```", inline=False)
         elif status == "planned":
             plan_text = str(data.get("plan", "No plan text"))
-            emb.add_field(name="Plan", value=plan_text[:1000], inline=False)
-            if len(plan_text) > 1000:
-                emb.add_field(name="Plan (cont. 1)", value=plan_text[1000:2000], inline=False)
-            if len(plan_text) > 2000:
-                emb.add_field(name="Plan (cont. 2)", value=plan_text[2000:3000], inline=False)
+            chunks = self._plan_chunks(plan_text)
+            emb.add_field(name="Plan", value=chunks[0], inline=False)
+            if len(chunks) > 1:
+                emb.add_field(
+                    name="More",
+                    value=f"Plan continues in {len(chunks) - 1} more part(s). Use **Next part ▶**.",
+                    inline=False,
+                )
             if data.get("warning"):
                 emb.add_field(name="Warning", value=str(data["warning"])[:1000], inline=False)
             if data.get("proposed_files"):
@@ -430,6 +518,43 @@ class DevelopCog(commands.Cog):
             emb.add_field(name="Attempts", value=attempts, inline=False)
 
         emb.set_footer(text=f"session {data.get('session_id', '?')}")
+        return emb
+
+    def _plan_chunks(self, plan_text: str) -> list[str]:
+        txt = (plan_text or "").strip() or "No plan text was produced."
+        size = 900
+        return [txt[i : i + size] for i in range(0, len(txt), size)] or [txt]
+
+    def _planned_embed_page(
+        self,
+        task: str,
+        sid: str,
+        chunks: list[str],
+        idx: int,
+        *,
+        warning: str | None,
+        proposed_files: list[str],
+        attempts_text: str | None,
+    ) -> discord.Embed:
+        total = max(1, len(chunks))
+        safe_idx = max(0, min(idx, total - 1))
+        emb = discord.Embed(
+            title=f"/develop — planned (part {safe_idx + 1}/{total})",
+            description=f"**Task:** {task[:400]}",
+            color=discord.Color.gold(),
+        )
+        emb.add_field(name="Plan", value=chunks[safe_idx], inline=False)
+        if safe_idx == 0 and warning:
+            emb.add_field(name="Warning", value=warning[:1000], inline=False)
+        if safe_idx == 0 and proposed_files:
+            emb.add_field(
+                name="Proposed files",
+                value="\n".join(f"• {f}" for f in proposed_files[:15]),
+                inline=False,
+            )
+        if attempts_text:
+            emb.add_field(name="Attempts", value=attempts_text, inline=False)
+        emb.set_footer(text=f"session {sid}")
         return emb
 
     def _heartbeat_note(self, state_data: dict) -> str | None:
