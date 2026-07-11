@@ -193,24 +193,35 @@ def session(body: SessionBody, authorization: Optional[str] = Header(default=Non
     # in this sandboxed worktree without requiring an interactive TTY. The
     # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
     # narrow allowedTools, and a path-guard classifier on the resulting diff.
-    cc = _run(
-        [
-            "claude",
-            "-p",
-            "--max-turns",
-            "30",
-            "--permission-mode",
-            "acceptEdits",
-            "--allowedTools",
-            "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
-            "--output-format",
-            "text",
-        ],
-        cwd=wt,
-        env=env,
-        timeout=1200,
-        stdin_data=prompt,
-    )
+    #
+    # The 1200 s cap is the agent's time budget. If a big task blows past it,
+    # subprocess.run raises TimeoutExpired — catch it so the session returns a
+    # clean {status: error} (which the server surfaces to the bot's poll loop)
+    # instead of an uncaught 500, and recycle the worktree so nothing is left
+    # behind. Previously this leaked as both a severed request and an orphaned
+    # worktree.
+    try:
+        cc = _run(
+            [
+                "claude",
+                "-p",
+                "--max-turns",
+                "30",
+                "--permission-mode",
+                "acceptEdits",
+                "--allowedTools",
+                "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
+                "--output-format",
+                "text",
+            ],
+            cwd=wt,
+            env=env,
+            timeout=1200,
+            stdin_data=prompt,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup(wt)
+        return _error(sid, "agent exceeded the 20-minute time budget", "")
     log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
 
     # 4) classify diff

@@ -22,6 +22,8 @@ import os
 import shlex
 import subprocess
 import time
+import uuid
+import logging
 from typing import Optional
 
 import httpx
@@ -90,6 +92,81 @@ def _rate_check(bucket_key: str, cap: int) -> None:
     if n >= cap:
         raise HTTPException(429, f"rate limit: {cap}/hour")
     doc.set({"count": n + 1, "expires_at": (hour + 2) * 3600}, merge=True)
+
+
+# ── Async /develop session store ─────────────────────────────────────────────
+# /develop used to block the entire bot→server→devbox HTTP chain on one request,
+# but Cloud Run caps requests at 300 s (`--timeout 300` in the deploy workflow).
+# Any task longer than ~5 min was severed mid-flight: the bot saw a 504 while the
+# devbox kept grinding and silently committed/opened a PR the user never saw — the
+# "application did not respond" crash on big /develop tasks.
+#
+# The route now returns a session id immediately and runs the devbox call on a
+# detached asyncio task on the always-warm (--min-instances 1) server worker. The
+# bot polls /internal/develop/status/{sid} and edits its follow-up in place — the
+# same pattern /create uses — so the session can run up to the devbox's own 20-min
+# agent cap without the HTTP chain ever crossing a request boundary.
+#
+# State is in-memory on the single Cloud Run instance, so a container recycle
+# (deploys are rare) drops in-flight sessions; the bot detects that (404) and
+# tells the user the agent may still finish on its own.
+
+_log = logging.getLogger("ai-hooks")
+
+_MAX_SESSIONS = 64
+
+
+class _Session:
+    __slots__ = ("sid", "state", "result", "error", "started", "finished", "task")
+
+    def __init__(self, sid: str) -> None:
+        self.sid = sid
+        self.state = "running"           # running | done | error
+        self.result: Optional[dict] = None   # devbox /session response on success
+        self.error: Optional[str] = None
+        self.started = time.time()
+        self.finished: Optional[float] = None
+        self.task = None                 # holds the asyncio task ref (anti-GC)
+
+
+_sessions: "dict[str, _Session]" = {}
+
+
+def _evict_finished_sessions() -> None:
+    for sid in [s for s, v in _sessions.items() if v.state != "running"]:
+        _sessions.pop(sid, None)
+
+
+async def _run_dev_session(sid: str, payload: dict) -> None:
+    """Run the (blocking) devbox /session call off the request path and store
+    the result for /internal/develop/status/{sid} to read.
+
+    `_post_session` raises HTTPException(502/504) on devbox failures — including
+    the devbox's own agent-timeout 500 — and httpx may raise on transport
+    failure. Capture all of it so the poller always sees a clean terminal state
+    rather than a severed request.
+    """
+    s = _sessions.get(sid)
+    try:
+        result = await _post_session(payload)
+    except Exception as e:  # noqa: BLE001 — surface any failure to the poller
+        if s is not None:
+            msg = str(e) or type(e).__name__
+            sc = getattr(e, "status_code", None)
+            if sc:
+                msg = f"{sc}: {msg}"
+            s.state = "error"
+            s.error = msg
+            s.finished = time.time()
+            _log.warning("develop session %s failed: %s", sid, msg)
+    else:
+        if s is not None:
+            s.result = result
+            s.state = "done"
+            s.finished = time.time()
+    finally:
+        if s is not None:
+            s.task = None   # let the coroutine be collected; entry retained for polling
 
 
 async def _post_session(payload: dict) -> dict:
@@ -176,16 +253,48 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
     if body.discord_user_id != _OWNER_ID:
         _rate_check(f"develop_{body.discord_user_id}", _RATE_LIMIT)
 
-    return await _post_session(
-        {
-            "task": body.task,
-            "source": "develop",
-            "ref": "main",
-            "initiator": body.discord_user_id,
-            "channel_id": body.channel_id or body.thread_id,
-            "deep": body.deep,
-        }
-    )
+    payload = {
+        "task": body.task,
+        "source": "develop",
+        "ref": "main",
+        "initiator": body.discord_user_id,
+        "channel_id": body.channel_id or body.thread_id,
+        "deep": body.deep,
+    }
+    sid = uuid.uuid4().hex[:12]
+    if len(_sessions) >= _MAX_SESSIONS:
+        _evict_finished_sessions()
+    s = _Session(sid)
+    _sessions[sid] = s
+    # Hold the task ref on the session so the coroutine isn't GC'd before it
+    # resolves (a CPython create_task caveat). The instance stays warm
+    # (--min-instances 1), so this task outlives the kickoff request.
+    s.task = asyncio.create_task(_run_dev_session(sid, payload))
+    return {"session_id": sid, "state": "starting"}
+
+
+@router.get("/develop/status/{sid}")
+async def develop_status(sid: str, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    _check_admin(x_admin_key)
+    if not _ENABLED_DEV:
+        raise HTTPException(503, "develop disabled")
+    s = _sessions.get(sid)
+    if s is None:
+        raise HTTPException(404, "unknown session (server may have restarted)")
+    elapsed = int(time.time() - s.started)
+    if s.state == "running":
+        return {"state": "running", "session_id": sid, "elapsed_s": elapsed}
+    out: dict = {"state": s.state, "session_id": sid, "elapsed_s": elapsed}
+    if s.state == "error":
+        out["status"] = "error"
+        out["error"] = s.error
+    else:
+        out.update(s.result or {})
+    # Drop terminal results read >10 min ago so memory stays bounded even if the
+    # bot never polls again; we return this one before popping.
+    if s.finished is not None and time.time() - s.finished > 600:
+        _sessions.pop(sid, None)
+    return out
 
 
 _ENABLED_CREATE = os.environ.get("AI_CREATE_ENABLED", "false").lower() == "true"
