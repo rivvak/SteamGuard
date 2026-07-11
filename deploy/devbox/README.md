@@ -25,6 +25,13 @@ The full deployment runbook (VM create, secret grants, tunnel wiring) is in
 | `SG_HEAL_PRIVATE_KEY` | Secret Manager | PEM contents |
 | `REPO_SLUG` | env file | `rivvak/SteamGuard` |
 | `AI_DEVBOX_MODEL` | env file | default `z-ai/glm-5.2` |
+| `AI_DEVBOX_MAX_RUNTIME_SECONDS` | env file | total `/develop` runtime budget across all failover attempts |
+| `AI_DEVBOX_ATTEMPT_TIMEOUT_SECONDS` | env file | per-attempt cap for normal `/develop` runs (default `900`) |
+| `AI_DEVBOX_MAX_ATTEMPTS` | env file | max Claude failover attempts for normal `/develop` runs (default `4`) |
+| `AI_DEVBOX_PLAN_RUNTIME_SECONDS` | env file | total `plan_only` budget across all failover attempts |
+| `AI_DEVBOX_PLAN_ATTEMPT_TIMEOUT_SECONDS` | env file | per-attempt cap for `plan_only` (default `180`) |
+| `AI_DEVBOX_PLAN_MAX_ATTEMPTS` | env file | max Claude failover attempts for `plan_only` (default `2`) |
+| `AI_DEVBOX_PROGRESS_UPDATE_SECONDS` | env file | how often in-flight `/develop` status snapshots refresh (default `15`) |
 
 ## Ports
 
@@ -37,3 +44,12 @@ The full deployment runbook (VM create, secret grants, tunnel wiring) is in
 
 `sg-devbox.service` and `sg-fcc.service` both run as the unprivileged
 `sgagent` user. Only `sgagent` has write access to `/var/lib/sg-devbox/`.
+
+## Runtime notes
+
+- `/develop/status/<sid>` now carries live `progress`, `attempts`, and `log_tail`
+  fields while a run is in flight, so Discord heartbeats and manual curl probes
+  can show which model/attempt is active.
+- `plan_only` is intentionally tighter than code-edit runs: by default it gets a
+  180-second per-attempt cap and at most 2 Claude attempts before returning an
+  error instead of cycling through every model/token combination.

@@ -138,7 +138,7 @@ class DevelopCog(commands.Cog):
             self._last_session_by_channel[int(interaction.channel_id)] = sid
 
         msg = await interaction.followup.send(
-            embed=self._heartbeat_embed(task, sid, "starting", 0, None),
+            embed=self._heartbeat_embed(task, sid, "starting", 0, None, kickoff.get("progress")),
             wait=True,
         )
 
@@ -161,7 +161,12 @@ class DevelopCog(commands.Cog):
                     interaction,
                     msg,
                     self._heartbeat_embed(
-                        task, sid, "timeout", elapsed, "Client-side timeout — session may still be running."
+                        task,
+                        sid,
+                        "timeout",
+                        elapsed,
+                        "Client-side timeout — session may still be running.",
+                        state_data.get("progress"),
                     ),
                     timeout_notice=True,
                 )
@@ -176,7 +181,12 @@ class DevelopCog(commands.Cog):
                         interaction,
                         msg,
                         self._heartbeat_embed(
-                            task, sid, last_state, elapsed, f"(poll error, retrying: {type(e).__name__})"
+                            task,
+                            sid,
+                            last_state,
+                            elapsed,
+                            f"(poll error, retrying: {type(e).__name__})",
+                            state_data.get("progress"),
                         ),
                     )
                     last_edit = time.monotonic()
@@ -196,7 +206,8 @@ class DevelopCog(commands.Cog):
                         sid,
                         state,
                         elapsed,
-                        (state_data.get("result") or {}).get("log_tail") or state_data.get("error"),
+                        self._heartbeat_note(state_data),
+                        state_data.get("progress"),
                     ),
                 )
                 last_edit = time.monotonic()
@@ -251,6 +262,14 @@ class DevelopCog(commands.Cog):
             description=txt[:3900],
             color=discord.Color.blurple(),
         )
+        if data.get("state"):
+            emb.add_field(name="State", value=str(data["state"])[:200], inline=True)
+        if data.get("progress"):
+            emb.add_field(
+                name="Progress",
+                value=str((data["progress"] or {}).get("detail") or (data["progress"] or {}).get("stage") or "")[:1000],
+                inline=False,
+            )
         if data.get("active_objective"):
             emb.add_field(name="Objective", value=str(data["active_objective"])[:1000], inline=False)
         await interaction.response.send_message(embed=emb, ephemeral=True)
@@ -300,7 +319,13 @@ class DevelopCog(commands.Cog):
             return new_msg
 
     def _heartbeat_embed(
-        self, task: str, sid: str, state: str, elapsed: int, note: str | None
+        self,
+        task: str,
+        sid: str,
+        state: str,
+        elapsed: int,
+        note: str | None,
+        progress: dict | None = None,
     ) -> discord.Embed:
         icon = {
             "starting": "🟡",
@@ -321,6 +346,18 @@ class DevelopCog(commands.Cog):
             inline=True,
         )
         emb.add_field(name="Session", value=f"`{sid}`", inline=True)
+        if progress:
+            detail = str(progress.get("detail") or progress.get("stage") or "")[:1000]
+            if detail:
+                emb.add_field(name="Progress", value=detail, inline=False)
+            if progress.get("attempt") and progress.get("attempt_limit"):
+                emb.add_field(
+                    name="Attempt",
+                    value=f"{progress['attempt']}/{progress['attempt_limit']}",
+                    inline=True,
+                )
+            if progress.get("model"):
+                emb.add_field(name="Model", value=str(progress["model"])[:200], inline=True)
         if note:
             emb.add_field(name="Latest output", value=f"```\n{str(note)[-900:]}\n```", inline=False)
         return emb
@@ -375,9 +412,46 @@ class DevelopCog(commands.Cog):
                 ),
                 inline=False,
             )
+        attempts = self._attempt_summary(data.get("attempts") or [])
+        if attempts:
+            emb.add_field(name="Attempts", value=attempts, inline=False)
 
         emb.set_footer(text=f"session {data.get('session_id', '?')}")
         return emb
+
+    def _heartbeat_note(self, state_data: dict) -> str | None:
+        progress = state_data.get("progress") or {}
+        log_tail = state_data.get("log_tail")
+        if not log_tail and state_data.get("state") not in ("starting", "running"):
+            log_tail = (state_data.get("result") or {}).get("log_tail")
+        if not log_tail:
+            log_tail = state_data.get("error")
+        detail = str(progress.get("detail") or "").strip()
+        if detail and log_tail:
+            return f"{detail}\n\n{str(log_tail)[-700:]}"
+        if detail:
+            return detail
+        return str(log_tail)[-900:] if log_tail else None
+
+    def _attempt_summary(self, attempts: list[dict]) -> str | None:
+        if not attempts:
+            return None
+        lines: list[str] = []
+        for attempt in attempts[-4:]:
+            model = attempt.get("model") or "probe"
+            auth = attempt.get("auth_slot") or "default"
+            if attempt.get("returncode") == 0:
+                outcome = "ok"
+            elif attempt.get("timeout"):
+                outcome = f"timeout {attempt['timeout']}s"
+            elif attempt.get("ready") is False:
+                outcome = f"gateway {attempt.get('error', 'not ready')}"
+            elif attempt.get("error"):
+                outcome = str(attempt["error"])[:80]
+            else:
+                outcome = str(attempt.get("failure_kind") or f"rc {attempt.get('returncode', '?')}")[:80]
+            lines.append(f"• `{model}` / `{auth}` — {outcome}")
+        return "\n".join(lines)[:1000]
 
     async def cog_unload(self) -> None:
         await self._http.aclose()
