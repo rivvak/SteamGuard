@@ -24,7 +24,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import subprocess
@@ -35,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 # Import path-guard rules from the repo (baked into the checkout)
@@ -49,13 +48,6 @@ MODEL = os.environ.get("AI_DEVBOX_MODEL", "z-ai/glm-5.2")
 WORK_ROOT = Path(os.environ.get("SG_WORK_ROOT", "/var/lib/sg-devbox/work"))
 REPO_SLUG = os.environ.get("REPO_SLUG", "rivvak/SteamGuard")
 OPEN_PR = Path("/opt/sg-devbox/open-pr.sh")
-
-# Sessions directory for communicating background progress to callers
-SESSIONS_DIR = Path(os.environ.get("SG_SESSIONS_DIR", "/var/lib/sg-devbox/sessions"))
-SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Allow wrapper CLI to be configured (fcc-claude is the recommended wrapper)
-CLAUDE_CLI = os.environ.get("CLAUDE_CLI_COMMAND", "fcc-claude")
 
 app = FastAPI(title="sg-devbox orchestrator")
 
@@ -130,212 +122,164 @@ def health():
     return {"ok": True, "fcc": fcc, "model": MODEL, "worktree_root": str(WORK_ROOT)}
 
 
-# Persistence helpers for background session state
-def _save_session_state(sid: str, state: dict) -> None:
-    path = SESSIONS_DIR / f"develop-{sid}.json"
-    path.write_text(json.dumps(state))
-
-
-def _load_session_state(sid: str) -> dict:
-    path = SESSIONS_DIR / f"develop-{sid}.json"
-    if not path.exists():
-        raise HTTPException(404, "unknown session")
-    return json.loads(path.read_text())
-
-
 @app.post("/session")
-def session(body: SessionBody, background_tasks: BackgroundTasks, authorization: Optional[str] = Header(default=None)):
-    """Kick off a background session and return immediately with a queued sid."""
+def session(body: SessionBody, authorization: Optional[str] = Header(default=None)):
     _auth(authorization)
 
     sid = uuid.uuid4().hex[:12]
-
-    # Initialize the session state as starting
-    state = {
-        "session_id": sid,
-        "state": "starting",
-        "started_at": int(time.time()),
-        "task": body.task[:1000],
-        "initiator": body.initiator,
-        "log_tail": "Queued task, initializing worktree...",
-    }
-    _save_session_state(sid, state)
-
-    # Dispatch to background task immediately
-    background_tasks.add_task(run_async_session, sid, body)
-
-    return {
-        "status": "queued",
-        "session_id": sid,
-        "state": "starting",
-    }
-
-
-def run_async_session(sid: str, body: SessionBody):
     wt = WORK_ROOT / sid
-    state = _load_session_state(sid)
-    state["state"] = "running"
-    state["log_tail"] = "Fetching origin and creating git worktree..."
-    _save_session_state(sid, state)
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
+    # 1) fresh worktree from origin/<ref>
+    up = _run(["git", "fetch", "origin", body.ref], REPO)
+    if up.returncode != 0:
+        return _error(sid, "git fetch failed", up.stderr)
+    add = _run(["git", "worktree", "add", "-f", str(wt), f"origin/{body.ref}"], REPO)
+    if add.returncode != 0:
+        return _error(sid, "git worktree add failed", add.stderr)
+
+    # 2) build the prompt (Claude Code reads from stdin in -p mode)
+    # Phase 4: prepend PRIOR_CONTEXT (per-user + per-channel memory) if any.
+    prior_ctx = ""
     try:
-        WORK_ROOT.mkdir(parents=True, exist_ok=True)
-
-        # 1) fresh worktree from origin/<ref>
-        up = _run(["git", "fetch", "origin", body.ref], REPO)
-        if up.returncode != 0:
-            raise Exception(f"git fetch failed: {up.stderr}")
-        
-        add = _run(["git", "worktree", "add", "-f", str(wt), f"origin/{body.ref}"], REPO)
-        if add.returncode != 0:
-            raise Exception(f"git worktree add failed: {add.stderr}")
-
-        # 2) build the prompt
-        prior_ctx = ""
-        try:
-            prior_ctx = memory_store.build_preamble(
-                user_id=body.initiator or "",
-                channel_id=body.channel_id or "",
-            )
-        except Exception:
-            pass
-
-        reasoning_hint = ""
-        if body.deep:
-            reasoning_hint = (
-                "## Deep-reasoning mode ENABLED\n"
-                "Take extra time. Think through edge cases before editing files.\n"
-                "Prefer correctness over speed.\n\n"
-            )
-
-        prompt = (
-            f"# SteamGuard AI task ({body.source})\n\n"
-            f"Session id: {sid}\n"
-            f"Initiator: {body.initiator or 'unknown'}\n\n"
-            + (f"## Prior context\n\n{prior_ctx}\n" if prior_ctx else "")
-            + reasoning_hint
-            + "## Rules\n"
-            "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
-            ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
-            "- After you finish, exit — do not commit; the orchestrator handles git.\n\n"
-            "## Task\n\n" + body.task
+        prior_ctx = memory_store.build_preamble(
+            user_id=body.initiator or "",
+            channel_id=body.channel_id or "",
         )
-        (wt / ".sg-task.md").write_text(prompt)
+    except Exception:
+        prior_ctx = ""
 
-        # 3) invoke Claude Code (using CLAUDE_CLI configured wrapper instead of raw 'claude')
-        state["log_tail"] = "Starting Claude session..."
-        _save_session_state(sid, state)
+    reasoning_hint = ""
+    if body.deep:
+        reasoning_hint = (
+            "## Deep-reasoning mode ENABLED\n"
+            "Take extra time. Think through edge cases before editing files.\n"
+            "Use WebSearch/WebFetch when APIs, versions, or docs may be relevant.\n"
+            "Prefer correctness over speed.\n\n"
+        )
 
-        base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
-        env = {
-            **base_env,
-            "ANTHROPIC_BASE_URL": FCC_URL,
-            "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
-            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+    prompt = (
+        f"# SteamGuard AI task ({body.source})\n\n"
+        f"Session id: {sid}\n"
+        f"Initiator: {body.initiator or 'unknown'}\n\n"
+        + (f"## Prior context (Phase 4 memory)\n\n{prior_ctx}\n" if prior_ctx else "")
+        + reasoning_hint
+        + "## Rules\n"
+        "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
+        ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
+        "- Prefer minimal, testable changes. Edit files in the current working directory.\n"
+        "- After you finish, exit — do not commit; the orchestrator handles git.\n\n"
+        "## Task\n\n"
+        + body.task
+        + (f"\n\n## Context\n\n{body.context}\n" if body.context else "")
+    )
+    # Also drop a copy on disk for debugging.
+    (wt / ".sg-task.md").write_text(prompt)
+
+    # 3) invoke Claude Code in headless print mode via FCC proxy.
+    # Env mirrors what `fcc-claude` sets: strip ANTHROPIC_* from parent, then
+    # add BASE_URL, AUTH_TOKEN, gateway model discovery, and compact window.
+    # FCC routes to the NIM model configured in its Admin UI (MODEL setting) —
+    # do NOT set ANTHROPIC_MODEL here; fcc-claude explicitly strips it.
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+    env = {
+        **base_env,
+        "ANTHROPIC_BASE_URL": FCC_URL,
+        "ANTHROPIC_AUTH_TOKEN": DEVBOX_TOKEN,
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "190000",
+    }
+    # Use --permission-mode acceptEdits so Claude Code auto-accepts file edits
+    # in this sandboxed worktree without requiring an interactive TTY. The
+    # devbox already isolates: rootless subprocess as `sgagent`, dedicated VM,
+    # narrow allowedTools, and a path-guard classifier on the resulting diff.
+    cc = _run(
+        [
+            "claude",
+            "-p",
+            "--max-turns",
+            "30",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools",
+            "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
+            "--output-format",
+            "text",
+        ],
+        cwd=wt,
+        env=env,
+        timeout=1200,
+        stdin_data=prompt,
+    )
+    log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
+
+    # 4) classify diff
+    diff = _run(["git", "diff", "--name-only"], wt)
+    files = [ln for ln in diff.stdout.splitlines() if ln.strip()]
+    if not files:
+        _cleanup(wt)
+        return {"status": "empty", "session_id": sid, "log_tail": log_tail}
+
+    cls = classify_diff(files)
+
+    if cls.classification == "denied":
+        _cleanup(wt)
+        _record_memory(body, sid, "refused", None, log_tail)
+        return {
+            "status": "refused",
+            "session_id": sid,
+            "denied_files": cls.denied_files,
+            "log_tail": log_tail,
         }
 
-        cc = _run(
-            [
-                CLAUDE_CLI,
-                "-p",
-                "--max-turns",
-                "30",
-                "--permission-mode",
-                "acceptEdits",
-                "--allowedTools",
-                "Read,Edit,Write,Bash(git status),Bash(git diff),Bash(ls),Bash(cat),Bash(grep),Bash(find),Bash(rg)",
-                "--output-format",
-                "text",
-            ],
-            cwd=wt,
-            env=env,
-            timeout=1200,
-            stdin_data=prompt,
-        )
-        log_tail = (cc.stdout[-1500:] + "\n---STDERR---\n" + cc.stderr[-1500:])
-        state["log_tail"] = log_tail
-        _save_session_state(sid, state)
-
-        # 4) classify diff
-        diff = _run(["git", "diff", "--name-only"], wt)
-        files = [ln for ln in diff.stdout.splitlines() if ln.strip()]
-        state["files"] = files
-        _save_session_state(sid, state)
-
-        if not files:
-            _cleanup(wt)
-            state["state"] = "empty"
-            state["status"] = "empty"
-            _save_session_state(sid, state)
-            return
-
-        cls = classify_diff(files)
-
-        if cls.classification == "denied":
-            _cleanup(wt)
-            state["state"] = "refused"
-            state["status"] = "refused"
-            state["denied_files"] = cls.denied_files
-            _save_session_state(sid, state)
-            _record_memory(body, sid, "refused", None, log_tail)
-            return
-
-        # 5) stage + commit
-        _run(["git", "add", "-A"], wt)
-        commit_msg = _build_commit_msg(body, sid, cls.classification)
-        ci = _run(["git", "commit", "-m", commit_msg], wt)
-        if ci.returncode != 0:
-            raise Exception(f"git commit failed: {ci.stderr}")
-
-        if cls.classification == "direct":
-            push = _run(["git", "push", "origin", f"HEAD:{body.ref}"], wt)
-            if push.returncode != 0:
-                raise Exception(f"git push failed: {push.stderr}")
-            sha = _run(["git", "rev-parse", "HEAD"], wt).stdout.strip()
-            _cleanup(wt)
-            commit_url = f"https://github.com/{REPO_SLUG}/commit/{sha}"
-
-            state["state"] = "finished"
-            state["status"] = "committed"
-            state["commit_sha"] = sha
-            state["commit_url"] = commit_url
-            _save_session_state(sid, state)
-            _record_memory(body, sid, "committed", commit_url, log_tail)
-            return
-
-        # else PR
-        branch = f"sg-heal/{body.source}-{sid}"
-        _run(["git", "branch", "-M", branch], wt)
-        pr = _run(
-            ["/opt/sg-devbox/open-pr.sh", branch, body.task[:72].replace("\n", " "), body.source],
-            wt,
-            timeout=180,
-        )
-        if pr.returncode != 0:
-            raise Exception(f"open-pr.sh failed: {pr.stdout + pr.stderr}")
-        pr_url = pr.stdout.strip().splitlines()[-1] if pr.stdout.strip() else ""
+    # 5) stage + commit
+    _run(["git", "add", "-A"], wt)
+    commit_msg = _build_commit_msg(body, sid, cls.classification)
+    # No -S: signing is disabled per operator preference (commit.gpgsign=false).
+    # If signing is later re-enabled, add a signing key + set commit.gpgsign=true
+    # in the sgagent git config and this commit will pick it up automatically.
+    ci = _run(["git", "commit", "-m", commit_msg], wt)
+    if ci.returncode != 0:
         _cleanup(wt)
+        return _error(sid, "git commit failed", ci.stderr)
 
-        state["state"] = "finished"
-        state["status"] = "pr_opened"
-        state["pr_url"] = pr_url
-        _save_session_state(sid, state)
-        _record_memory(body, sid, "pr_opened", pr_url, log_tail)
-
-    except Exception as e:
+    if cls.classification == "direct":
+        push = _run(["git", "push", "origin", f"HEAD:{body.ref}"], wt)
+        if push.returncode != 0:
+            _cleanup(wt)
+            return _error(sid, "git push (direct) failed", push.stderr)
+        sha = _run(["git", "rev-parse", "HEAD"], wt).stdout.strip()
         _cleanup(wt)
-        state["state"] = "error"
-        state["status"] = "error"
-        state["error"] = str(e)
-        state["log_tail"] = state.get("log_tail") or str(e)
-        _save_session_state(sid, state)
+        commit_url = f"https://github.com/{REPO_SLUG}/commit/{sha}"
+        _record_memory(body, sid, "committed", commit_url, log_tail)
+        return {
+            "status": "committed",
+            "session_id": sid,
+            "commit_sha": sha,
+            "commit_url": commit_url,
+            "files": files,
+        }
 
-
-@app.get("/session/status/{sid}")
-def session_status(sid: str, authorization: Optional[str] = Header(default=None)):
-    _auth(authorization)
-    return _load_session_state(sid)
+    # else pr
+    branch = f"sg-heal/{body.source}-{sid}"
+    _run(["git", "branch", "-M", branch], wt)
+    pr = _run(
+        ["/opt/sg-devbox/open-pr.sh", branch, body.task[:72].replace("\n", " "), body.source],
+        wt,
+        timeout=180,
+    )
+    if pr.returncode != 0:
+        _cleanup(wt)
+        return _error(sid, "open-pr.sh failed", pr.stdout + pr.stderr)
+    pr_url = pr.stdout.strip().splitlines()[-1] if pr.stdout.strip() else ""
+    _cleanup(wt)
+    _record_memory(body, sid, "pr_opened", pr_url, log_tail)
+    return {
+        "status": "pr_opened",
+        "session_id": sid,
+        "pr_url": pr_url,
+        "files": files,
+    }
 
 
 def _build_commit_msg(body: SessionBody, sid: str, classification: str) -> str:
@@ -359,7 +303,7 @@ def _cleanup(wt: Path) -> None:
 
 
 def _error(sid: str, msg: str, tail: str):
-    return {"status": "error", "session_id": sid, "error": msg, "log_tail": tail[-1500:]} 
+    return {"status": "error", "session_id": sid, "error": msg, "log_tail": tail[-1500:]}
 
 
 def _record_memory(
