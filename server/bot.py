@@ -72,19 +72,39 @@ LOG = logging.getLogger("sg-bot")
 logging.basicConfig(level=logging.INFO)
 
 # Ensure cog imports resolve when bot.py is executed as a script in containers.
-_COGS_ROOT = Path(__file__).resolve().parent / "bot"
+_APP_ROOT = Path(__file__).resolve().parent
+_COGS_ROOT = _APP_ROOT / "bot"
 if _COGS_ROOT.is_dir():
     _cogs_path = str(_COGS_ROOT)
     if _cogs_path not in sys.path:
         sys.path.insert(0, _cogs_path)
 
-_COGS_DIR = _COGS_ROOT / "cogs"
+_COGS_DIR_CANDIDATES = (
+    _APP_ROOT / "bot" / "cogs",
+    _APP_ROOT / "cogs",
+    _APP_ROOT / "server" / "bot" / "cogs",
+)
+
+
+def _resolve_cog_module_file(module_file: str) -> Path:
+    for cogs_dir in _COGS_DIR_CANDIDATES:
+        mod_path = cogs_dir / module_file
+        if mod_path.is_file():
+            return mod_path
+
+    # Last-resort fallback for atypical runtime layouts.
+    for mod_path in _APP_ROOT.rglob(module_file):
+        if mod_path.is_file() and mod_path.parent.name == "cogs":
+            return mod_path
+
+    raise ImportError(
+        "Cog module file not found. Tried: "
+        + ", ".join(str(p / module_file) for p in _COGS_DIR_CANDIDATES)
+    )
 
 
 def _load_cog_setup(module_file: str):
-    mod_path = _COGS_DIR / module_file
-    if not mod_path.is_file():
-        raise ImportError(f"Cog module file not found: {mod_path}")
+    mod_path = _resolve_cog_module_file(module_file)
     mod_name = f"steamguard_cog_{module_file.replace('.py', '')}"
     spec = importlib.util.spec_from_file_location(mod_name, mod_path)
     if spec is None or spec.loader is None:
