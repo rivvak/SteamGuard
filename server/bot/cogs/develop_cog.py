@@ -32,6 +32,7 @@ class DevelopCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._http = httpx.AsyncClient(timeout=30.0)
+        self._last_session_by_channel: dict[int, str] = {}
 
     POLL_INITIAL_SECONDS = 5
     POLL_STEADY_SECONDS = 15
@@ -45,9 +46,20 @@ class DevelopCog(commands.Cog):
     @app_commands.describe(
         task="What you want the agent to do (max 6000 chars)",
         deep="Deep-reasoning mode — spend more thinking tokens. Slower but stronger.",
+        session_id="Optional existing /develop session id to continue",
+        plan_only="Plan mode only (no code edits or PR/commit).",
+        continue_last="Continue the latest session in this channel when session_id is omitted.",
     )
     @app_commands.guilds(GUILD)
-    async def develop(self, interaction: discord.Interaction, task: str, deep: bool = False):
+    async def develop(
+        self,
+        interaction: discord.Interaction,
+        task: str,
+        deep: bool = False,
+        session_id: str | None = None,
+        plan_only: bool = False,
+        continue_last: bool = False,
+    ):
         if interaction.user.id != OWNER_ID:
             # Non-owners get rate-limited server-side but we also give them a
             # visible cap here as a UX nicety.
@@ -61,17 +73,29 @@ class DevelopCog(commands.Cog):
 
         kickoff: dict
         try:
-            kickoff_resp = await self._http.post(
-                f"{LICENSE_SERVER_URL}/internal/develop",
-                headers={"X-Admin-Key": ADMIN_KEY, "Content-Type": "application/json"},
-                json={
-                    "discord_user_id": str(interaction.user.id),
-                    "task": task,
-                    "thread_id": (str(interaction.channel_id) if interaction.channel_id else None),
-                    "channel_id": (str(interaction.channel_id) if interaction.channel_id else None),
-                    "deep": deep,
-                },
-            )
+            use_sid = session_id
+            if not use_sid and continue_last and interaction.channel_id:
+                use_sid = self._last_session_by_channel.get(int(interaction.channel_id))
+
+            if use_sid:
+                kickoff_resp = await self._http.post(
+                    f"{LICENSE_SERVER_URL}/internal/develop/message/{use_sid}",
+                    headers={"X-Admin-Key": ADMIN_KEY, "Content-Type": "application/json"},
+                    json={"message": task, "plan_only": plan_only},
+                )
+            else:
+                kickoff_resp = await self._http.post(
+                    f"{LICENSE_SERVER_URL}/internal/develop",
+                    headers={"X-Admin-Key": ADMIN_KEY, "Content-Type": "application/json"},
+                    json={
+                        "discord_user_id": str(interaction.user.id),
+                        "task": task,
+                        "thread_id": (str(interaction.channel_id) if interaction.channel_id else None),
+                        "channel_id": (str(interaction.channel_id) if interaction.channel_id else None),
+                        "deep": deep,
+                        "plan_only": plan_only,
+                    },
+                )
         except httpx.HTTPError as e:
             await interaction.followup.send(f"Network error: {e}", ephemeral=True)
             return
@@ -82,6 +106,17 @@ class DevelopCog(commands.Cog):
             )
             return
         if kickoff_resp.status_code == 503:
+            detail = ""
+            try:
+                detail = kickoff_resp.json().get("detail", "")
+            except Exception:
+                detail = kickoff_resp.text[:300]
+            if "out of date" in detail.lower() or "missing async /develop" in detail.lower():
+                await interaction.followup.send(
+                    "Devbox needs upgrade for async /develop endpoints. Please deploy latest sg-devbox.",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
                 "The dev agent is disabled right now.", ephemeral=True
             )
@@ -99,6 +134,8 @@ class DevelopCog(commands.Cog):
                 f"Develop service returned no session_id: {kickoff}", ephemeral=True
             )
             return
+        if interaction.channel_id:
+            self._last_session_by_channel[int(interaction.channel_id)] = sid
 
         msg = await interaction.followup.send(
             embed=self._heartbeat_embed(task, sid, "starting", 0, None),
@@ -174,6 +211,51 @@ class DevelopCog(commands.Cog):
         r.raise_for_status()
         return r.json()
 
+    @app_commands.command(
+        name="develop_history",
+        description="Show recent conversation history for a /develop session.",
+    )
+    @app_commands.describe(session_id="Optional session id (defaults to this channel's latest)")
+    @app_commands.guilds(GUILD)
+    async def develop_history(self, interaction: discord.Interaction, session_id: str | None = None):
+        sid = session_id
+        if not sid and interaction.channel_id:
+            sid = self._last_session_by_channel.get(int(interaction.channel_id))
+        if not sid:
+            await interaction.response.send_message("No session id found for this channel.", ephemeral=True)
+            return
+
+        try:
+            r = await self._http.get(
+                f"{LICENSE_SERVER_URL}/internal/develop/history/{sid}",
+                headers={"X-Admin-Key": ADMIN_KEY},
+            )
+        except httpx.HTTPError as e:
+            await interaction.response.send_message(f"Network error: {e}", ephemeral=True)
+            return
+
+        if r.status_code != 200:
+            await interaction.response.send_message(
+                f"Server error {r.status_code}: {r.text[:300]}", ephemeral=True
+            )
+            return
+        data = r.json()
+        messages = data.get("messages") or []
+        snippet = []
+        for m in messages[-10:]:
+            role = (m.get("role") or "?").upper()
+            content = str(m.get("content") or "")[:180]
+            snippet.append(f"**{role}:** {content}")
+        txt = "\n".join(snippet) if snippet else "(no history)"
+        emb = discord.Embed(
+            title=f"/develop history — {sid}",
+            description=txt[:3900],
+            color=discord.Color.blurple(),
+        )
+        if data.get("active_objective"):
+            emb.add_field(name="Objective", value=str(data["active_objective"])[:1000], inline=False)
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+
     async def _finalize(
         self,
         interaction: discord.Interaction,
@@ -238,6 +320,7 @@ class DevelopCog(commands.Cog):
             "pr_opened": discord.Color.blurple(),
             "refused": discord.Color.red(),
             "empty": discord.Color.dark_gray(),
+            "planned": discord.Color.gold(),
             "error": discord.Color.orange(),
         }.get(status, discord.Color.light_gray())
 
@@ -261,6 +344,25 @@ class DevelopCog(commands.Cog):
             emb.add_field(name="Error", value=data.get("error", "unknown"), inline=False)
             if data.get("log_tail"):
                 emb.add_field(name="Log tail", value=f"```\n{data['log_tail'][-800:]}\n```", inline=False)
+        elif status == "planned":
+            emb.add_field(name="Plan", value=str(data.get("plan", "No plan text"))[:1000], inline=False)
+            if data.get("warning"):
+                emb.add_field(name="Warning", value=str(data["warning"])[:1000], inline=False)
+            if data.get("proposed_files"):
+                emb.add_field(
+                    name="Proposed files",
+                    value="\n".join(f"• {f}" for f in data["proposed_files"][:15]),
+                    inline=False,
+                )
+        elif status == "empty":
+            emb.add_field(
+                name="No changes made",
+                value=(
+                    "The agent completed without producing a diff. "
+                    "Try follow-up with a narrower task or run `plan_only:true` first."
+                ),
+                inline=False,
+            )
 
         emb.set_footer(text=f"session {data.get('session_id', '?')}")
         return emb

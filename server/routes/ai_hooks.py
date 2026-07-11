@@ -58,6 +58,12 @@ class DevelopBody(BaseModel):
     thread_id: Optional[str] = None
     channel_id: Optional[str] = None  # Phase 4: for per-channel memory scope
     deep: bool = False                # Phase 4: deep-reasoning flag
+    plan_only: bool = False
+
+
+class DevelopFollowupBody(BaseModel):
+    message: str = Field(min_length=1, max_length=6000)
+    plan_only: bool = False
 
 
 class CreateBody(BaseModel):
@@ -189,10 +195,11 @@ async def develop(body: DevelopBody, x_admin_key: Optional[str] = Header(default
                 "initiator": body.discord_user_id,
                 "channel_id": body.channel_id or body.thread_id,
                 "deep": body.deep,
+                "plan_only": body.plan_only,
             },
         )
     except HTTPException as e:
-        if e.status_code == 404:
+        if _is_missing_endpoint_404(e):
             raise _develop_upgrade_required_error()
         raise
 
@@ -205,7 +212,41 @@ async def develop_status(sid: str, x_admin_key: Optional[str] = Header(default=N
     try:
         return await _devbox_request_retry("GET", f"/develop/status/{sid}")
     except HTTPException as e:
-        if e.status_code == 404:
+        if _is_missing_endpoint_404(e):
+            raise _develop_upgrade_required_error()
+        raise
+
+
+@router.post("/develop/message/{sid}")
+async def develop_message(
+    sid: str,
+    body: DevelopFollowupBody,
+    x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key"),
+):
+    _check_admin(x_admin_key)
+    if not _ENABLED_DEV:
+        raise HTTPException(503, "develop disabled")
+    try:
+        return await _devbox_request_retry(
+            "POST",
+            f"/develop/{sid}/message",
+            {"message": body.message, "plan_only": body.plan_only},
+        )
+    except HTTPException as e:
+        if _is_missing_endpoint_404(e):
+            raise _develop_upgrade_required_error()
+        raise
+
+
+@router.get("/develop/history/{sid}")
+async def develop_history(sid: str, x_admin_key: Optional[str] = Header(default=None, alias="X-Admin-Key")):
+    _check_admin(x_admin_key)
+    if not _ENABLED_DEV:
+        raise HTTPException(503, "develop disabled")
+    try:
+        return await _devbox_request_retry("GET", f"/develop/{sid}/history")
+    except HTTPException as e:
+        if _is_missing_endpoint_404(e):
             raise _develop_upgrade_required_error()
         raise
 
@@ -295,6 +336,13 @@ def _develop_upgrade_required_error() -> HTTPException:
             "then redeploy the app and devbox together."
         ),
     )
+
+
+def _is_missing_endpoint_404(e: HTTPException) -> bool:
+    if e.status_code != 404:
+        return False
+    detail = str(e.detail or "")
+    return "Not Found" in detail
 
 
 @router.post("/create")

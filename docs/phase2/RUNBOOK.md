@@ -234,6 +234,13 @@ Test in Discord:
 Expect an immediate "starting/running" heartbeat embed, then a terminal result
 embed with commit/PR output when the session finishes.
 
+Conversation/planning examples:
+```
+/develop task: plan the authguard crash fix plan_only:true
+/develop task: now apply step 1 from that plan continue_last:true
+/develop_history
+```
+
 ## Rollback
 
 ```bash

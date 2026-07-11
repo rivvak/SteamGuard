@@ -80,6 +80,18 @@ class SessionBody(BaseModel):
     initiator: Optional[str] = None  # discord user id or GH run id
     channel_id: Optional[str] = None  # Phase 4: discord channel id (memory scope)
     deep: bool = False                # Phase 4: deep-reasoning mode toggle
+    plan_only: bool = False
+    conversation: Optional[list[dict]] = None
+    active_objective: Optional[str] = None
+
+
+class FollowupBody(BaseModel):
+    message: str = Field(min_length=1, max_length=6000)
+    plan_only: bool = False
+
+
+_develop_locks_guard = threading.Lock()
+_develop_locks: dict[str, threading.Lock] = {}
 
 
 def _auth(header: Optional[str]) -> None:
@@ -150,6 +162,11 @@ def develop(body: SessionBody, authorization: Optional[str] = Header(default=Non
         "ref": body.ref,
         "deep": body.deep,
         "channel_id": body.channel_id,
+        "task": body.task,
+        "active_objective": body.active_objective or body.task,
+        "messages": [
+            {"role": "user", "content": body.task, "ts": int(time.time()), "kind": "objective"}
+        ],
     }
     _develop_save(sid, state)
     t = threading.Thread(
@@ -168,6 +185,60 @@ def develop_status(sid: str, authorization: Optional[str] = Header(default=None)
     st = _develop_load(sid)
     st["elapsed_s"] = max(0, int(time.time()) - int(st.get("started_at", int(time.time()))))
     return st
+
+
+@app.post("/develop/{sid}/message")
+def develop_message(sid: str, body: FollowupBody, authorization: Optional[str] = Header(default=None)):
+    _auth(authorization)
+    st = _develop_load(sid)
+    if st.get("state") == "running":
+        raise HTTPException(409, "session is currently running")
+    messages = st.get("messages") or []
+    messages.append({"role": "user", "content": body.message, "ts": int(time.time()), "kind": "follow_up"})
+    st["messages"] = messages[-20:]
+    st["state"] = "starting"
+    st["started_at"] = int(time.time())
+    st.pop("ended_at", None)
+    _develop_save(sid, st)
+
+    followup_context = (
+        "## Follow-up request\n\n"
+        f"{body.message}\n\n"
+        "Resolve this against the objective and conversation context above.\n"
+    )
+    worker_body = {
+        "task": st.get("task") or body.message,
+        "source": st.get("source", "develop"),
+        "ref": st.get("ref", "main"),
+        "context": followup_context,
+        "initiator": st.get("initiator"),
+        "channel_id": st.get("channel_id"),
+        "deep": bool(st.get("deep", False)),
+        "plan_only": body.plan_only,
+        "conversation": st.get("messages") or [],
+        "active_objective": st.get("active_objective") or st.get("task") or body.message,
+    }
+    t = threading.Thread(
+        target=_develop_worker,
+        args=(sid, worker_body),
+        daemon=True,
+        name=f"develop-followup-{sid}",
+    )
+    t.start()
+    return {"status": "queued", "session_id": sid, "state": "starting"}
+
+
+@app.get("/develop/{sid}/history")
+def develop_history(sid: str, authorization: Optional[str] = Header(default=None)):
+    _auth(authorization)
+    st = _develop_load(sid)
+    return {
+        "session_id": sid,
+        "state": st.get("state"),
+        "active_objective": st.get("active_objective"),
+        "messages": st.get("messages", []),
+        "last_result": st.get("result"),
+    }
 
 
 def _develop_save(sid: str, state: dict) -> None:
@@ -190,6 +261,12 @@ def _develop_load(sid: str) -> dict:
 
 
 def _develop_worker(sid: str, body_data: dict) -> None:
+    lock = _get_develop_lock(sid)
+    with lock:
+        _develop_worker_locked(sid, body_data)
+
+
+def _develop_worker_locked(sid: str, body_data: dict) -> None:
     try:
         st = _develop_load(sid)
         st["state"] = "running"
@@ -198,6 +275,16 @@ def _develop_worker(sid: str, body_data: dict) -> None:
         st["result"] = result
         st["state"] = "error" if result.get("status") == "error" else "finished"
         st["ended_at"] = int(time.time())
+        msgs = st.get("messages") or []
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _result_summary(result),
+                "ts": int(time.time()),
+                "kind": "result",
+            }
+        )
+        st["messages"] = msgs[-20:]
         _develop_save(sid, st)
     except Exception as e:
         try:
@@ -211,7 +298,26 @@ def _develop_worker(sid: str, body_data: dict) -> None:
             "session_id": sid,
             "error": f"develop worker exception: {type(e).__name__}: {e}",
         }
+        msgs = st.get("messages") or []
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": f"Error: {type(e).__name__}: {e}",
+                "ts": int(time.time()),
+                "kind": "result",
+            }
+        )
+        st["messages"] = msgs[-20:]
         _develop_save(sid, st)
+
+
+def _get_develop_lock(sid: str) -> threading.Lock:
+    with _develop_locks_guard:
+        lk = _develop_locks.get(sid)
+        if lk is None:
+            lk = threading.Lock()
+            _develop_locks[sid] = lk
+        return lk
 
 
 def _wait_fcc_ready(timeout_s: int = 45) -> Optional[str]:
@@ -266,14 +372,21 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
         f"# SteamGuard AI task ({body.source})\n\n"
         f"Session id: {sid}\n"
         f"Initiator: {body.initiator or 'unknown'}\n\n"
+        + (f"## Active objective\n\n{body.active_objective}\n\n" if body.active_objective else "")
+        + (_conversation_block(body.conversation) if body.conversation else "")
         + (f"## Prior context (Phase 4 memory)\n\n{prior_ctx}\n" if prior_ctx else "")
         + reasoning_hint
         + "## Rules\n"
-        "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
-        ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
-        "- Prefer minimal, testable changes. Edit files in the current working directory.\n"
-        "- After you finish, exit — do not commit; the orchestrator handles git.\n\n"
-        "## Task\n\n"
+        + "- Never touch: auth/, license/entitlement/hwid/cert/pinning code, "
+        + ".env*, *.pem/*.key, .github/workflows/**, Dockerfiles, build scripts, hashes.txt.\n"
+        + "- Prefer minimal, testable changes. Edit files in the current working directory.\n"
+        + (
+            "- PLAN-ONLY MODE: do NOT edit files; return a concrete implementation plan with steps and risks.\n"
+            if body.plan_only
+            else ""
+        )
+        + "- After you finish, exit — do not commit; the orchestrator handles git.\n\n"
+        + "## Task\n\n"
         + body.task
         + (f"\n\n## Context\n\n{body.context}\n" if body.context else "")
     )
@@ -331,7 +444,25 @@ def _execute_session(body: SessionBody, sid: str) -> dict:
     files = [ln for ln in diff.stdout.splitlines() if ln.strip()]
     if not files:
         _cleanup(wt)
+        if body.plan_only:
+            return {
+                "status": "planned",
+                "session_id": sid,
+                "plan": _extract_plan(cc.stdout),
+                "log_tail": log_tail,
+            }
         return {"status": "empty", "session_id": sid, "log_tail": log_tail}
+
+    if body.plan_only:
+        _cleanup(wt)
+        return {
+            "status": "planned",
+            "session_id": sid,
+            "plan": _extract_plan(cc.stdout),
+            "warning": "Plan mode produced file edits; changes were discarded.",
+            "proposed_files": files[:30],
+            "log_tail": log_tail,
+        }
 
     cls = classify_diff(files)
 
@@ -440,3 +571,37 @@ def _record_memory(
         )
     except Exception:
         pass
+
+
+def _extract_plan(stdout_text: str) -> str:
+    text = (stdout_text or "").strip()
+    if not text:
+        return "No plan text was produced."
+    return text[-3000:]
+
+
+def _conversation_block(conversation: list[dict]) -> str:
+    lines = ["## Conversation context (latest first)\n"]
+    for m in conversation[-12:]:
+        role = (m.get("role") or "unknown").upper()
+        content = str(m.get("content") or "")[:1200]
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _result_summary(result: dict) -> str:
+    status = result.get("status", "unknown")
+    if status == "planned":
+        plan = str(result.get("plan") or "")
+        return f"Planned response ready.\n{plan[:600]}"
+    if status == "error":
+        return f"Error: {result.get('error', 'unknown')}"
+    if status == "empty":
+        return "Run completed with no repository changes."
+    if status == "pr_opened":
+        return f"Opened PR: {result.get('pr_url', '(missing url)')}"
+    if status == "committed":
+        return f"Committed: {result.get('commit_url', result.get('commit_sha', '(missing commit)'))}"
+    if status == "refused":
+        return f"Refused due to denied files: {', '.join(result.get('denied_files', [])[:8])}"
+    return f"Run completed with status: {status}"

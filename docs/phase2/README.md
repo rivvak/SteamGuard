@@ -107,6 +107,7 @@ docs/phase2/
    - Opens **IAP TCP tunnel** to the local HTTP orchestrator on `sg-devbox:9090` (runtime SA must have `roles/iap.tunnelResourceAccessor`).
    - Calls kickoff `POST /develop` and returns immediately with `{session_id, state:"starting"}`.
    - Bot then polls `GET /develop/status/{sid}` through the same short-lived tunnel path.
+   - Follow-ups use `POST /develop/{sid}/message`; history reads from `GET /develop/{sid}/history`.
 4. `sg-devbox` orchestrator:
    - Creates a fresh git worktree at `/var/lib/sg-devbox/work/<uuid>/`.
    - Uses free-claude-code with provider-qualified model defaults (for example `nvidia_nim/z-ai/glm-5.2`) and NVIDIA NIM auth flow.
@@ -115,7 +116,9 @@ docs/phase2/
      - If any file matches DENY → abort, return `refused` to bot.
      - If **all** changed files are inside ALLOW_DIRECT → `git push origin main` directly, return `committed` with commit SHA.
      - Otherwise → `git push origin sg-heal/<uuid>`, `gh pr create --reviewer rivvak`, return `pr_opened` with PR URL.
-5. SG bot sends heartbeat updates while polling, then posts terminal result embed (commit URL / PR URL / refused / error).
+5. SG bot sends heartbeat updates while polling, then posts terminal result embed (commit URL / PR URL / refused / error / planned).
+   - `plan_only` requests return a structured plan without committing changes.
+   - Follow-up turns can continue an existing session id for back-and-forth iteration.
 
 ## 4. CI self-heal flow
 
