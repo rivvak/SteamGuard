@@ -100,6 +100,11 @@ AI_DEVBOX_MODEL=nvidia_nim/z-ai/glm-5.2
 AI_DEVBOX_MODELS=nvidia_nim/z-ai/glm-5.2,nvidia_nim/deepseek-ai/deepseek-v4-pro,nvidia_nim/deepseek-ai/deepseek-v4-flash
 AI_DEVBOX_MAX_RUNTIME_SECONDS=2400
 AI_DEVBOX_PLAN_RUNTIME_SECONDS=900
+AI_DEVBOX_ATTEMPT_TIMEOUT_SECONDS=900
+AI_DEVBOX_MAX_ATTEMPTS=4
+AI_DEVBOX_PLAN_ATTEMPT_TIMEOUT_SECONDS=180
+AI_DEVBOX_PLAN_MAX_ATTEMPTS=2
+AI_DEVBOX_PROGRESS_UPDATE_SECONDS=15
 AI_DEVBOX_MAX_TURNS=40
 AI_DEVBOX_PLAN_MAX_TURNS=18
 EOF
@@ -126,6 +131,11 @@ gcloud secrets versions access latest --secret=SG_HEAL_PRIVATE_KEY \
 
 sudo chmod 600 /etc/sg-devbox/env
 ```
+
+`AI_DEVBOX_MAX_RUNTIME_SECONDS` and `AI_DEVBOX_PLAN_RUNTIME_SECONDS` are total
+session budgets across failover attempts. The new `*_ATTEMPT_TIMEOUT_SECONDS`
+and `*_MAX_ATTEMPTS` knobs keep one bad Claude/model attempt from multiplying
+that budget across every fallback slot.
 
 ## 6. Generate the bot SSH signing key
 
@@ -237,13 +247,24 @@ Rollout note: `/develop` is now async (`/develop` + `/develop/status/{sid}` on
 sg-devbox). Deploy the app and sg-devbox together; if only the app is updated,
 `/internal/develop` may return a 503 upgrade-required error until devbox is upgraded.
 
+After deploying code that changes `deploy/devbox/scripts/orchestrator.py` or the
+env file, restart the VM service so the new attempt caps and progress snapshots
+take effect:
+
+```bash
+sudo systemctl restart sg-devbox-orch.service
+sudo journalctl -u sg-devbox-orch -n 50 --no-pager
+```
+
 Test in Discord:
 ```
 /develop task: add a hello-world sample to docs/samples.md
 ```
 
 Expect an immediate "starting/running" heartbeat embed, then a terminal result
-embed with commit/PR output when the session finishes.
+embed with commit/PR output when the session finishes. During long runs, the
+heartbeat should now show the active stage, attempt number, model, and recent
+log tail rather than sitting on a blank "running" status.
 
 Conversation/planning examples:
 ```
