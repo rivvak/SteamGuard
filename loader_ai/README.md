@@ -1,14 +1,20 @@
-# loader/ai/
+# loader_ai/
 
 PyQt5 chat modal for the SteamGuard loader. Launched from a "?" button
 placed alongside the existing product cards in `loader.py`.
+
+> The package is `loader_ai` (top-level), not `loader.ai`. A `loader/`
+> package would be shadowed by the `loader.py` entry-point module that lives
+> in the same directory — Python resolves `loader` to the `.py` file before the
+> package directory, so `from loader.ai import ...` raises
+> `"'loader' is not a package"`.
 
 ## Wire-up
 
 In `loader.py`, near where product-card buttons are created:
 
 ```python
-from loader.ai.chat_panel import open_chat_modal
+from loader_ai.chat_panel import open_chat_modal
 
 def _open_ai_chat(self):
     session = self.session         # existing session object with .key + .hwid

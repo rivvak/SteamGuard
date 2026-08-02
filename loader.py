@@ -1899,7 +1899,7 @@ class Dashboard(QWidget):
         """Open the AI chat modal. Import lazily to avoid a hard PyQtWebEngine
         dep at loader startup."""
         try:
-            from loader.ai.chat_panel import open_chat_modal
+            from loader_ai.chat_panel import open_chat_modal
             from auth.hwid import get_hwid
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
