@@ -1,0 +1,12 @@
+{
+  "version": "2.1.0",
+  "channel": "stable",
+  "url": "https://github.com/rivvak/SteamGuard/releases/latest/download/SteamGuard.exe",
+  "fallback_url": "https://cdn.shopify.com/s/files/1/0919/2587/2960/files/SteamGuard.exe?v=1792373652",
+  "sha256": "4f51b7c65f01b03e9cab413301f0b7a5556e8240d0c5d7c7fc52b6f9361792c8",
+  "size": 19435760,
+  "min_supported_version": "2.1.0",
+  "rollout_percent": 100,
+  "mandatory": true,
+  "notes": "v2.1.0: In-place self-updating loader, offline HMAC fallback resilience, and instant key verification."
+}
