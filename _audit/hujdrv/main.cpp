@@ -352,9 +352,10 @@ NTSTATUS initialize_driver(PDRIVER_OBJECT drv_obj, PUNICODE_STRING path) {
     drv_obj->MajorFunction[IRP_MJ_CLOSE] = &dispatch_handler;
     drv_obj->MajorFunction[IRP_MJ_DEVICE_CONTROL] = &io_controller_func;
 
-    DkomUnlinking(drv_obj);
-    drv_obj->DriverName.Length = 0;
-    drv_obj->DriverSection = 0;
+    // Preserve legitimate DRIVER_OBJECT and KLDR_DATA_TABLE_ENTRY backing so
+    // module/device/memory/stack integrity scanners (such as Undetected-Easy)
+    // see a consistent, module-backed driver object with valid DriverSection,
+    // DriverStart, DriverSize, and MajorFunction targets.
     device_obj->Flags &= ~DO_DEVICE_INITIALIZING;
 
     // Store globals for clean unload
@@ -367,12 +368,12 @@ NTSTATUS initialize_driver(PDRIVER_OBJECT drv_obj, PUNICODE_STRING path) {
 
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
-
     struc::ntos_image_base = NTOS::get_ntos_base_address();
 
-    // Register unload handler (on the real DriverObject, before IoCreateDriver)
-    DriverObject->DriverUnload = &DriverUnload;
+    if (DriverObject) {
+        DriverObject->DriverUnload = &DriverUnload;
+        return initialize_driver(DriverObject, RegistryPath);
+    }
 
     return IoCreateDriver(&initialize_driver);
 }

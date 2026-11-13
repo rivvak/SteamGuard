@@ -131,16 +131,25 @@ BOOL DX11Overlay::InitImGui() {
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 	ImFontConfig fontConfig;
-	fontConfig.RasterizerMultiply = 1.4f;
+	fontConfig.FontDataOwnedByAtlas = false;
+	fontConfig.OversampleH = 3;
+	fontConfig.OversampleV = 2;
+	fontConfig.RasterizerMultiply = 1.15f;
 
-	io.Fonts->AddFontFromMemoryTTF(&khait, sizeof khait, 20, NULL, io.Fonts->GetGlyphRangesCyrillic());
+	io.Fonts->AddFontFromMemoryTTF(&khait, sizeof khait, 20, &fontConfig, io.Fonts->GetGlyphRangesCyrillic());
 
 	// Ubuntu Medium - ESP text font (clean, readable at small sizes)
 	extern ImFont* esp_font;
-	esp_font = io.Fonts->AddFontFromMemoryTTF(&ubuntu_0, sizeof ubuntu_0, 13, NULL, io.Fonts->GetGlyphRangesCyrillic());
+	esp_font = io.Fonts->AddFontFromMemoryTTF(&ubuntu_0, sizeof ubuntu_0, 13, &fontConfig, io.Fonts->GetGlyphRangesCyrillic());
 
 	// Ubuntu Bold - menu/child text
-	ubu_0 = io.Fonts->AddFontFromMemoryTTF(&ubuntu_1, sizeof ubuntu_1, 18, NULL, io.Fonts->GetGlyphRangesCyrillic());
+	ubu_0 = io.Fonts->AddFontFromMemoryTTF(&ubuntu_1, sizeof ubuntu_1, 18, &fontConfig, io.Fonts->GetGlyphRangesCyrillic());
+
+	// Able UI menu fonts
+	extern ImFont* ui_font;
+	extern ImFont* ui_bold_font;
+	ui_font = io.Fonts->AddFontFromMemoryTTF(&ubuntu_0, sizeof ubuntu_0, 15.0f, &fontConfig, io.Fonts->GetGlyphRangesCyrillic());
+	ui_bold_font = io.Fonts->AddFontFromMemoryTTF(&ubuntu_1, sizeof ubuntu_1, 15.5f, &fontConfig, io.Fonts->GetGlyphRangesCyrillic());
 
 	ImVec4 clear_color = ImVec4(0.f, 0.f, 0.f, 1.00f);
 
@@ -231,6 +240,8 @@ BOOL DX11Overlay::CreateRenderTarget() {
 inline ImFont* icons;
 inline ImFont* font_main;
 ImFont* esp_font = nullptr;
+ImFont* ui_font = nullptr;
+ImFont* ui_bold_font = nullptr;
 
 // Function to create the Direct3D 11 swap chain
 BOOL DX11Overlay::CreateSwapchain() {

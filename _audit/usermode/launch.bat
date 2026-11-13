@@ -1,4 +1,4 @@
 @echo off
-cd /d C:\Users\mason\Downloads\yanny\usermode
+cd /d "%~dp0"
 start "usermode" x64\Release\usermode.exe
 exit

@@ -422,6 +422,9 @@ namespace idfk {
     inline int m_ColorSubTab = 0;
 }
 
+extern ImFont* ui_font;
+extern ImFont* ui_bold_font;
+
 inline ImU32 AccU32(float alpha = 1.0f) {
     ImVec4 v = MenuAccent.Value;
     return ImGui::ColorConvertFloat4ToU32(ImVec4(v.x, v.y, v.z, v.w * alpha));
@@ -442,7 +445,7 @@ inline static void apply_theme() {
 
     auto& s = ImGui::GetStyle();
 
-    s.WindowPadding     = ImVec2(0, 0);
+    s.WindowPadding     = ImVec2(10, 8);
     s.FramePadding      = ImVec2(10, 5);
     s.ItemSpacing       = ImVec2(8, 7);
     s.ItemInnerSpacing  = ImVec2(6, 4);
@@ -508,30 +511,52 @@ inline static void apply_theme() {
 
 // ---- Able UI Component Helpers ----
 inline void BeginCard(const char* id, const char* title, const char* subtitle, ImVec2 size) {
-    ImGui::BeginChild(id, size, true, ImGuiWindowFlags_AlwaysUseWindowPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild(id, size, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+
     auto* dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
     float ww = ImGui::GetWindowWidth();
+    constexpr float hdr_h = 34.0f;
 
-    // Card header background band
-    dl->AddRectFilled(wp, ImVec2(wp.x + ww, wp.y + 32.0f), BG_CARD_TOP, 8.0f, ImDrawFlags_RoundCornersTop);
-    dl->AddLine(ImVec2(wp.x, wp.y + 32.0f), ImVec2(wp.x + ww, wp.y + 32.0f), BORDER_COL, 1.0f);
+    // Card header band
+    dl->AddRectFilled(wp, ImVec2(wp.x + ww, wp.y + hdr_h), BG_CARD_TOP, 8.0f, ImDrawFlags_RoundCornersTop);
+    dl->AddLine(ImVec2(wp.x, wp.y + hdr_h), ImVec2(wp.x + ww, wp.y + hdr_h), BORDER_COL, 1.0f);
 
-    // Accent bar + Title
-    dl->AddRectFilled(ImVec2(wp.x + 12.0f, wp.y + 10.0f), ImVec2(wp.x + 15.0f, wp.y + 22.0f), AccU32(1.0f), 2.0f);
-    ImVec2 ts = ImGui::CalcTextSize(title);
-    dl->AddText(ImVec2(wp.x + 22.0f, wp.y + (32.0f - ts.y) * 0.5f), TEXT_BRIGHT, title);
+    // Accent bar + Bold Title
+    dl->AddRectFilled(ImVec2(wp.x + 12.0f, wp.y + 10.0f), ImVec2(wp.x + 15.0f, wp.y + hdr_h - 10.0f), AccU32(1.0f), 2.0f);
+    ImFont* hdr_font = ui_bold_font ? ui_bold_font : ImGui::GetFont();
+    ImVec2 ts = hdr_font->CalcTextSizeA(hdr_font->FontSize, FLT_MAX, 0.0f, title);
+    dl->AddText(hdr_font, hdr_font->FontSize, ImVec2(wp.x + 22.0f, wp.y + (hdr_h - ts.y) * 0.5f), TEXT_BRIGHT, title);
 
     if (subtitle && subtitle[0] != '\0') {
+        bool is_live = (strcmp(subtitle, "ACTIVE") == 0 || strcmp(subtitle, "RENDERING") == 0 || strcmp(subtitle, "ARMED") == 0);
         ImVec2 sts = ImGui::CalcTextSize(subtitle);
-        dl->AddText(ImVec2(wp.x + ww - sts.x - 12.0f, wp.y + (32.0f - sts.y) * 0.5f), TEXT_DIM, subtitle);
+        float badge_w = sts.x + 14.0f;
+        float badge_h = 18.0f;
+        ImVec2 bmin(wp.x + ww - badge_w - 10.0f, wp.y + (hdr_h - badge_h) * 0.5f);
+        ImVec2 bmax(bmin.x + badge_w, bmin.y + badge_h);
+        dl->AddRectFilled(bmin, bmax, is_live ? AccU32(0.18f) : IM_COL32(26, 26, 38, 255), 4.0f);
+        dl->AddRect(bmin, bmax, is_live ? AccU32(0.55f) : BORDER_COL, 4.0f);
+        dl->AddText(ImVec2(bmin.x + 7.0f, bmin.y + (badge_h - sts.y) * 0.5f), is_live ? AccLightU32(1.0f) : TEXT_DIM, subtitle);
     }
 
-    ImGui::SetCursorPosY(38.0f);
+    // Inner scrollable body clipped strictly below hdr_h
+    ImGui::SetCursorPos(ImVec2(0.0f, hdr_h + 1.0f));
+    char body_id[96];
+    sprintf_s(body_id, "%s_body", id);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    ImGui::BeginChild(body_id, ImVec2(size.x, size.y - hdr_h - 1.0f), false, ImGuiWindowFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 inline void EndCard() {
-    ImGui::EndChild();
+    ImGui::EndChild(); // inner scrollable body
+    ImGui::EndChild(); // outer card container
 }
 
 inline void SectionLabel(const char* text) {
@@ -573,7 +598,7 @@ inline bool Cmb(const char* label, int* v, const char* items) {
     float avail_w = ImGui::GetContentRegionAvail().x;
     ImVec2 lsz = ImGui::CalcTextSize(label, NULL, true);
     float combo_w = ImMin(138.0f, avail_w * 0.52f);
-    float row_h = ImMax(lsz.y, 24.0f);
+    float row_h = ImGui::GetFrameHeight();
 
     dl->AddText(ImVec2(pos.x, pos.y + (row_h - lsz.y) * 0.5f), ImColor(colors::combo::text_inactive), label, ImGui::FindRenderedTextEnd(label));
 
@@ -641,11 +666,11 @@ inline void ClrPick(const char* label, ImVec4* col) {
     ImVec2 pos = ImGui::GetCursorScreenPos();
     float avail_w = ImGui::GetContentRegionAvail().x;
     ImVec2 lsz = ImGui::CalcTextSize(label, NULL, true);
-    float row_h = 22.0f;
+    float frame_h = ImGui::GetFrameHeight();
 
-    dl->AddText(ImVec2(pos.x, pos.y + (row_h - lsz.y) * 0.5f), ImColor(colors::checkbox::text_active), label, ImGui::FindRenderedTextEnd(label));
+    dl->AddText(ImVec2(pos.x, pos.y + (frame_h - lsz.y) * 0.5f), ImColor(colors::checkbox::text_active), label, ImGui::FindRenderedTextEnd(label));
 
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + avail_w - 26.0f, pos.y + 1.0f));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + avail_w - frame_h, pos.y));
     char id[64];
     sprintf_s(id, "##cp_%s", label);
     ImGui::ColorEdit4(id, (float*)col,
@@ -741,6 +766,12 @@ inline void draw_menu() {
     SPOOF_FUNC;
     apply_theme();
 
+    bool pushed_ui_font = false;
+    if (ui_font) {
+        ImGui::PushFont(ui_font);
+        pushed_ui_font = true;
+    }
+
     constexpr float W = 900.0f;
     constexpr float H = 580.0f;
     constexpr float SIDE = 176.0f;
@@ -759,9 +790,11 @@ inline void draw_menu() {
     constexpr int tab_n = 5;
 
     ImGui::SetNextWindowSize(ImVec2(W, H));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin(_("##MainWnd"), 0,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoCollapse);
+    ImGui::PopStyleVar();
     {
         auto* dl = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetWindowPos();
@@ -790,7 +823,8 @@ inline void draw_menu() {
             BORDER_COL, 1.0f
         );
 
-        // ---- Top Accent Glow Strip ----
+        // ---- Outer 1px Frame Border & Top Accent Glow Strip ----
+        dl->AddRect(p, ImVec2(p.x + W, p.y + H), BORDER_COL, 10.0f, 0, 1.0f);
         dl->AddRectFilledMultiColor(
             ImVec2(p.x + 8.0f, p.y),
             ImVec2(p.x + W - 8.0f, p.y + 2.0f),
@@ -816,7 +850,8 @@ inline void draw_menu() {
             BG_SIDEBAR
         );
 
-        dl->AddText(ImVec2(p.x + 54.0f, p.y + 15.0f), TEXT_BRIGHT, "ABLE");
+        ImFont* hdr_bold = ui_bold_font ? ui_bold_font : ImGui::GetFont();
+        dl->AddText(hdr_bold, hdr_bold->FontSize, ImVec2(p.x + 54.0f, p.y + 15.0f), TEXT_BRIGHT, "ABLE");
         dl->AddText(ImVec2(p.x + 54.0f, p.y + 31.0f), TEXT_DIM, "immortal // fn");
 
         dl->AddLine(
@@ -885,10 +920,11 @@ inline void draw_menu() {
         dl->AddText(ImVec2(fmin.x + 12.0f, fmin.y + 30.0f), TEXT_DIM, tele_buf);
 
         // ---- Top Header Breadcrumb & Quick Actions ----
-        dl->AddText(ImVec2(p.x + SIDE + 18.0f, p.y + 13.0f), AccLightU32(1.0f), tabs[idfk::m_MenuTab]);
-        ImVec2 active_tab_sz = ImGui::CalcTextSize(tabs[idfk::m_MenuTab]);
-        dl->AddText(ImVec2(p.x + SIDE + 26.0f + active_tab_sz.x, p.y + 13.0f), TEXT_DIM, "//");
-        dl->AddText(ImVec2(p.x + SIDE + 44.0f + active_tab_sz.x, p.y + 13.0f), TEXT_MID, tab_desc[idfk::m_MenuTab]);
+        ImVec2 active_tab_sz = hdr_bold->CalcTextSizeA(hdr_bold->FontSize, FLT_MAX, 0.0f, tabs[idfk::m_MenuTab]);
+        float top_text_y = p.y + (TOP_BAR - active_tab_sz.y) * 0.5f;
+        dl->AddText(hdr_bold, hdr_bold->FontSize, ImVec2(p.x + SIDE + 18.0f, top_text_y), AccLightU32(1.0f), tabs[idfk::m_MenuTab]);
+        dl->AddText(ImVec2(p.x + SIDE + 26.0f + active_tab_sz.x, top_text_y), TEXT_DIM, "//");
+        dl->AddText(ImVec2(p.x + SIDE + 44.0f + active_tab_sz.x, top_text_y), TEXT_MID, tab_desc[idfk::m_MenuTab]);
 
         ImGui::SetCursorPos(ImVec2(W - 166.0f, 8.0f));
         if (ImGui::Button("Save##top", ImVec2(72.0f, 28.0f)))
@@ -905,7 +941,6 @@ inline void draw_menu() {
         float half_w = (cw - PAD) * 0.5f;
 
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
 
         switch (idfk::m_MenuTab) {
 
@@ -1170,14 +1205,14 @@ inline void draw_menu() {
                 SectionLabel("Renderer & Capture");
                 Chk("Framerate Counter", &C_Misc::c_show_fps);
                 Chk("Vertical Sync (VSync)", &C_Overlay::c_enable_vsync);
-                Chk("Stream Proof (WDA_EXCLUDEFROMCAPTURE)", &C_Exploits::c_stream_proof);
+                Chk("Stream Proof", &C_Exploits::c_stream_proof);
                 Chk("Diagnostic Overlay", &debug);
 
                 SectionSep();
                 SectionLabel("Runtime Hardening");
-                Chk("Anti-Dump (PE Header Wipe)", &C_Exploits::c_anti_dump);
+                Chk("Anti-Dump (PE Wipe)", &C_Exploits::c_anti_dump);
                 Chk("Adaptive Thread Throttle", &C_Exploits::c_thread_throttle);
-                Chk("Control-Flow Guard Flatten", &C_Exploits::c_cfg_flatten);
+                Chk("CFG Flatten", &C_Exploits::c_cfg_flatten);
             }
             EndCard();
 
@@ -1241,7 +1276,7 @@ inline void draw_menu() {
                 SectionLabel("Able UI Engine");
                 ImGui::TextColored(ImVec4(0.68f, 0.66f, 0.78f, 1.0f), "Renderer: DirectX 11 Immediate");
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.68f, 0.66f, 0.78f, 1.0f), "Toggle Key: INSERT / R-SHIFT");
+                ImGui::TextColored(ImVec4(0.68f, 0.66f, 0.78f, 1.0f), "Toggle Key: TAB");
                 ImGui::Spacing();
                 ImGui::TextColored(ImVec4(0.68f, 0.66f, 0.78f, 1.0f), "Profile Path: C:\\info");
             }
@@ -1250,7 +1285,11 @@ inline void draw_menu() {
         }
         } // switch
 
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(1);
     }
     ImGui::End();
+
+    if (pushed_ui_font) {
+        ImGui::PopFont();
+    }
 }
