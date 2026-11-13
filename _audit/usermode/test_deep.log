@@ -1,0 +1,824 @@
+[+] Driver already loaded.
+Please open FortniteBase: 0x00007FF6C1780000
+Have Fun![gprobe] gengine=00007FF21B80AC00 class=
+[gprobe] class mismatch! dumping GEngine slot neighborhood
+[gprobe]   gslot -32 = 5B769F9A41F09493
+[gprobe]   gslot -24 = 1B6AF89C80003177
+[gprobe]   gslot -16 = 4248379C800024AA
+[gprobe]   gslot -8 = 0000000080000B17
+[gprobe]   gslot +0 = 00007FF21B80AC00
+[gprobe]   gslot +8 = 00007FF6D5E4CF50
+[gprobe]   gslot +16 = 0000000000000001
+[gprobe]   gslot +24 = 00007FF6D5E4CF40
+[gprobe]   gslot +32 = 0000000000000001
+[gscan] no Viewport-classed pointer in +0xA00..0xD00
+[deep] === raw dumps ===
+[deep] gwslot -120 = 00007FED9C7ABA00
+[deep] gwslot -112 = 0000002000000018
+[deep] gwslot -104 = 000000000000002A
+[deep] gwslot -88 = FFFFFFFFFFFFFFFF
+[deep] gwslot -80 = 00000000FFFFFFFF
+[deep] gwslot -56 = 0000000000000FA0
+[deep] gwslot -48 = 00007FEBDBE9F7E0
+[deep] gwslot -40 = 0000000E0000000B
+[deep] gwslot -32 = 000000000000000D
+[deep] gwslot -24 = 00007FECDBA27450
+[deep] gwslot -16 = 0000001700000015
+[deep] gwslot -8 = 0000000000000021
+[deep] gwslot +0 = 0B9AFC28EE380B30
+[deep] gwslot +8 = FFFFFFFFFFFFFFFF
+[deep] gwslot +16 = 00000000FFFFFFFF
+[deep] gwslot +40 = 0000000000000FA0
+[deep] gwslot +48 = 00007FEB1B8FF3C0
+[deep] gwslot +56 = 0000000A00000008
+[deep] gwslot +64 = 000000000000000D
+[deep] gwslot +72 = 00007FEA5C51FBD0
+[deep] gwslot +80 = 0000000700000007
+[deep] gwslot +88 = 0000000000000009
+[deep] gwslot +96 = 00007FF01BDF98E0
+[deep] gwslot +104 = 0000006D0000006D
+[deep] gwslot +112 = 00000000000000AB
+[deep] gwslot +120 = 00007FF6D5B9BD38
+[deep] gwslot +128 = 00007FE91B7DABC0
+[deep] gwslot +136 = 00007FE9DB81DBE0
+[deep] gwslot +144 = 0000002800000025
+[deep] gwslot +152 = 00007FF6D5B9BD40
+[deep] gwslot +160 = 00007FE91B7DAB80
+[deep] geslot -184 = 00007FF6D9046510
+[deep] geslot -176 = 0000000000000300
+[deep] geslot -168 = 0000000080000A84
+[deep] geslot -160 = 00007FF6D92B55D0
+[deep] geslot -152 = 0000000000000300
+[deep] geslot -144 = 0000000080003650
+[deep] geslot -136 = 00007FF6D8DA1E70
+[deep] geslot -128 = 0000000000000300
+[deep] geslot -120 = 00000000800039E2
+[deep] geslot -112 = 00007FF6D8C27810
+[deep] geslot -104 = 0000000000000300
+[deep] geslot -96 = 000000008000365B
+[deep] geslot -88 = 00007FF6D8DA1E70
+[deep] geslot -80 = 0000000000000300
+[deep] geslot -72 = 0000000080003B4F
+[deep] geslot -64 = 00007FE89B94C7A0
+[deep] geslot -56 = 00007FE89B7DDC80
+[deep] geslot -40 = 1A46379C07050005
+[deep] geslot -32 = 5B769F9A41F09493
+[deep] geslot -24 = 1B6AF89C80003177
+[deep] geslot -16 = 4248379C800024AA
+[deep] geslot -8 = 0000000080000B17
+[deep] geslot +0 = 00007FF21B80AC00
+[deep] geslot +8 = 00007FF6D5E4CF50
+[deep] geslot +16 = 0000000000000001
+[deep] geslot +24 = 00007FF6D5E4CF40
+[deep] geslot +32 = 0000000000000001
+[deep] geslot +40 = 00007FF6D5E4CF48
+[deep] geslot +56 = 00007FF6D5E4CF48
+[deep] geslot +64 = 0000000000000001
+[deep] geslot +72 = 00007FF6D5E4CF50
+[deep] geslot +104 = 00007FF6DE0312C0
+[deep] geslot +112 = 1046379C07050005
+[deep] geslot +120 = 00007FED9B822200
+[deep] geslot +128 = 00007FE91B9F3460
+[deep] === dumps done ===
+[diag] pass 1 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 2 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 3 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 4 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 5 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 6 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 7 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 8 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 9 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 10 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 11 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 12 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 13 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 14 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 15 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 16 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 17 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 18 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 19 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 20 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 21 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 22 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 23 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 24 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 25 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 26 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 27 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 28 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 29 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 30 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 31 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 32 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 33 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 34 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 35 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 36 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 37 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 38 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 39 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 40 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 41 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 42 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 43 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 44 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 45 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 46 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 47 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 48 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 49 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 50 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 51 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 52 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 53 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 54 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 55 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 56 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 57 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 58 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 59 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 60 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 61 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 62 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 63 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 64 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 65 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 66 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 67 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 68 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 69 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 70 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 71 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 72 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 73 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 74 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 75 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 76 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 77 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 78 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 79 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 80 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 81 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 82 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 83 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 84 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 85 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 86 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 87 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 88 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 89 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 90 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 91 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 92 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 93 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 94 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 95 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 96 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 97 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 98 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 99 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 100 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 101 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 102 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 103 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 104 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 105 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 106 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 107 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 108 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 109 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 110 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 111 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 112 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 113 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 114 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 115 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 116 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 117 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 118 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 119 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 120 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 121 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 122 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 123 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 124 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 125 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 126 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 127 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 128 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 129 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 130 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 131 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 132 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 133 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 134 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 135 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 136 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 137 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 138 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 139 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 140 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 141 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 142 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 143 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 144 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 145 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 146 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 147 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 148 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 149 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 150 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 151 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 152 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 153 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 154 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 155 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 156 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 157 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 158 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 159 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 160 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 161 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 162 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 163 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 164 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 165 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 166 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+
+===== [dbg] Cache Chain (v43.00) =====
+[dbg] UWorld:                0x0  <NULL>
+[dbg] GameInstance:          0x0  <NULL>
+[dbg] GameState:             0x0  <NULL>
+[dbg] LocalPlayer:           0x0  <NULL>
+[dbg] PlayerController:      0x0  <NULL>
+[dbg] CameraManager:         0x0  <NULL>
+[dbg] LocalPawn:             0x0  <NULL>
+[dbg] Mesh:                  0x0  <NULL>
+[dbg] PlayerState:           0x0  <NULL>
+[dbg] RootComponent:         0x0  <NULL>
+[dbg] PlayerArray:           0x0  <NULL>
+[dbg] LocationPtr:           0x0  <NULL>
+[dbg] RotationPtr:           0x0  <NULL>
+----- [dbg] Player Data -----
+[dbg] PlayerArray Size:      0
+[dbg] Entity List:           0
+[dbg] TeamID:                0
+----- [dbg] Camera -----
+[dbg] Source:                Plain (UWorld ptr)
+[dbg] FOV:                   0.00
+[dbg] Location:              0, 0, 0
+[dbg] Rotation:              P=0.00 Y=0.00
+----- [dbg] World Time (is_visible) -----
+----- [dbg] Weapon -----
+----- [dbg] Aimbot -----
+[dbg] TargetEntity:          0x0  <NULL>
+[dbg] TargetDist:            340282346638528859811704183484516925440.00
+[dbg] TargetedFortPawn:      0x0  <NULL>
+[diag] pass 167 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 168 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 169 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 170 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+[diag] pass 171 | mz=5a4d va_text=00007FF6C1780000 gengine=00007FF21B80AC00 viewport=0000000000000000 encrypted=0 uworld=0000000000000000
+^C

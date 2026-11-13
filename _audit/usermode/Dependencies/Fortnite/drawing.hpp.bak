@@ -1,0 +1,1265 @@
+#include "Game/aimbot.hpp"
+#include <iomanip>
+#include <sstream>
+#include <algorithm>
+#include <unordered_set>
+#include <deque>
+std::atomic<bool> aimbot_running(false);
+std::thread aimbot_thread;
+
+// ============================================================================
+//  Bullet Tracer System
+//  Records shot origin + target, renders fading lines over time
+// ============================================================================
+struct BulletTracer {
+    fvector2d start_screen;
+    fvector2d end_screen;
+    float spawn_time;
+};
+static std::deque<BulletTracer> g_tracers;
+static auto g_tracerClockStart = std::chrono::steady_clock::now();
+
+float GetTracerTime() {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration<float>(now - g_tracerClockStart).count();
+}
+
+void AddBulletTracer(fvector2d from, fvector2d to) {
+    BulletTracer t;
+    t.start_screen = from;
+    t.end_screen = to;
+    t.spawn_time = GetTracerTime();
+    g_tracers.push_back(t);
+    while (g_tracers.size() > 64) g_tracers.pop_front();
+}
+
+void RenderBulletTracers(float duration, int style) {
+    float now = GetTracerTime();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
+    while (!g_tracers.empty() && (now - g_tracers.front().spawn_time) > duration)
+        g_tracers.pop_front();
+
+    for (auto& t : g_tracers) {
+        float age = now - t.spawn_time;
+        float alpha = 1.0f - (age / duration);
+        if (alpha <= 0.0f) continue;
+
+        ImU32 col;
+        switch (style) {
+        case 1: // Fade
+            col = IM_COL32(255, 200, 50, (int)(255 * alpha));
+            break;
+        case 2: { // Gradient yellow->red
+            col = IM_COL32(255, (int)(200 * alpha), 50, (int)(255 * alpha));
+            break;
+        }
+        default: // Line
+            col = IM_COL32(255, 255, 255, (int)(200 * alpha));
+            break;
+        }
+
+        // Skip tracers with invalid coordinates
+        if (t.end_screen.x < 0 || t.end_screen.y < 0) continue;
+        if (t.end_screen.x > 8192 || t.end_screen.y > 8192) continue;
+
+        dl->AddLine(
+            ImVec2((float)t.start_screen.x, (float)t.start_screen.y),
+            ImVec2((float)t.end_screen.x, (float)t.end_screen.y),
+            col, 1.5f
+        );
+    }
+}
+
+// ============================================================================
+//  Curved Bezier Skeleton
+//  Draws bones as quadratic bezier curves with perpendicular control points
+//  Gives organic, natural look instead of straight lines
+// ============================================================================
+void draw_bezier_bone(ImVec2 a, ImVec2 b, ImColor color, float thickness, float curve_strength) {
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f) return;
+
+    float inv_len = 1.0f / len;
+    float px = -dy * inv_len;
+    float py = dx * inv_len;
+
+    float offset = len * curve_strength;
+    ImVec2 ctrl(
+        (a.x + b.x) * 0.5f + px * offset,
+        (a.y + b.y) * 0.5f + py * offset
+    );
+
+    auto dl = ImGui::GetBackgroundDrawList();
+    dl->AddBezierQuadratic(a, ctrl, b, ImColor(0, 0, 0, 255), thickness + 1.0f, 12);
+    dl->AddBezierQuadratic(a, ctrl, b, color, thickness, 12);
+}
+
+
+void DrawGradientBackground(ImVec2 p1, ImVec2 p2, ImU32 col1, ImU32 col2) {
+    ImGui::GetWindowDrawList()->AddRectFilledMultiColor(p1, p2, col1, col2, col2, col1);
+}
+
+
+
+void RenderTargetGUI(int kills, char teamid, std::string& targetName, const std::string& weaponName, float distance, ImVec2 screenPos) {
+    SPOOF_FUNC;
+
+    ImGui::SetNextWindowPos(screenPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(200, 140), ImGuiCond_Always);
+
+    ImGui::Begin("Target GUI", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground);
+
+    ImVec2 windowPos = ImGui::GetWindowPos();
+    ImVec2 windowSize = ImGui::GetWindowSize();
+
+    ImU32 col1 = ImGui::GetColorU32(ImVec4(0.0353f, 0.1882f, 0.1569f, 0.8f));
+    ImU32 col2 = ImGui::GetColorU32(ImVec4(0.1373f, 0.4784f, 0.3412f, 0.8f));
+
+    DrawGradientBackground(windowPos, ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y), col1, col2);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 255, 255, 255));
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::SetCursorPos(ImVec2(10, 10));
+    ImGui::Text("Target: %s", targetName.c_str());
+    ImGui::SetCursorPos(ImVec2(10, 30));
+    ImGui::Text("Weapon: %s", weaponName.c_str());
+    ImGui::SetCursorPos(ImVec2(10, 50));
+    ImGui::Text("Kills: %d", kills);
+    ImGui::SetCursorPos(ImVec2(10, 70));
+    ImGui::Text("TeamID: %d", teamid);
+    ImGui::SetCursorPos(ImVec2(10, 110));
+    ImGui::Text("Distance: %.2fm", distance);
+
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
+
+    ImGui::End();
+}
+
+void draw_box1(int x, int y, int w, int h, const ImColor color, ImColor fill_color, int thickness)
+{
+    auto dl = ImGui::GetBackgroundDrawList();
+    if (c_filled_box)
+    {
+        dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), fill_color, 0, 0);
+    }
+    dl->AddRect(ImVec2(x - 1, y - 1), ImVec2(x + w + 1, y + h + 1), ImColor(0, 0, 0), 0, 0, thickness + 2);
+    dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), color, 0, 0, thickness);
+}
+
+void draw_skeleton(uintptr_t mesh, ImColor color)
+{
+    fvector head = bone_manager.get_bone(110);
+    fvector2d wts_head = camera_manager.w2s(head);
+    fvector neck = bone_manager.get_bone(67);
+    fvector2d wts_neck = camera_manager.w2s(neck);
+    fvector chest = bone_manager.get_bone(66);
+    fvector2d wts_chest = camera_manager.w2s(chest);
+    fvector pelvis = bone_manager.get_bone(2);
+    fvector2d wts_pelvis = camera_manager.w2s(pelvis);
+
+    fvector right_shoulder = bone_manager.get_bone(38);
+    fvector2d wts_right_shoulder = camera_manager.w2s(right_shoulder);
+    fvector right_elbow = bone_manager.get_bone(39);
+    fvector2d wts_right_elbow = camera_manager.w2s(right_elbow);
+    fvector right_wrist = bone_manager.get_bone(40);
+    fvector2d wts_right_wrist = camera_manager.w2s(right_wrist);
+
+    fvector left_shoulder = bone_manager.get_bone(9);
+    fvector2d wts_left_shoulder = camera_manager.w2s(left_shoulder);
+    fvector left_elbow = bone_manager.get_bone(10);
+    fvector2d wts_left_elbow = camera_manager.w2s(left_elbow);
+    fvector left_wrist = bone_manager.get_bone(11);
+    fvector2d wts_left_wrist = camera_manager.w2s(left_wrist);
+
+    fvector right_hip = bone_manager.get_bone(78);
+    fvector2d wts_right_hip = camera_manager.w2s(right_hip);
+    fvector right_knee = bone_manager.get_bone(79);
+    fvector2d wts_right_knee = camera_manager.w2s(right_knee);
+    fvector right_ankle = bone_manager.get_bone(81);
+    fvector2d wts_right_ankle = camera_manager.w2s(right_ankle);
+    fvector right_foot_upper = bone_manager.get_bone(87);
+    fvector2d wts_right_foot_upper = camera_manager.w2s(right_foot_upper);
+    fvector right_foot = bone_manager.get_bone(83);
+    fvector2d wts_right_foot = camera_manager.w2s(right_foot);
+
+    fvector left_hip = bone_manager.get_bone(71);
+    fvector2d wts_left_hip = camera_manager.w2s(left_hip);
+    fvector left_knee = bone_manager.get_bone(72);
+    fvector2d wts_left_knee = camera_manager.w2s(left_knee);
+    fvector left_ankle = bone_manager.get_bone(74);
+    fvector2d wts_left_ankle = camera_manager.w2s(left_ankle);
+    fvector left_foot_upper = bone_manager.get_bone(86);
+    fvector2d wts_left_foot_upper = camera_manager.w2s(left_foot_upper);
+    fvector left_foot = bone_manager.get_bone(76);
+    fvector2d wts_left_foot = camera_manager.w2s(left_foot);
+
+    auto dl = ImGui::GetBackgroundDrawList();
+    const ImColor black(0, 0, 0, 255);
+    const float outline_t = c_outlined + 1.0f;
+
+    struct BonePair { ImVec2 a, b; };
+    BonePair bones[] = {
+        {{(float)wts_head.x, (float)wts_head.y}, {(float)wts_neck.x, (float)wts_neck.y}},
+        {{(float)wts_neck.x, (float)wts_neck.y}, {(float)wts_chest.x, (float)wts_chest.y}},
+        {{(float)wts_chest.x, (float)wts_chest.y}, {(float)wts_pelvis.x, (float)wts_pelvis.y}},
+        {{(float)wts_chest.x, (float)wts_chest.y}, {(float)wts_right_shoulder.x, (float)wts_right_shoulder.y}},
+        {{(float)wts_right_shoulder.x, (float)wts_right_shoulder.y}, {(float)wts_right_elbow.x, (float)wts_right_elbow.y}},
+        {{(float)wts_right_elbow.x, (float)wts_right_elbow.y}, {(float)wts_right_wrist.x, (float)wts_right_wrist.y}},
+        {{(float)wts_chest.x, (float)wts_chest.y}, {(float)wts_left_shoulder.x, (float)wts_left_shoulder.y}},
+        {{(float)wts_left_shoulder.x, (float)wts_left_shoulder.y}, {(float)wts_left_elbow.x, (float)wts_left_elbow.y}},
+        {{(float)wts_left_elbow.x, (float)wts_left_elbow.y}, {(float)wts_left_wrist.x, (float)wts_left_wrist.y}},
+        {{(float)wts_pelvis.x, (float)wts_pelvis.y}, {(float)wts_right_hip.x, (float)wts_right_hip.y}},
+        {{(float)wts_right_hip.x, (float)wts_right_hip.y}, {(float)wts_right_knee.x, (float)wts_right_knee.y}},
+        {{(float)wts_right_knee.x, (float)wts_right_knee.y}, {(float)wts_right_ankle.x, (float)wts_right_ankle.y}},
+        {{(float)wts_right_ankle.x, (float)wts_right_ankle.y}, {(float)wts_right_foot_upper.x, (float)wts_right_foot_upper.y}},
+        {{(float)wts_right_foot_upper.x, (float)wts_right_foot_upper.y}, {(float)wts_right_foot.x, (float)wts_right_foot.y}},
+        {{(float)wts_pelvis.x, (float)wts_pelvis.y}, {(float)wts_left_hip.x, (float)wts_left_hip.y}},
+        {{(float)wts_left_hip.x, (float)wts_left_hip.y}, {(float)wts_left_knee.x, (float)wts_left_knee.y}},
+        {{(float)wts_left_knee.x, (float)wts_left_knee.y}, {(float)wts_left_ankle.x, (float)wts_left_ankle.y}},
+        {{(float)wts_left_ankle.x, (float)wts_left_ankle.y}, {(float)wts_left_foot_upper.x, (float)wts_left_foot_upper.y}},
+        {{(float)wts_left_foot_upper.x, (float)wts_left_foot_upper.y}, {(float)wts_left_foot.x, (float)wts_left_foot.y}},
+    };
+
+    for (auto& b : bones) dl->AddLine(b.a, b.b, black, outline_t);
+    for (auto& b : bones) dl->AddLine(b.a, b.b, color, c_outlined);
+}
+
+// ============================================================================
+//  Curved Bezier Skeleton - organic bone curves
+// ============================================================================
+void draw_skeleton_bezier(uintptr_t mesh, ImColor color, float curve_str) {
+    // Read all bones (cached per frame)
+    auto w2s = [](fvector b) -> ImVec2 {
+        auto s = camera_manager.w2s(b);
+        return ImVec2((float)s.x, (float)s.y);
+    };
+
+    ImVec2 head = w2s(bone_manager.get_bone(110));
+    ImVec2 neck = w2s(bone_manager.get_bone(67));
+    ImVec2 chest = w2s(bone_manager.get_bone(66));
+    ImVec2 pelvis = w2s(bone_manager.get_bone(2));
+
+    ImVec2 r_shoulder = w2s(bone_manager.get_bone(38));
+    ImVec2 r_elbow = w2s(bone_manager.get_bone(39));
+    ImVec2 r_wrist = w2s(bone_manager.get_bone(40));
+
+    ImVec2 l_shoulder = w2s(bone_manager.get_bone(9));
+    ImVec2 l_elbow = w2s(bone_manager.get_bone(10));
+    ImVec2 l_wrist = w2s(bone_manager.get_bone(11));
+
+    ImVec2 r_hip = w2s(bone_manager.get_bone(78));
+    ImVec2 r_knee = w2s(bone_manager.get_bone(79));
+    ImVec2 r_ankle = w2s(bone_manager.get_bone(81));
+
+    ImVec2 l_hip = w2s(bone_manager.get_bone(71));
+    ImVec2 l_knee = w2s(bone_manager.get_bone(72));
+    ImVec2 l_ankle = w2s(bone_manager.get_bone(74));
+
+    float t = c_outlined;
+
+    // Spine
+    draw_bezier_bone(head, neck, color, t, curve_str);
+    draw_bezier_bone(neck, chest, color, t, curve_str);
+    draw_bezier_bone(chest, pelvis, color, t, curve_str * 0.5f);
+
+    // Right arm
+    draw_bezier_bone(chest, r_shoulder, color, t, curve_str);
+    draw_bezier_bone(r_shoulder, r_elbow, color, t, curve_str);
+    draw_bezier_bone(r_elbow, r_wrist, color, t, curve_str * 0.7f);
+
+    // Left arm
+    draw_bezier_bone(chest, l_shoulder, color, t, -curve_str);
+    draw_bezier_bone(l_shoulder, l_elbow, color, t, -curve_str);
+    draw_bezier_bone(l_elbow, l_wrist, color, t, -curve_str * 0.7f);
+
+    // Right leg
+    draw_bezier_bone(pelvis, r_hip, color, t, curve_str * 0.5f);
+    draw_bezier_bone(r_hip, r_knee, color, t, curve_str);
+    draw_bezier_bone(r_knee, r_ankle, color, t, curve_str * 0.5f);
+
+    // Left leg
+    draw_bezier_bone(pelvis, l_hip, color, t, -curve_str * 0.5f);
+    draw_bezier_bone(l_hip, l_knee, color, t, -curve_str);
+    draw_bezier_bone(l_knee, l_ankle, color, t, -curve_str * 0.5f);
+}
+
+void draw_cornered_box(int x, int y, int w, int h, ImColor color, float thickness, float th)
+{
+    auto dl = ImGui::GetBackgroundDrawList();
+    float w3 = w / 3.0f, h3 = h / 3.0f;
+    dl->AddLine(ImVec2(x, y), ImVec2(x, y + h3), color, thickness);
+    dl->AddLine(ImVec2(x, y), ImVec2(x + w3, y), color, thickness);
+    dl->AddLine(ImVec2(x + w - w3, y), ImVec2(x + w, y), color, thickness);
+    dl->AddLine(ImVec2(x + w, y), ImVec2(x + w, y + h3), color, thickness);
+    dl->AddLine(ImVec2(x, y + h - h3), ImVec2(x, y + h), color, thickness);
+    dl->AddLine(ImVec2(x, y + h), ImVec2(x + w3, y + h), color, thickness);
+    dl->AddLine(ImVec2(x + w - w3, y + h), ImVec2(x + w, y + h), color, thickness);
+    dl->AddLine(ImVec2(x + w, y + h - h3), ImVec2(x + w, y + h), color, thickness);
+}
+
+bool is_shotgun(const std::string& weapon)
+{
+    return weapon.find("Shotgun") != std::string::npos;
+}
+
+int getCurrentWeaponFovSize() {
+    auto& cache = GameCache::Cache::getInstance();
+    weapon_info_ local_held_weapon = weapon_manager.get_weapon_name(cache.get_local_pawn().value_or(0));
+    local_player_weapon = local_held_weapon.weapon_name;
+    std::string weaponName = local_player_weapon;
+
+    if (weaponName.find("Shotgun") != std::string::npos) {
+        return weapon_cfg::shotgun::rFovSize;
+    }
+    else if (weaponName.find("SMG") != std::string::npos) {
+        return weapon_cfg::smg::rFovSize;
+    }
+    else if (weaponName.find("Rifle") != std::string::npos) {
+        return weapon_cfg::rifle::rFovSize;
+    }
+    else if (weaponName.find("Sniper") != std::string::npos) {
+        return weapon_cfg::sniper::rFovSize;
+    }
+
+    return rFovSize;
+}
+
+static auto is_visible(uintptr_t skeletal_mesh) -> bool {
+    auto& cache = GameCache::Cache::getInstance();
+    const uintptr_t world = cache.get_uworld().value_or(0);
+    if (!world) return false;
+
+    // 43.00 visibility: RecentlyRendered bit0 forces "visible" via TimeSeconds;
+    // otherwise LastRenderTime vs TimeSeconds with an adaptive floor.
+    const double time = device_().read<double>(world + 0x7B8);            // TimeSeconds
+    const float  delta = device_().read<float>(world + 0x7DC);            // DeltaTimeSeconds
+    const float  last = device_().read<float>(skeletal_mesh + 0x2E8);     // LastRenderTime
+    const uint8_t flags = device_().read<uint8_t>(skeletal_mesh + 0x2F8); // RecentlyRendered
+
+    const double last_render = (flags & 1) ? time : static_cast<double>(last);
+    const double floor_ = static_cast<double>(delta) + 0.0001;
+    const double limit = (0.06 > floor_) ? 0.06 : floor_;
+
+    return limit >= time - last_render;
+}
+
+void radar_range(float* x, float* y, float range)
+{
+    if (fabs((*x)) > range || fabs((*y)) > range)
+    {
+        if ((*y) > (*x))
+        {
+            if ((*y) > -(*x))
+            {
+                (*x) = range * (*x) / (*y);
+                (*y) = range;
+            }
+            else
+            {
+                (*y) = -range * (*y) / (*x);
+                (*x) = -range;
+            }
+        }
+        else
+        {
+            if ((*y) > -(*x))
+            {
+                (*y) = range * (*y) / (*x);
+                (*x) = range;
+            }
+            else
+            {
+                (*x) = -range * (*x) / (*y);
+                (*y) = -range;
+            }
+        }
+    }
+}
+
+void project_world_to_radar(fvector vOrigin, int& screenx, int& screeny)
+{
+    frotator camera_location = rotation;
+    frotator vAngle = rotation;
+    auto fYaw = vAngle.Yaw * M_PI / 180.0f;
+    float dx = vOrigin.x - location.x;
+    float dy = vOrigin.y - location.y;
+    float fsin_yaw = sinf(fYaw);
+    float fminus_cos_yaw = -cosf(fYaw);
+    float x = dy * fminus_cos_yaw + dx * fsin_yaw;
+    x = -x;
+    float y = dx * fminus_cos_yaw - dy * fsin_yaw;
+    float range = (float)(200.0f / 5) * 1000.f;
+
+    radar_range(&x, &y, range);
+
+    ImVec2 DrawPos = ImVec2(10.0f, 60.0f);
+    ImVec2 DrawSize = ImVec2(200.0f, 200.0f);
+    float radarRadius = 200.0f / 2;
+    float distance = sqrt(pow(screenx - DrawPos.x, 2) + pow(screeny - DrawPos.y, 2));
+
+    if (distance > radarRadius)
+    {
+        float angle = atan2(screeny - DrawPos.y, screenx - DrawPos.x);
+        screenx = static_cast<int>(DrawPos.x + radarRadius * cos(angle));
+        screeny = static_cast<int>(DrawPos.y + radarRadius * sin(angle));
+    }
+
+    int rad_x = (int)DrawPos.x;
+    int rad_y = (int)DrawPos.y;
+    float r_siz_x = DrawSize.x;
+    float r_siz_y = DrawSize.y;
+    int x_max = (int)r_siz_x + rad_x - 5;
+    int y_max = (int)r_siz_y + rad_y - 5;
+
+    screenx = rad_x + ((int)r_siz_x / 2 + int(x / range * r_siz_x));
+    screeny = rad_y + ((int)r_siz_y / 2 + int(y / range * r_siz_y));
+
+    if (screenx > x_max)
+        screenx = x_max;
+
+    if (screenx < rad_x)
+        screenx = rad_x;
+
+    if (screeny > y_max)
+        screeny = y_max;
+
+    if (screeny < rad_y)
+        screeny = rad_y;
+}
+
+void line1(const ImVec2& from, const ImVec2& to, ImColor color, float thickness) {
+    ImGui::GetBackgroundDrawList()->AddLine(from, to, color, thickness);
+}
+
+
+void draw_head(ImColor color, fvector head_location)
+{
+    auto& cache = GameCache::Cache::getInstance();
+    auto dl = ImGui::GetBackgroundDrawList();
+
+    float z_offset = cache.get_local_pawn().value_or(0) ? 0.0f : 20.0f;
+    float y_offset = cache.get_local_pawn().value_or(0) ? 12.0f : 70.0f;
+
+    auto fov1 = fov;
+    fvector2d head_2d = camera_manager.w2s(fvector(head_location.x, head_location.y, head_location.z + z_offset));
+    fvector delta = head_location - location;
+
+    float distance = delta.length();
+    const float constant_circle_size = 10;
+    float circle_radius = constant_circle_size * (c_screen_height / (2.0f * distance * tanf(fov1 * (float)M_PI / 360.f)));
+    head_2d.y += y_offset;
+
+    // 24 segments is visually identical to 50 at typical screen sizes, but ~2x faster
+    dl->AddCircle(ImVec2(head_2d.x, head_2d.y), circle_radius, ImColor(0, 0, 0, 255), 24, c_outlined + 1.0f);
+    dl->AddCircle(ImVec2(head_2d.x, head_2d.y), circle_radius, color, 24, c_outlined);
+}
+
+fvector PredictPlayerPosition(fvector CurrentLocation, float DistanceToTarget, fvector Velocity, float ProjectileSpeed, float ProjectileGravity) {
+    fvector CalculatedPosition = CurrentLocation;
+
+    if (ProjectileSpeed <= 0) return CalculatedPosition;
+    float fHorizontalTime = DistanceToTarget / fabsf(ProjectileSpeed);
+    float fVerticalTime = DistanceToTarget / fabsf(ProjectileSpeed);
+    CalculatedPosition.x += Velocity.x * fHorizontalTime;
+    CalculatedPosition.y += Velocity.y * fHorizontalTime;
+    CalculatedPosition.z += Velocity.z * fVerticalTime;
+    CalculatedPosition.z += abs(-980.f * ProjectileGravity) * 0.5f * (fVerticalTime * fVerticalTime);
+
+    return CalculatedPosition;
+}
+
+float  target_dist = FLT_MAX;
+uintptr_t target_entity = NULL;
+// ============================================================================
+//  Movement State ESP (Popstar-style player state display)
+// ============================================================================
+struct movement_info {
+	std::string name;
+	ImColor color;
+};
+
+/*
+movement_info get_movement_info(uintptr_t pawn) {
+	// Read movement mode from CharacterMovementComponent
+	// ACharacter::CharacterMovement at offset 0x338 (UE5 standard)
+	uintptr_t char_movement = device_().read<uintptr_t>(pawn + offsets::CharacterMovement);
+	if (!char_movement || !is_valid_address(char_movement))
+		return { "", ImColor(220, 220, 220, 255) };
+
+	// EMovementMode at CharacterMovementComponent + 0x231
+	uint8_t move_mode = device_().read<uint8_t>(char_movement + offsets::MovementMode);
+
+	// bIsCrouched at ACharacter + 0x440 (bit 1 in bitfield)
+	uint32_t crouch_flags = device_().read<uint32_t>(pawn + offsets::bIsCrouched);
+	bool is_crouched = (crouch_flags & 0x2) != 0;  // bit 1
+
+	switch ((e_movement_mode)move_mode) {
+	case e_movement_mode::walking:
+		if (is_crouched)
+			return { "Crouching", ImColor(184, 227, 233, 255) };
+		return { "Walking", ImColor(166, 156, 255, 255) };
+	case e_movement_mode::falling:
+		return { "Jumping", ImColor(204, 102, 102, 255) };
+	case e_movement_mode::swimming:
+		return { "Swimming", ImColor(120, 127, 219, 255) };
+	case e_movement_mode::flying:
+		return { "Skydiving", ImColor(149, 160, 137, 255) };
+	default:
+		return { "", ImColor(220, 220, 220, 255) };
+	}
+}
+*/
+
+// ============================================================================
+//  Custom Crosshair Rendering (Popstar-style arc crosshair)
+// ============================================================================
+void draw_custom_crosshair() {
+	if (!C_Crosshair::enabled) return;
+
+	auto dl = ImGui::GetForegroundDrawList();
+	ImVec2 center(C_Overlay::c_screen_width / 2.0f, C_Overlay::c_screen_height / 2.0f);
+	float radius = C_Crosshair::radius;
+	float thickness = C_Crosshair::thickness;
+	int segments = C_Crosshair::num_segments;
+	ImColor color = ImColor(C_Crosshair::color[0], C_Crosshair::color[1], C_Crosshair::color[2], C_Crosshair::color[3]);
+	ImColor outline_color = ImColor(0.0f, 0.0f, 0.0f, C_Crosshair::color[3]);
+
+	const float angle_offset = 3.14159265f / 4.0f;
+
+	for (int i = 0; i < 4; ++i) {
+		float a_min = ((i * 2.0f + 1.0f) * 3.14159265f / 4.0f) - angle_offset / 2.0f;
+		float a_max = ((i * 2.0f + 1.0f) * 3.14159265f / 4.0f) + angle_offset / 2.0f;
+
+		if (C_Crosshair::outline) {
+			dl->PathArcTo(center, radius, a_min, a_max, segments);
+			dl->PathStroke(outline_color, false, thickness + 2.0f);
+		}
+
+		dl->PathArcTo(center, radius, a_min, a_max, segments);
+		dl->PathStroke(color, false, thickness);
+	}
+}
+
+void draw_esp_elements(const entities& Player, const fvector& camera_location) {
+    SPOOF_FUNC;
+    
+    auto& cache = GameCache::Cache::getInstance();
+    ImDrawList* drawlist = ImGui::GetBackgroundDrawList();
+
+    bone_manager.get_bone_array(Player.mesh_);
+
+    auto root_bone = bone_manager.get_bone(root);
+    auto head_bone = bone_manager.get_bone(Head);
+
+    auto root = camera_manager.w2s(fvector(root_bone.x, root_bone.y, root_bone.z - 15));
+    auto head = camera_manager.w2s(head_bone);
+    auto head_box = camera_manager.w2s(fvector(head_bone.x, head_bone.y, head_bone.z + 15));
+    auto root_box = camera_manager.w2s(root_bone);
+    auto pelvis_2D = camera_manager.w2s(bone_manager.get_bone(Pelvis));
+
+    // Skip if any critical W2S failed (behind camera)
+    if (head_box.x < 0 && head_box.y < 0) return;
+    if (root_box.x < 0 && root_box.y < 0) return;
+
+    float distance = location.distance(root_bone) * 0.01f;
+    float box_height = abs(head.y - root.y);
+    float box_width = box_height * 0.38f;
+
+    if (distance > c_max_render_distance && cache.get_local_pawn().value_or(0)) return;
+
+    const ImColor viscolor = player_manager.is_visible(Player.mesh_) ? c_color_visible : c_color_invisible;
+    const ImColor filldecolor = player_manager.is_visible(Player.mesh_) ? c_color_visible : c_color_invisible;
+
+    ImColor color1 = ImColor(21, 153, 87, 175);
+    ImColor color2 = ImColor(21, 87, 153, 175);
+
+    if (c_enable) {
+        auto dx = head.x - (C_Overlay::c_screen_width / 2);
+        auto dy = head.y - (C_Overlay::c_screen_height / 2);
+        auto crosshair_dist = sqrtf(dx * dx + dy * dy);
+
+        if (crosshair_dist < C_Aimbot::c_fov) {
+            if (C_Exploits::c_smart_scoring) {
+                // Weighted scoring: 80% crosshair + 15% distance + 5% visibility
+                bool vis = player_manager.is_visible(Player.mesh_);
+                float score = compute_target_score(crosshair_dist, distance, vis);
+                if (score < target_dist) {
+                    target_dist = score;
+                    target_entity = Player.entity_;
+                }
+            } else {
+                // Legacy: simple closest-to-crosshair
+                if (crosshair_dist < target_dist) {
+                    target_dist = crosshair_dist;
+                    target_entity = Player.entity_;
+                }
+            }
+        }
+    }
+
+    if (c_enable_esp) {
+        if (c_lines) {
+            line1(
+                { (float)c_screen_width / 2, c_line_start == 1 ? (float)c_screen_height / 2 : c_line_start == 2 ? (float)c_screen_height : 0 },
+                { (float)head_box.x, c_line_end == 1 ? (float)pelvis_2D.y : c_line_end == 2 ? (float)root_box.y : (float)head_box.y }, viscolor, line_outline_thickness + c_outlined23);
+        }
+
+        if (c_enable_box) {
+            switch (c_box) {
+            case 0: draw_box1(head_box.x - (box_width / 2), head_box.y, box_width, box_height, viscolor, ImColor(0, 0, 0, 100), c_outlined1); break;
+            case 2: drawcorner_(head_box, box_width, box_height, viscolor, c_outlined1); break;
+            }
+        }
+        if (c_headcircle)
+        {
+            draw_head(viscolor, head_bone);
+        }
+
+        if (c_radar)
+        {
+            ImGui::SetNextWindowPos({ 11.0f, 60.0f });
+            ImGui::SetNextWindowSize({ 200.0f, 200.0f });
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(11, 11, 11, 150));
+            ImGui::Begin("radar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoResize);
+            {
+                ImGui::PopStyleColor();
+
+                int ScreenX = 0, ScreenY = 0;  // fixed: ScreenX was uninitialized
+                project_world_to_radar(root_bone, ScreenX, ScreenY);
+                auto radarDl = ImGui::GetWindowDrawList();
+                // 8 segments is plenty for a 2px dot
+                radarDl->AddCircleFilled(ImVec2((float)ScreenX, (float)ScreenY), 2.0f, ImColor(255, 50, 50, 255), 8);
+
+                ImVec2 winpos = ImGui::GetWindowPos();
+                ImVec2 winsize = ImGui::GetWindowSize();
+                radarDl->AddCircleFilled(ImVec2(winpos.x + winsize.x * 0.5f, winpos.y + winsize.y * 0.5f), 2.0f, ImColor(255, 255, 255, 255), 8);
+            }
+            ImGui::End();
+        }
+
+
+
+        if (c_skeleton)
+        {
+            if (C_Exploits::c_bezier_skeleton)
+                draw_skeleton_bezier(Player.mesh_, viscolor, C_Exploits::c_bezier_curve_strength);
+            else
+                draw_skeleton(Player.entity_, viscolor);
+        }
+
+       
+
+        if (c_username) {
+            std::string username_str = player_manager.get_player_name(Player.pstate_);
+
+            if (!username_str.empty()) {
+                drawoutlined_(
+                    username_str,
+                    ImVec2
+                    (head_box.x, head_box.y - 20),
+                    ImColor(255, 255, 255),
+                    -20);
+            }
+        }
+
+        if (c_platform) {
+            std::string platform = player_manager.get_platform(Player.local_player_state_);
+
+            drawoutlined_(
+                platform,
+                ImVec2(head_box.x, head_box.y - 30),
+                ImColor(255, 255, 255),
+                -0);
+        }
+        if (c_rank_esp) {
+            uintptr_t habanero = device_().read<uintptr_t>(Player.local_player_state_ + 0x920); // 43.00 HabaneroComponent
+
+            int32_t rankProgress = device_().read<int32_t>(habanero + 0xE8); // 43.00: hab + 0xD8 + 0x10
+
+            std::string rankType = player_manager.get_rank(rankProgress);
+
+            std::string finalRank = wstring_to_utf8(string_to_wstring(rankType));
+
+            ImVec2 textSize = CalcTextSize(finalRank.c_str());
+
+            outlined_text(
+                GetBackgroundDrawList(),
+                root_box.x - (textSize.x / 2), root_box.y + 41,
+                player_manager.get_rank_color(rankProgress),
+                finalRank.c_str());
+        }
+
+        if (c_weapon) {
+           weapon_info_ weapon_info = weapon_manager.get_weapon_name(Player.entity_);
+           // NOTE: get_weapon_name() now returns "Pickaxe" on every failure path —
+           // the old `if (weapon_name == "") weapon_name = "null"` fallback below is
+           // dead code kept for safety. Logic call sites (FOV/triggerbot) call the
+           // same function and get "Pickaxe" too — see entity_utils.hpp cache block.
+
+            std::string weapon_name = weapon_info.weapon_name;
+          if (weapon_name == "") weapon_name = "null";
+
+           // Pickaxe fallback renders dim gray so it reads as "no weapon"
+           // rather than a real weapon name in viscolor
+           const ImColor weapon_color =
+               (weapon_name == "Pickaxe") ? ImColor(140, 140, 140, 255) : viscolor;
+
+           drawoutlined_(
+               weapon_name,
+               ImVec2
+               (root_box.x, root_box.y + 10),
+              weapon_color,
+              15);
+        }
+
+        // Movement state ESP (Popstar-style) - commented out until offsets are verified
+        /*
+        if (C_Movement::show_movement) {
+            auto move_info = get_movement_info(Player.entity_);
+            if (!move_info.name.empty()) {
+                ImColor move_color = C_Movement::show_state_color ? move_info.color : ImColor(220, 220, 220, 255);
+                drawoutlined_(
+                    move_info.name,
+                    ImVec2(root_box.x, root_box.y + 22),
+                    move_color,
+                    15);
+            }
+        }
+        */
+
+        if (c_distance) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(2) << distance << "m";
+            std::string distance_str = oss.str();
+            drawoutlined_(
+                distance_str,
+                ImVec2
+                (
+                    root_box.x, root_box.y + 5
+                ),
+                ImColor(255, 255, 255),
+                5);
+        }
+
+
+        if (c_arrows) {
+
+            float fov_radius = static_cast<float>(c_fov);
+            float arrow_size = 20.0f;
+            float arrow_offset = 30.0f;
+
+            ImVec2 screen_center(C_Overlay::c_screen_width / 2, C_Overlay::c_screen_height / 2);
+
+            auto player_screen_pos = camera_manager.w2s(head_bone);
+
+            ImVec2 direction(player_screen_pos.x - screen_center.x, player_screen_pos.y - screen_center.y);
+
+            float length = sqrt(direction.x * direction.x + direction.y * direction.y);
+            direction.x /= length;
+            direction.y /= length;
+
+            float arrow_distance = fov_radius + arrow_offset;
+            ImVec2 arrow_position(
+                screen_center.x + direction.x * arrow_distance,
+                screen_center.y + direction.y * arrow_distance
+            );
+
+            ImVec2 perp_direction(-direction.y, direction.x);
+
+            ImVec2 p1(arrow_position.x, arrow_position.y);
+            ImVec2 p2(
+                arrow_position.x - direction.x * arrow_size + perp_direction.x * arrow_size / 2,
+                arrow_position.y - direction.y * arrow_size + perp_direction.y * arrow_size / 2
+            );
+            ImVec2 p3(
+                arrow_position.x - direction.x * arrow_size - perp_direction.x * arrow_size / 2,
+                arrow_position.y - direction.y * arrow_size - perp_direction.y * arrow_size / 2
+            );
+
+            GetBackgroundDrawList()->AddTriangleFilled(p1, p2, p3, viscolor);
+        }
+
+        if (c_threat) {
+
+            int player_kills = device_().read<int>(Player.pstate_ + 0xF98);  // 43.00 KillScore
+            int player_level = device_().read<int>(Player.pstate_ + 0xF9C);  // 43.00 SeasonLevelUIDisplay
+
+            float distance_component = 1.0f / distance;
+            float kills_component = player_kills * 0.1f;
+            float level_component = player_level * 0.05f;
+
+            float threat_level = (distance_component + kills_component + level_component) / 3.0f;
+
+            threat_level = clamp(threat_level, 0.0f, 1.0f);
+
+            int threat_percentage = static_cast<int>(threat_level * 100);
+
+            std::string threat_text = std::to_string(threat_percentage) + "%";
+            outlined_text(
+                GetBackgroundDrawList(),
+                static_cast <int> (head_box.x - 13), static_cast<int>(head_box.y - 50),
+                ImColor(255, 255, 255),
+                threat_text.c_str()
+            );
+        }
+        }
+        if (!TargetedFortpawn) { TargetedFortpawn = TargetedFortPawn(); }
+        if (c_triggggger) {
+            if (TargetedFortpawn) {
+                int keyid1 = VK_LSHIFT;
+                switch (c_trig_key) {
+                case 0:    keyid1 = VK_LBUTTON; break;
+                case 1:    keyid1 = VK_RBUTTON; break;
+                case 2:    keyid1 = VK_XBUTTON2; break;
+                case 3:    keyid1 = VK_XBUTTON1; break;
+                case 4:    keyid1 = VK_LSHIFT; break;
+                case 5:    keyid1 = VK_LCONTROL; break;
+                case 6: keyid1 = VK_MENU; break;
+                }
+
+                weapon_info_ local_held_weapon = weapon_manager.get_weapon_name(cache.get_local_pawn().value_or(0));
+                local_player_weapon = local_held_weapon.weapon_name;
+
+                if (is_shotgun(local_player_weapon)) {
+
+                    if (GetAsyncKeyState(keyid1)) {
+                        float distance = location.distance(root_bone) * 0.01f;
+                        if (distance <= max_trig_distance) {
+
+                            if (has_clicked) {
+                                tb_begin = std::chrono::steady_clock::now();
+                                has_clicked = false;
+                            }
+
+                            tb_end = std::chrono::steady_clock::now();
+                            tb_time_since = std::chrono::duration_cast<std::chrono::milliseconds>(tb_end - tb_begin).count();
+
+                            if (tb_time_since >= trig_delay) {
+                                TargetedFortpawn = NULL;
+                                mouse_click();
+                                has_clicked = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+}
+
+// ============================================================================
+//  Game Info HUD Overlay (Popstar-style top bar)
+//  Shows player count, kills, spectators in a sleek top-right bar
+// ============================================================================
+void draw_game_info_hud() {
+	if (!C_GameInfo::show_hud_bar) return;
+
+	auto& cache = GameCache::Cache::getInstance();
+	auto dl = ImGui::GetBackgroundDrawList();
+
+	float bar_x = C_Overlay::c_screen_width - 280.0f;
+	float bar_y = 10.0f;
+	float bar_w = 270.0f;
+	float bar_h = 28.0f;
+	float padding = 12.0f;
+	float text_y = bar_y + 7.0f;
+
+	// Background bar
+	dl->AddRectFilled(ImVec2(bar_x, bar_y), ImVec2(bar_x + bar_w, bar_y + bar_h),
+		IM_COL32(12, 12, 16, 200), 6.0f);
+	dl->AddRect(ImVec2(bar_x, bar_y), ImVec2(bar_x + bar_w, bar_y + bar_h),
+		IM_COL32(140, 82, 255, 80), 6.0f);
+
+	float text_x = bar_x + padding;
+
+	// Player count (alive)
+	if (C_GameInfo::show_player_count) {
+		int player_count = cache.get_playersize().value_or(0);
+		char buf[32];
+		snprintf(buf, sizeof(buf), "Players: %d", player_count);
+		dl->AddText(ImVec2(text_x, text_y), IM_COL32(255, 255, 255, 220), buf);
+		text_x += 100.0f;
+	}
+
+	// Kill count
+	if (C_GameInfo::show_kill_count) {
+		int kills = 0;
+		uintptr_t pstate = cache.get_pstate().value_or(0);
+		if (pstate) kills = device_().read<int>(pstate + 0xF98); // 43.00 KillScore
+		char buf[32];
+		snprintf(buf, sizeof(buf), "Kills: %d", kills);
+		dl->AddText(ImVec2(text_x, text_y), IM_COL32(255, 200, 50, 220), buf);
+		text_x += 80.0f;
+	}
+
+	// Spectator count (check who has ViewTarget == local pawn)
+	if (C_GameInfo::show_spectators) {
+		// Simple spectator detection: count players whose pawn is invalid
+		// (dead and potentially spectating) that rendered recently
+		// This is approximate - true spectator detection needs ViewTarget offset
+		char buf[32];
+		snprintf(buf, sizeof(buf), "Spec: %d", numVisiblePeople);
+		dl->AddText(ImVec2(text_x, text_y), IM_COL32(255, 100, 100, 220), buf);
+	}
+}
+
+auto actor_loop() -> void {
+    SPOOF_FUNC;
+
+    // Begin new frame - resets bone cache + camera cache for this frame
+    BeginBoneFrame();
+
+    auto& cache = GameCache::Cache::getInstance();
+
+    target_dist = FLT_MAX;
+    target_entity = NULL;
+
+    utilites_manager.render_elements();
+
+    // Custom crosshair (Popstar-style arc segments)
+    draw_custom_crosshair();
+
+    // Game info HUD bar (player count, kills, spectators)
+    draw_game_info_hud();
+
+    // Push ESP font for all ESP text rendering
+    extern ImFont* esp_font;
+    if (esp_font) ImGui::PushFont(esp_font);
+
+    // Debug overlay - shows all cached pointers and key values on screen
+    if (debug) {
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        float y = 50.0f;
+        float x = 10.0f;
+        float line_h = 16.0f;
+        ImU32 label_col = IM_COL32(180, 130, 255, 255);
+        ImU32 val_col = IM_COL32(255, 255, 255, 255);
+        ImU32 good_col = IM_COL32(80, 255, 80, 255);
+        ImU32 bad_col = IM_COL32(255, 80, 80, 255);
+        ImU32 header_col = IM_COL32(140, 82, 255, 255);
+
+        auto draw_debug = [&](const char* label, const char* fmt, ...) {
+            char buf[256];
+            va_list args;
+            va_start(args, fmt);
+            vsnprintf(buf, sizeof(buf), fmt, args);
+            va_end(args);
+            dl->AddText(ImVec2(x, y), label_col, label);
+            dl->AddText(ImVec2(x + 200, y), val_col, buf);
+            y += line_h;
+        };
+
+        auto draw_ptr = [&](const char* label, uintptr_t ptr) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)ptr);
+            dl->AddText(ImVec2(x, y), label_col, label);
+            dl->AddText(ImVec2(x + 200, y), ptr ? good_col : bad_col, buf);
+            y += line_h;
+        };
+
+        auto draw_header = [&](const char* text) {
+            y += 4.0f;
+            dl->AddText(ImVec2(x, y), header_col, text);
+            y += line_h + 2.0f;
+        };
+
+        // Background panel
+        float panel_w = 480.0f;
+        float panel_h = 600.0f;
+        dl->AddRectFilled(ImVec2(x - 5, 45), ImVec2(x + panel_w, 45 + panel_h), IM_COL32(10, 10, 12, 220), 6.0f);
+        dl->AddRect(ImVec2(x - 5, 45), ImVec2(x + panel_w, 45 + panel_h), IM_COL32(140, 82, 255, 120), 6.0f);
+
+        draw_header("--- Cache Chain (v39.50.1) ---");
+        draw_ptr("UWorld:", cache.get_uworld().value_or(0));
+        draw_ptr("GameInstance:", cache.get_game_instance().value_or(0));
+        draw_ptr("GameState:", cache.get_gamestate().value_or(0));
+        draw_ptr("LocalPlayer:", cache.get_local_player().value_or(0));
+        draw_ptr("PlayerController:", cache.get_pcontroller().value_or(0));
+        draw_ptr("CameraManager:", cache.get_camera_manager().value_or(0));
+        draw_ptr("LocalPawn:", cache.get_local_pawn().value_or(0));
+        draw_ptr("Mesh:", cache.get_mesh().value_or(0));
+        draw_ptr("PlayerState:", cache.get_pstate().value_or(0));
+        draw_ptr("RootComponent:", cache.get_rcomponent().value_or(0));
+        draw_ptr("PlayerArray:", cache.get_playerarray().value_or(0));
+        draw_ptr("LocationPtr:", cache.get_location_ptr().value_or(0));
+        draw_ptr("RotationPtr:", cache.get_rotation_ptr().value_or(0));
+
+        draw_header("--- Player Data ---");
+        draw_debug("PlayerArray Size:", "%d", cache.get_playersize().value_or(0));
+        draw_debug("Entity List:", "%d", (int)entity_list.size());
+        draw_debug("TeamID:", "%d", (int)cache.get_teamid().value_or(0));
+
+        draw_header("--- Camera ---");
+        draw_debug("Source:", "Plain (UWorld ptr)");
+        draw_debug("FOV:", "%.2f", fov);
+        draw_debug("Location:", "%.0f, %.0f, %.0f", location.x, location.y, location.z);
+        draw_debug("Rotation:", "P=%.2f Y=%.2f", rotation.Pitch, rotation.Yaw);
+
+        draw_header("--- World Time (is_visible) ---");
+        if (cache.get_uworld().value_or(0)) {
+            auto wt = device_().read<double>(cache.get_uworld().value_or(0) + 0x7B8); // 43.00 TimeSeconds (paste)
+            draw_debug("WorldTime (0x7B8):", "%.4f", wt);
+            auto wt2 = device_().read<double>(cache.get_uworld().value_or(0) + 0x198); // alt clock, compare vs mesh LRT
+            draw_debug("WorldTime (0x198):", "%.4f", wt2);
+        }
+        if (cache.get_mesh().value_or(0)) {
+            auto lr = device_().read<float>(cache.get_mesh().value_or(0) + 0x2E8); // 43.00 LastRenderTime
+            draw_debug("LocalMesh LRT (0x2E8):", "%.4f", lr);
+        }
+
+        draw_header("--- Weapon ---");
+        if (cache.get_local_pawn().value_or(0)) {
+            uintptr_t wpn = device_().read<uintptr_t>(cache.get_local_pawn().value_or(0) + offset_()->get_apply_offsets().CurrentWeapon());
+            draw_ptr("CurrentWeapon:", wpn);
+            if (wpn) {
+                uintptr_t wdata = device_().read<uintptr_t>(wpn + offset_()->get_apply_offsets().WeaponData());
+                draw_ptr("WeaponData:", wdata);
+                float proj_speed = device_().read<float>(wpn + 0x20D4); // 43.00 ProjectileSpeed (paste)
+                float proj_grav = device_().read<float>(wpn + 0x20D8);  // 43.00 ProjectileGravity (paste)
+                draw_debug("ProjSpeed (0x20D4):", "%.2f", proj_speed);
+                draw_debug("ProjGravity (0x20D8):", "%.2f", proj_grav);
+            }
+        }
+
+        draw_header("--- Aimbot ---");
+        draw_ptr("TargetEntity:", target_entity);
+        draw_debug("TargetDist:", "%.2f", target_dist);
+        draw_ptr("TargetedFortPawn:", TargetedFortpawn);
+    }
+
+    if (!cache.get_uworld().value() || entity_list.empty()) {
+        if (esp_font) ImGui::PopFont();
+        return;
+    }
+
+    auto camera_location = location;
+    for (auto& Player : entity_list) {
+        draw_esp_elements(Player, camera_location);
+    }
+
+    if (c_enable && target_entity) {
+
+        // Target stick: if enabled, lock onto the current target
+        uintptr_t aim_target = target_entity;
+        if (C_Aimbot::c_target_stick) {
+            ShouldStickToTarget(target_entity);
+            if (g_HasStickTarget && g_StickTarget != 0) {
+                aim_target = g_StickTarget;
+            }
+        }
+
+        auto closest_mesh = device_().read<std::uint64_t>(aim_target + offset_()->get_apply_offsets().mesh_());
+
+        bone_manager.get_bone_array(closest_mesh);
+
+        auto root_bone = bone_manager.get_bone(root);
+        auto head_bone = bone_manager.get_bone(Head);
+        auto root = camera_manager.w2s(fvector(root_bone.x, root_bone.y, root_bone.z - 15));
+        auto head = camera_manager.w2s(head_bone);
+
+        fvector hitbox;
+        // Bone oscillation overrides hitbox selection if enabled
+        if (C_Exploits::c_bone_oscillation) {
+            hitbox = get_oscillating_bone(closest_mesh, C_Exploits::c_oscillation_speed);
+        } else {
+            switch (c_hitbox) {
+            case 0:
+                hitbox = bone_manager.get_bone(HumanHead);
+                break;
+            case 1:
+                hitbox = bone_manager.get_bone(Chest);
+                break;
+            case 2:
+                hitbox = bone_manager.get_bone(Pelvis);
+                break;
+            case 3:
+            {
+                // Persist random bone choice so aim doesn't jitter between bones every frame
+                static int cachedBone = -1;
+                static auto lastBoneSwitch = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                if (cachedBone < 0 || std::chrono::duration_cast<std::chrono::milliseconds>(now - lastBoneSwitch).count() > 800) {
+                    cachedBone = g_AimRng() % 4;
+                    lastBoneSwitch = now;
+                }
+                switch (cachedBone) {
+                case 0: hitbox = bone_manager.get_bone(HumanHead); break;
+                case 1: hitbox = bone_manager.get_bone(HumanNeck); break;
+                case 2: hitbox = bone_manager.get_bone(HumanChest); break;
+                case 3: hitbox = bone_manager.get_bone(HumanPelvis); break;
+                }
+                break;
+            }
+            }
+        }
+
+        int keyid = VK_LSHIFT;
+
+        switch (c_aim_key) {
+        case 0:	keyid = VK_LBUTTON;	break;
+        case 1:	keyid = VK_RBUTTON;	break;
+        case 2:	keyid = VK_XBUTTON2; break;
+        case 3:	keyid = VK_XBUTTON1; break;
+        case 4:	keyid = VK_LSHIFT; break;
+        case 5:	keyid = VK_LCONTROL; break;
+        case 6: keyid = VK_MENU; break;
+        }
+
+
+        fvector2d hitbox_screen = camera_manager.w2s(hitbox);
+
+        // Skip if W2S failed (behind camera)
+        if (hitbox_screen.x < 0 && hitbox_screen.y < 0) goto aim_skip;
+
+        // ================================================================
+        //  Targeting Visuals (Popstar-style)
+        // ================================================================
+        if (in_screen(hitbox_screen)) {
+            ImVec2 screen_center(c_screen_width / 2.0f, c_screen_height / 2.0f);
+            ImVec2 target_pos(hitbox_screen.x, hitbox_screen.y);
+
+            // Aim line (straight or bezier curve)
+            if (c_target || C_TargetVisuals::target_line) {
+                if (C_TargetVisuals::aim_curve) {
+                    // Bezier curve from center to target
+                    float dx = target_pos.x - screen_center.x;
+                    float dy = target_pos.y - screen_center.y;
+                    float perpX = -dy * 0.2f;
+                    float perpY = dx * 0.2f;
+                    ImVec2 ctrl(screen_center.x + dx * 0.5f + perpX, screen_center.y + dy * 0.5f + perpY);
+                    ImColor line_color(220, 151, 164, 255);
+                    const int segs = 20;
+                    ImVec2 prev = screen_center;
+                    for (int i = 1; i <= segs; i++) {
+                        float t = (float)i / segs;
+                        float u = 1.0f - t;
+                        ImVec2 pt(u * u * screen_center.x + 2 * u * t * ctrl.x + t * t * target_pos.x,
+                                  u * u * screen_center.y + 2 * u * t * ctrl.y + t * t * target_pos.y);
+                        ImGui::GetBackgroundDrawList()->AddLine(prev, pt, line_color, 1.5f);
+                        prev = pt;
+                    }
+                } else {
+                    ImGui::GetBackgroundDrawList()->AddLine(screen_center, target_pos, ImColor(255, 255, 255, 255), 1.5f);
+                }
+            }
+
+            // Target dot
+            if (C_TargetVisuals::target_dot) {
+                ImGui::GetBackgroundDrawList()->AddCircleFilled(target_pos, 3.0f, ImColor(163, 75, 180, 225), 8);
+            }
+
+            // Deadzone visualization
+            if (C_TargetVisuals::deadzone_dot) {
+                float target_dist_m = location.distance(hitbox) * 0.01f;
+                float scaled = C_TargetVisuals::restriction * (1.0f + (50.0f / fmaxf(target_dist_m, 1.0f)));
+                ImGui::GetBackgroundDrawList()->AddCircle(target_pos, scaled, ImColor(255, 0, 0, 100), 0, 1.0f);
+                ImGui::GetBackgroundDrawList()->AddCircleFilled(target_pos, scaled, ImColor(255, 0, 0, 30));
+            }
+
+            // Prediction X marker
+            if (C_TargetVisuals::prediction_x && c_prediction) {
+                float sz = 5.0f;
+                ImColor px_color(176, 49, 44, 150);
+                ImGui::GetBackgroundDrawList()->AddLine(
+                    ImVec2(target_pos.x - sz, target_pos.y - sz),
+                    ImVec2(target_pos.x + sz, target_pos.y + sz), px_color, 1.5f);
+                ImGui::GetBackgroundDrawList()->AddLine(
+                    ImVec2(target_pos.x + sz, target_pos.y - sz),
+                    ImVec2(target_pos.x - sz, target_pos.y + sz), px_color, 1.5f);
+            }
+        }
+
+        weapon_info_ local_held_weapon = weapon_manager.get_weapon_name(cache.get_local_pawn().value_or(0));
+        local_player_weapon = local_held_weapon.weapon_name;
+
+        // Apply no recoil/no spread exploits each frame while aiming
+        if (C_Exploits::c_no_recoil) apply_no_recoil();
+        if (C_Exploits::c_no_spread) apply_no_spread();
+
+        int AimSpeed = c_smooth;
+
+
+        if (c_spinbot)
+        {
+
+            auto Mesh = device_().read<uint64_t>(cache.get_local_pawn().value_or(0) + offset_()->get_apply_offsets().mesh_());
+            static auto Cached = device_().read<fvector>(Mesh + 0x140);
+
+            if (GetAsyncKeyState(VK_LBUTTON)) {
+                device_().write<fvector>(Mesh + 0x140, fvector(1, rand() % 361, 1));
+            }
+            else {
+                device_().write<fvector>(Mesh + 0x140, Cached);
+            }
+        }
+
+        if (c_prediction) {
+            uintptr_t current_weapon = device_().read<uintptr_t>(cache.get_local_pawn().value_or(0) + offset_()->get_apply_offsets().CurrentWeapon());
+            auto GetProjectileSpeed = device_().read<float>(current_weapon + 0x21E4); // 43.00 ProjectileSpeed
+            auto GetProjectileGravity = device_().read<float>(current_weapon + 0x21E8); // 43.00 ProjectileGravity
+            if (GetProjectileGravity && GetProjectileSpeed && current_weapon) {
+                auto tRoot = device_().read<uintptr_t>((uintptr_t)aim_target + offset_()->get_apply_offsets().root_());
+                auto tVelocity = device_().read<fvector>(tRoot + offset_()->get_apply_offsets().velocity_());
+                hitbox_screen = camera_manager.w2s(PredictPlayerPosition(hitbox, location.distance(hitbox), tVelocity, GetProjectileSpeed, GetProjectileGravity));
+                // Prediction W2S might also fail
+                if (hitbox_screen.x < 0 && hitbox_screen.y < 0) goto aim_skip;
+            }
+        }
+
+
+        if (in_screen(hitbox_screen) && get_cross_distance(hitbox_screen.x, hitbox_screen.y, c_screen_width / 2, c_screen_height / 2) <= c_fov)
+        {
+            if (c_visible_check) {
+                if (player_manager.is_visible(closest_mesh))
+                {
+                    if (GetAsyncKeyState(keyid)) {
+                        perform(hitbox_screen);
+                        // Record bullet tracer from screen center to target
+                        if (C_Exploits::c_bullet_tracers) {
+                            AddBulletTracer(
+                                fvector2d(c_screen_width / 2, c_screen_height / 2),
+                                hitbox_screen
+                            );
+                        }
+                    }
+                }
+            }
+            else
+            {
+
+                if (GetAsyncKeyState(keyid)) {
+                    perform(hitbox_screen);
+                    if (C_Exploits::c_bullet_tracers) {
+                        AddBulletTracer(
+                            fvector2d(c_screen_width / 2, c_screen_height / 2),
+                            hitbox_screen
+                        );
+                    }
+                }
+
+            }
+        }
+    }
+    else {
+    aim_skip:
+        target_dist = FLT_MAX;
+        target_entity = NULL;
+        // Reset aim state when no valid target
+        ResetStickTarget();
+        g_RemainderX = 0.0f;
+        g_RemainderY = 0.0f;
+    }
+
+    // Render bullet tracers (always, regardless of aim state)
+    if (C_Exploits::c_bullet_tracers) {
+        RenderBulletTracers(C_Exploits::c_tracer_duration, C_Exploits::c_tracer_style);
+    }
+
+    // Pop ESP font
+    if (esp_font) ImGui::PopFont();
+}
