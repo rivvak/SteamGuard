@@ -6,8 +6,8 @@
 #include "../Fonts/Extras/icons.h"
 #include <d3d11.h>
 
-#define MYCLASSNAME    _("Microsoft (x86)")
-#define MYWINDOWNAME   _("Microsoft (x86)")
+#define MYCLASSNAME    _("CEF-OSC-WIDGET")
+#define MYWINDOWNAME   _("NVIDIA GeForce Overlay")
 
 using Overlay::DX11Overlay;
 
@@ -51,34 +51,10 @@ extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam
 // and the same press closes the menu. Everything else passes through;
 // Alt+Tab arrives as WM_SYSKEY* and is never touched.
 // The hook thread must pump messages — MainLoop's PeekMessage does.
-static HHOOK g_tab_hook = nullptr;
-
-static LRESULT CALLBACK TabHookProc(int nCode, WPARAM wParam, LPARAM lParam)
-{
-	if (nCode == HC_ACTION) {
-		KBDLLHOOKSTRUCT* info = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
-		if (info->vkCode == VK_TAB) {
-			static bool s_tab_eaten = false; // we own this press until key-up
-			if (wParam == WM_KEYDOWN) {
-				if (C_Overlay::c_show_menu) {
-					s_tab_eaten = true;
-					C_Overlay::c_show_menu = false; // hook owns "close menu"
-					return 1;                       // game never sees this Tab
-				}
-			}
-			else if (wParam == WM_KEYUP && s_tab_eaten) {
-				s_tab_eaten = false;
-				return 1; // eat the matching key-up so the pair stays invisible
-			}
-		}
-	}
-	return CallNextHookEx(g_tab_hook, nCode, wParam, lParam);
-}
-
 static void InstallTabHook()
 {
-	if (!g_tab_hook)
-		g_tab_hook = SetWindowsHookExW(WH_KEYBOARD_LL, TabHookProc, GetModuleHandleW(nullptr), 0);
+	// Removed SetWindowsHookExW(WH_KEYBOARD_LL, ...) global hook vector;
+	// Tab menu toggle is handled directly in MainLoop via GetAsyncKeyState(VK_TAB).
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT pMsg, WPARAM wParam, LPARAM lParam) {
@@ -452,11 +428,10 @@ BOOL DX11Overlay::MainLoop(std::function<VOID()> DrawLoop) {
 		// Update overlay position once per frame
 		UpdateOverlayPosition();
 
-		// Open menu on TAB when menu is currently closed.
-		// (Closing while open is handled cleanly by TabHookProc so the game never sees Tab).
-		if (!C_Overlay::c_show_menu && (GetAsyncKeyState(VK_TAB) & 1))
+		// Toggle menu on TAB edge without a WH_KEYBOARD_LL hook
+		if (GetAsyncKeyState(VK_TAB) & 1)
 		{
-			C_Overlay::c_show_menu = true;
+			C_Overlay::c_show_menu = !C_Overlay::c_show_menu;
 		}
 
 		// Stream-proof toggle (runtime)

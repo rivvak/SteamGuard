@@ -23,18 +23,55 @@ VOID
 	IN ULONG Reserved
 	);
 
-extern "C" __int64 DirectIO(
+typedef
+NTSTATUS
+(NTAPI* PFN_NtDeviceIoControlFile)(
+	IN HANDLE FileHandle,
+	IN HANDLE Event OPTIONAL,
+	IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+	IN PVOID ApcContext OPTIONAL,
+	OUT PIO_STATUS_BLOCK IoStatusBlock,
+	IN ULONG IoControlCode,
+	IN PVOID InputBuffer OPTIONAL,
+	IN ULONG InputBufferLength,
+	OUT PVOID OutputBuffer OPTIONAL,
+	IN ULONG OutputBufferLength
+	);
+
+inline __int64 DirectIO(
 	HANDLE FileHandle,
 	HANDLE Event,
-	PIO_APC_ROUTINE
-	ApcRoutine,
+	PIO_APC_ROUTINE ApcRoutine,
 	PVOID ApcContext,
 	PIO_STATUS_BLOCK IoStatusBlock,
 	ULONG IoControlCode,
 	PVOID InputBuffer,
 	ULONG InputBufferLength,
 	PVOID OutputBuffer,
-	ULONG OutputBufferLength);
+	ULONG OutputBufferLength)
+{
+	static PFN_NtDeviceIoControlFile s_NtDeviceIoControlFile = nullptr;
+	if (!s_NtDeviceIoControlFile) {
+		HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+		if (hNtdll) {
+			s_NtDeviceIoControlFile = reinterpret_cast<PFN_NtDeviceIoControlFile>(
+				GetProcAddress(hNtdll, "NtDeviceIoControlFile"));
+		}
+	}
+	if (!s_NtDeviceIoControlFile)
+		return -1;
+	return static_cast<__int64>(s_NtDeviceIoControlFile(
+		FileHandle,
+		Event,
+		ApcRoutine,
+		ApcContext,
+		IoStatusBlock,
+		IoControlCode,
+		InputBuffer,
+		InputBufferLength,
+		OutputBuffer,
+		OutputBufferLength));
+}
 
 #define emulate inline
 

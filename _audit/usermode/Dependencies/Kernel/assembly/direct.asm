@@ -1,12 +1,8 @@
-.code 
+.code
 
-DirectIO PROC
-
-	mov r10, rcx
-	mov eax, 7
-	syscall
+DirectIO_UnusedStub PROC
+	xor eax, eax
 	ret
-
-DirectIO ENDP
+DirectIO_UnusedStub ENDP
 
 END
